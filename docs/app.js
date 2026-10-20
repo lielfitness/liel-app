@@ -22,6 +22,7 @@
     filter: LS.get('lf_filter') || 'active',
     search: '',
     month: null,
+    undoCount: 0,
   };
 
   const $app = document.getElementById('app');
@@ -224,6 +225,7 @@
         <span class="spacer"></span>
         ${state.alertsCount ? `<a class="icon-btn" href="#/zooms" title="זומים לשיוך" style="text-decoration:none">📅<span class="badge">${state.alertsCount}</span></a>` : ''}
         ${state.realRole === 'admin' && !state.viewAs ? `<button class="icon-btn" data-act="viewas-on" title="תצוגה כמו שי" style="font-size:14px">👁 כמו שי</button>` : ''}
+        <button class="icon-btn undo-btn" data-act="undo" aria-label="בטל פעולה אחרונה" title="בטל (פעולה אחרונה)" ${state.undoCount ? '' : 'disabled'}>↶</button>
         <button class="icon-btn" data-act="refresh" aria-label="רענון" title="רענון">🔄</button>
         <button class="icon-btn" data-act="logout" aria-label="יציאה" title="יציאה (${esc(state.email)})" style="font-size:14px">יציאה</button>
       </header>
@@ -232,6 +234,7 @@
       <nav class="bottomnav">${nav.map(link).join('')}</nav>`;
     $app.querySelector('[data-act="refresh"]').onclick = () => { leadsFetchedAt = 0; route(); refreshAlerts(); };
     $app.querySelector('[data-act="logout"]').onclick = () => { if (confirm('לצאת מהאפליקציה?')) logout(); };
+    $app.querySelector('[data-act="undo"]').onclick = undoLast;
     const vOn = $app.querySelector('[data-act="viewas-on"]');
     if (vOn) vOn.onclick = () => setViewAs('leads');
     const vOff = $app.querySelector('[data-act="viewas-off"]');
@@ -556,16 +559,19 @@
     const id = lead.id;
     const seq = (seqByLead[id] = (seqByLead[id] || 0) + 1);
     pendingByLead[id] = (pendingByLead[id] || 0) + 1;
+    state.undoCount++; updateUndoBtn();
     const run = () => api(action, Object.assign({ row: lead.row, id: id }, params));
     const p = (queueByLead[id] || Promise.resolve()).catch(() => {}).then(run);
     queueByLead[id] = p;
     p.then((d) => {
+      if (d.undoCount != null) { state.undoCount = d.undoCount; updateUndoBtn(); }
       if (seq === seqByLead[id] && d.lead) { setLead(d.lead); hooks.onChange && hooks.onChange(d.lead, 'server'); }
       hooks.onOk && hooks.onOk(d);
       if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
       if (d.reward && d.reward.warning) toast('⚠️ ' + d.reward.warning, true);
     }).catch((e) => {
       if (e.code === 'AUTH') return;
+      state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
       if (seq === seqByLead[id]) { setLead(before); hooks.onChange && hooks.onChange(before, 'revert'); }
       hooks.onFail && hooks.onFail(e);
       toast('השינוי לא נשמר בגיליון והוחזר למצב הקודם: ' + e.message, true);
@@ -574,6 +580,36 @@
       if (!pendingByLead[id]) { delete pendingByLead[id]; }
     });
     return p;
+  }
+
+  // ---------- בטל (↶) ----------
+  function updateUndoBtn() {
+    const b = $app.querySelector('[data-act="undo"]');
+    if (b) b.disabled = !state.undoCount || undoBusy;
+  }
+  let undoBusy = false;
+  async function undoLast() {
+    if (undoBusy || !state.undoCount) return;
+    undoBusy = true; updateUndoBtn();
+    toast('מבטל…');
+    try {
+      // קודם מחכים שכל השמירות שבדרך יסתיימו – כדי לבטל לפי הסדר הנכון
+      await Promise.allSettled(Object.values(queueByLead));
+      const d = await api('undo');
+      if (d.undoCount != null) state.undoCount = d.undoCount;
+      if (d.lead) {
+        setLead(d.lead);
+        if (rowEl(d.lead.id)) patchRow(d.lead.id, d.lead);
+        else if (onLeadCard(d.lead.id) && !cardBusy()) renderLead(d.lead);
+        else if (!isEditing()) route();
+      }
+      leadsFetchedAt = 0;
+      toast(d.message + (d.warning ? ' · ⚠️ ' + d.warning : ''), !d.done || !!d.warning);
+    } catch (e) {
+      if (e.code !== 'AUTH') toast('הביטול נכשל: ' + e.message, true);
+    } finally {
+      undoBusy = false; updateUndoBtn();
+    }
   }
 
   function rowEl(id) { return $app.querySelector(`.g-row[data-id="${CSS.escape(id)}"]`); }
@@ -1131,6 +1167,8 @@
   function applyMe(me) {
     state.role = me.role; state.realRole = me.realRole || me.role;
     state.email = me.email; state.bookingUrl = me.bookingUrl;
+    if (me.undoCount != null) state.undoCount = me.undoCount;
+    updateUndoBtn();
     LS.set('lf_role', state.realRole);
     if (state.viewAs && state.realRole !== 'admin') { state.viewAs = ''; LS.del('lf_viewas'); }
   }

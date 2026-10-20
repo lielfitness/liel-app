@@ -22,12 +22,13 @@ const LAST_BASE_COL_ = 32; // AF
 const STATUSES_ = ['ליד חדש', 'ניסיון שיחה', 'שיחה בוצעה', 'זום נקבע', 'נסגר', 'לא מעוניין', 'לא רלוונטי', 'עתידי', 'Ghosting'];
 const FINAL_STATUSES_ = ['נסגר', 'לא מעוניין', 'לא רלוונטי', 'Ghosting'];
 // "לא טופלו": רק הסטטוסים האלה (וסטטוס ריק). כל השאר – לעולם לא.
-const UNTREATED_STATUSES_ = ['ליד חדש', 'ניסיון שיחה', 'שיחה בוצעה', 'עתידי', ''];
+const UNTREATED_STATUSES_ = ['ליד חדש', 'ניסיון שיחה', 'WA נשלח', 'שיחה בוצעה', 'עתידי', ''];
 
 // כתיבים שונים שעלולים להופיע בגיליון → הסטטוס הקנוני
 const STATUS_VARIANTS_ = {
   'ליד חדש': ['ליד חדש', 'חדש'],
   'ניסיון שיחה': ['ניסיון שיחה', 'נסיון שיחה', 'ניסיון התקשרות', 'נסיון התקשרות'],
+  'WA נשלח': ['wa נשלח', 'נשלח wa', 'וואטסאפ נשלח', 'ווטסאפ נשלח', 'נשלח וואטסאפ', 'נשלח ווטסאפ'],
   'שיחה בוצעה': ['שיחה בוצעה', 'בוצעה שיחה', 'שיחה התבצעה'],
   'עתידי': ['עתידי', 'עתידית'],
   'זום נקבע': ['זום נקבע', 'זום נקבעה', 'נקבע זום', 'נקבעה פגישה', 'פגישה נקבעה'],
@@ -239,10 +240,35 @@ function readLeadAt_(sh, ex, row) {
 
 /** כותב תא, וזוכר מה נכתב כדי לבנות את הליד מחדש בזיכרון. display = הטקסט שיוצג בגיליון. */
 function put_(loc, col, value, format) {
+  if (loc.undo && col !== loc.upCol && !loc.undo[col]) {
+    const snap = rowSnapshot_(loc);
+    loc.undo[col] = { col: col, bv: serializeCell_(snap.v[col - 1]), bf: snap.f[col - 1] || '', bd: String(snap.d[col - 1] == null ? '' : snap.d[col - 1]) };
+  }
+  // טקסט חופשי שנראה כמו מספר/תאריך – נשמר כטקסט (שהגיליון לא יהפוך אותו לתאריך)
+  if (!format && typeof value === 'string' && /^[\d\s.\/:\-]+$/.test(value) && /\d/.test(value)) format = '@';
   const c = loc.sh.getRange(loc.lead.row, col);
   if (format) c.setNumberFormat(format);
   if (value === '' || value == null) c.clearContent(); else c.setValue(value);
   if (loc.lead._raw) { loc.lead._raw.v[col - 1] = value == null ? '' : value; loc.lead._raw.d[col - 1] = value == null ? '' : String(value); }
+  if (loc.undo && loc.undo[col]) loc.undo[col].ad = value == null ? '' : String(value);
+}
+
+/** מצב השורה לפני השינוי (ערכים, תצוגה, פורמטים) – נקרא פעם אחת לכל שמירה. */
+function rowSnapshot_(loc) {
+  if (loc.snap) return loc.snap;
+  const width = Math.max(LAST_BASE_COL_, loc.ex.updated, loc.ex.shaiNotes);
+  const rng = loc.sh.getRange(loc.lead.row, 1, 1, width);
+  const f = rng.getNumberFormats()[0];
+  if (loc.lead._raw) {
+    loc.snap = { v: loc.lead._raw.v.slice(), d: loc.lead._raw.d.slice(), f: f };
+  } else {
+    loc.snap = { v: rng.getValues()[0], d: rng.getDisplayValues()[0], f: f };
+  }
+  return loc.snap;
+}
+
+function serializeCell_(v) {
+  return v instanceof Date ? { d: v.toISOString() } : (v == null ? '' : v);
 }
 
 /** הליד אחרי הכתיבה: נבנה מהנתונים שנקראו + מה שנכתב (בלי קריאה נוספת). */
@@ -341,9 +367,10 @@ function actionUpdateLead_(req, ctx) {
   withLock_(function () {
     phase_('lock');
     const loc = locateLead_(ctx.cfg, req.row, req.id);
+    loc.undo = {};
     phase_('read row');
     const sh = loc.sh, lead = loc.lead, row = lead.row;
-    let changed = false;
+    let changed = false, zoomMonths = null;
 
     Object.keys(fields).forEach(function (k) {
       const col = k === 'shaiNotes' ? loc.ex.shaiNotes : EDITABLE_[k];
@@ -381,6 +408,7 @@ function actionUpdateLead_(req, ctx) {
         sh.getRange(row, COL_.reward).setValue('');
       }
       reward = { changes: res.changes.length, warning: lockedWarning_(res.locked) };
+      zoomMonths = [oldMonth, newMonth];
       lead._raw = null;   // S אולי השתנה – הליד ייקרא מחדש מהגיליון
       phase_('reward sync');
     }
@@ -395,9 +423,10 @@ function actionUpdateLead_(req, ctx) {
       ghost = copyToGhosting_(ctx.cfg, merged);
       phase_('ghosting');
     }
+    recordUndo_(ctx.email, loc, describeFields_(fields), { zoomMonths: zoomMonths, ghost: ghost && ghost.copied ? ghost : null });
     result = loc;
   });
-  const out = { lead: leadAfterWrite_(ctx.cfg, result), ghost: ghost, reward: reward };
+  const out = { lead: leadAfterWrite_(ctx.cfg, result), ghost: ghost, reward: reward, undoCount: undoCount_(ctx.email) };
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;
@@ -425,6 +454,7 @@ function actionMarkAttempt_(req, ctx) {
   withLock_(function () {
     phase_('lock');
     const loc = locateLead_(ctx.cfg, req.row, req.id);
+    loc.undo = {};
     phase_('read row');
     const sh = loc.sh, lead = loc.lead, row = lead.row;
     // מה שכבר כתוב בשורה – מהקריאה שכבר נעשתה (בלי קריאה נוספת)
@@ -478,9 +508,11 @@ function actionMarkAttempt_(req, ctx) {
     }
     touch_(sh, row, loc.upCol, loc);
     phase_('write');
+    const n = Number(req.attempt) || (WA_COLS_.indexOf(Object.keys(loc.undo).map(Number)[0]) + 1);
+    recordUndo_(ctx.email, loc, (kind === 'wa' ? 'WA ' : 'ניסיון שיחה ') + n, {});
     result = loc;
   });
-  const out = { lead: leadAfterWrite_(ctx.cfg, result) };
+  const out = { lead: leadAfterWrite_(ctx.cfg, result), undoCount: undoCount_(ctx.email) };
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;
@@ -529,7 +561,7 @@ function copyToGhosting_(cfg, lead) {
   const out = headers.map(function (h) { return values[h] != null ? values[h] : ''; });
   const target = sh.getRange(last + 1, 1, 1, width);
   target.setNumberFormat('@').setValues([out]);
-  return { copied: true };
+  return { copied: true, row: last + 1, phone: lead.phone, name: lead.name };
 }
 
 /** "הערות שי: ... | עיקרי שיחה: ..." (רק החלקים שיש בהם תוכן) */

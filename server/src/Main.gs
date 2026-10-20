@@ -21,6 +21,8 @@ const ACTIONS = {
   assignZoom:   { roles: ['admin', 'leads'], fn: actionAssignZoom_ },
   dismissZoom:  { roles: ['admin', 'leads'], fn: actionDismissZoom_ },
   home:         { roles: ['admin'],          fn: actionHome_ },
+  undo:         { roles: ['admin', 'leads'], fn: actionUndo_ },
+  undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
 };
 
 function doGet() {
@@ -78,6 +80,7 @@ function actionMe_(req, ctx) {
     role: ctx.role,
     realRole: ctx.realRole,
     bookingUrl: ctx.cfg.bookingUrl || '',
+    undoCount: undoCount_(ctx.email),
   };
 }
 
