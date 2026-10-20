@@ -13,6 +13,8 @@
     session: LS.get('lf_session'),
     email: LS.get('lf_email') || '',
     role: LS.get('lf_role') || '',
+    realRole: LS.get('lf_role') || '',
+    viewAs: LS.get('lf_viewas') || '',   // 'leads' = אדמין צופה כמו שי
     bookingUrl: '',
     leads: null,          // מטמון רשימת הלידים
     meta: null,           // statuses, zoomResults, hasUpdatedCol
@@ -90,6 +92,7 @@
   async function api(action, params) {
     if (!CFG.apiUrl) throw new Error('האתר עוד לא מחובר לשרת (חסר apiUrl ב-config.js)');
     const body = Object.assign({ action, session: state.session }, params || {});
+    if (state.viewAs && action !== 'login') body.viewAs = state.viewAs;
     let res;
     try {
       res = await fetch(CFG.apiUrl, {
@@ -114,7 +117,8 @@
   // ---------- כניסה ----------
   function logout(silent) {
     state.session = null; state.role = ''; state.email = ''; state.leads = null;
-    ['lf_session', 'lf_role', 'lf_email'].forEach(LS.del);
+    state.viewAs = ''; state.realRole = '';
+    ['lf_session', 'lf_role', 'lf_email', 'lf_viewas'].forEach(LS.del);
     try { window.google && google.accounts.id.disableAutoSelect(); } catch (e) { /* */ }
     if (!silent) location.hash = '';
     renderLogin();
@@ -185,15 +189,30 @@
         <nav class="topnav">${nav.map(link).join('')}</nav>
         <span class="spacer"></span>
         ${state.alertsCount ? `<a class="icon-btn" href="#/zooms" title="זומים לשיוך" style="text-decoration:none">📅<span class="badge">${state.alertsCount}</span></a>` : ''}
+        ${state.realRole === 'admin' && !state.viewAs ? `<button class="icon-btn" data-act="viewas-on" title="תצוגה כמו שי" style="font-size:14px">👁 כמו שי</button>` : ''}
         <button class="icon-btn" data-act="refresh" aria-label="רענון" title="רענון">🔄</button>
         <button class="icon-btn" data-act="logout" aria-label="יציאה" title="יציאה (${esc(state.email)})" style="font-size:14px">יציאה</button>
       </header>
+      ${state.viewAs ? `<div class="viewas-bar"><span>👁 תצוגה כמו שי – כך היא רואה את האפליקציה. שמירות נכתבות באמת לגיליון.</span><button class="btn small secondary" data-act="viewas-off">חזרה לתצוגה שלי</button></div>` : ''}
       <main>${content}</main>
       <nav class="bottomnav">${nav.map(link).join('')}</nav>`;
     $app.querySelector('[data-act="refresh"]').onclick = () => { state.leads = null; route(); refreshAlerts(); };
     $app.querySelector('[data-act="logout"]').onclick = () => { if (confirm('לצאת מהאפליקציה?')) logout(); };
+    const vOn = $app.querySelector('[data-act="viewas-on"]');
+    if (vOn) vOn.onclick = () => setViewAs('leads');
+    const vOff = $app.querySelector('[data-act="viewas-off"]');
+    if (vOff) vOff.onclick = () => setViewAs('');
     const back = $app.querySelector('[data-act="back"]');
     if (back) back.onclick = () => (history.length > 1 ? history.back() : (location.hash = '#/leads'));
+  }
+
+  async function setViewAs(v) {
+    state.viewAs = v;
+    if (v) LS.set('lf_viewas', v); else LS.del('lf_viewas');
+    state.leads = null; state.month = null; state.alertsCount = 0;
+    $app.innerHTML = '<div class="splash"><div class="spinner"></div></div>';
+    location.hash = '';
+    await boot();
   }
 
   function loading(title) { shell(title, '<div class="spinner"></div>'); }
@@ -731,13 +750,16 @@
     if (!state.session) return renderLogin();
     try {
       const me = await api('me');
-      state.role = me.role; state.email = me.email; state.bookingUrl = me.bookingUrl;
-      LS.set('lf_role', me.role);
+      state.role = me.role; state.realRole = me.realRole || me.role;
+      state.email = me.email; state.bookingUrl = me.bookingUrl;
+      LS.set('lf_role', state.realRole);
+      if (state.viewAs && state.realRole !== 'admin') { state.viewAs = ''; LS.del('lf_viewas'); }
     } catch (e) {
       if (e.code === 'AUTH' || e.code === 'FORBIDDEN') return renderLogin(e.code === 'FORBIDDEN' ? e.message : '');
       return errorView('Liel Fitness', e);
     }
     window.onhashchange = route;
+    if (!location.hash || location.hash === '#/' ) location.replace(isAdmin() ? '#/home' : '#/leads');
     route();
     refreshAlerts();
     // רענון ברקע כשחוזרים לאפליקציה

@@ -51,14 +51,22 @@ function handle_(req) {
   }
 
   const email = checkSession_(req.session);
-  const role = roleOf_(email, cfg);
-  if (!role) throw apiError_('AUTH', 'אין הרשאה');
+  const realRole = roleOf_(email, cfg);
+  if (!realRole) throw apiError_('AUTH', 'אין הרשאה');
+
+  // "תצוגה כמו שי": אדמין בלבד יכול לבקש לפעול בתפקיד leads – ואז חלות עליו בדיוק ההגבלות שלה
+  let role = realRole;
+  if (req.viewAs) {
+    if (realRole !== 'admin') throw apiError_('FORBIDDEN', 'אין לך הרשאה לפעולה הזו');
+    if (req.viewAs !== 'leads') throw apiError_('BAD_REQUEST', 'תצוגה לא מוכרת');
+    role = 'leads';
+  }
 
   const a = ACTIONS[req.action];
   if (!a) throw apiError_('BAD_REQUEST', 'פעולה לא מוכרת');
   if (a.roles.indexOf(role) < 0) throw apiError_('FORBIDDEN', 'אין לך הרשאה לפעולה הזו');
 
-  const data = a.fn(req, { email: email, role: role, cfg: cfg });
+  const data = a.fn(req, { email: email, role: role, realRole: realRole, cfg: cfg });
   return { ok: true, data: data };
 }
 
@@ -66,6 +74,7 @@ function actionMe_(req, ctx) {
   return {
     email: ctx.email,
     role: ctx.role,
+    realRole: ctx.realRole,
     bookingUrl: ctx.cfg.bookingUrl || '',
   };
 }
