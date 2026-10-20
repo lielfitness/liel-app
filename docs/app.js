@@ -796,7 +796,7 @@
       <div class="tiles">
         <div class="card tile big"><div class="num">${ils(d.total)}</div><div class="lbl">סה"כ החודש</div></div>
         <div class="card tile"><div class="num">${d.leadsCount}</div><div class="lbl">לידים נכנסו × ${ils(d.basePerLead)} = ${ils(d.baseTotal)}</div></div>
-        <div class="card tile"><div class="num">${d.meetings.length}</div><div class="lbl">זומים החודש · ${d.meetingsHappened} התקיימו · ${d.meetingsUpcoming} מתוכננים</div></div>
+        <div class="card tile"><div class="num">${d.meetings.length}</div><div class="lbl">פגישות שנספרות${d.pending.length ? ` · עוד ${d.pending.length} ממתינות לתוצאה` : ''}</div></div>
         <div class="card tile"><div class="num">${ils(d.bonusTotal)}</div><div class="lbl">בונוס פגישות</div></div>
         <div class="card tile"><div class="num">${d.currentTier || '—'}</div><div class="lbl">מדרגה נוכחית</div></div>
       </div>
@@ -805,7 +805,7 @@
           ? `<b>עוד ${d.toNextTier} ${d.toNextTier === 1 ? 'פגישה' : 'פגישות'}</b> למדרגה הבאה (${ils(d.nextTierAmount)} לפגישה)`
           : '<b>את במדרגה העליונה 🚀</b> (120 ₪ לפגישה)'}
         <div class="progress"><div style="width:${pct}%"></div></div>
-        <div class="muted small" style="margin-top:8px">פגישות 1 עד 5: 80 ₪ · פגישות 6 עד 10: 100 ₪ · מ-11 ומעלה: 120 ₪<br>נספר לפי תאריך הזום</div>
+        <div class="muted small" style="margin-top:8px">פגישות 1 עד 5: 80 ₪ · פגישות 6 עד 10: 100 ₪ · מ-11 ומעלה: 120 ₪<br>פגישה נספרת כשיש תאריך זום ותוצאת זום (נסגר / לא נסגר / ממתין), בחודש של תאריך הזום</div>
       </div>
 
       <div class="section-title">פירוט פגישות</div>
@@ -814,13 +814,15 @@
           <div class="n">${m.n}</div>
           <div class="grow">
             <div><b>${esc(m.name)}</b></div>
-            <div class="muted small">${esc(fmtIso(m.date))} · מדרגה ${m.tier}${m.happened ? '' : ' · מתוכנן'}${m.zoomResult ? ' · ' + esc(m.zoomResult) : ''}</div>
-            ${m.mismatch ? `<div class="small" style="color:var(--warn)">בגיליון כתוב "${esc(m.sheetReward)}"</div>` : ''}
+            <div class="muted small">${esc(fmtIso(m.date))} · מדרגה ${m.tier} · ${esc(m.zoomResult)}</div>
+            ${m.mismatch ? `<div class="small" style="color:var(--warn)">בגיליון (S): ${m.sheetReward ? `"${esc(m.sheetReward)}"` : 'ריק'}</div>` : ''}
           </div>
           <div class="amt">${ils(m.amount)}</div>
         </a>`).join('')}</div>` : '<div class="empty">עוד אין זומים בחודש הזה</div>'}
-      ${d.excluded.length ? `<div class="section-title">לא נספרו (תגמול "לא")</div>
-        <div class="card small">${d.excluded.map((x) => `${esc(x.name)} · ${esc(fmtIso(x.date))}`).join('<br>')}</div>` : ''}`);
+      ${d.pending.length ? `<div class="section-title">ממתינות לתוצאת זום – עוד לא נספרות (${d.pending.length})</div>
+        <div class="mlist">${d.pending.map((x) => `<a class="card mrow" href="#/lead/${esc(x.id)}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.name)}</b></div><span class="pill warn">${esc(fmtIso(x.date))}</span></a>`).join('')}</div>` : ''}
+      ${d.noShow.length ? `<div class="section-title">לא הגיעו – בלי בונוס (${d.noShow.length})</div>
+        <div class="card small">${d.noShow.map((x) => `${esc(x.name)} · ${esc(fmtIso(x.date))}`).join('<br>')}</div>` : ''}`);
 
     $app.querySelectorAll('[data-m]').forEach((b) => {
       b.onclick = () => { state.month = shiftMonth(state.month, Number(b.dataset.m)); viewMonth(); };
