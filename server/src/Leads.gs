@@ -7,6 +7,7 @@
 const LEADS_TAB_ = 'לידים פעילים';
 const GHOST_TAB_ = 'Ghosting';
 const UPDATED_HEADER_ = 'עודכן לאחרונה';
+const SHAI_NOTES_HEADER_ = 'הערות שי';
 
 const COL_ = {
   entry: 1, name: 2, phone: 3, email: 4, ad: 5,
@@ -39,12 +40,17 @@ function normHeader_(h) {
   return String(h || '').replace(/\s+/g, ' ').trim();
 }
 
-function updatedCol_(sh) {
+/** עמודות שנוספו בסוף (אחרי AF) – מאותרות לפי שם הכותרת. 0 = לא קיימת. */
+function extraCols_(sh) {
   const lastCol = sh.getLastColumn();
-  if (lastCol <= LAST_BASE_COL_) return 0;
-  const hdr = sh.getRange(1, LAST_BASE_COL_ + 1, 1, lastCol - LAST_BASE_COL_).getDisplayValues()[0];
-  const i = hdr.map(normHeader_).indexOf(UPDATED_HEADER_);
-  return i < 0 ? 0 : LAST_BASE_COL_ + 1 + i;
+  if (lastCol <= LAST_BASE_COL_) return { updated: 0, shaiNotes: 0 };
+  const hdr = sh.getRange(1, LAST_BASE_COL_ + 1, 1, lastCol - LAST_BASE_COL_).getDisplayValues()[0].map(normHeader_);
+  const at = function (name) { const i = hdr.indexOf(name); return i < 0 ? 0 : LAST_BASE_COL_ + 1 + i; };
+  return { updated: at(UPDATED_HEADER_), shaiNotes: at(SHAI_NOTES_HEADER_) };
+}
+
+function updatedCol_(sh) {
+  return extraCols_(sh).updated;
 }
 
 function digits_(s) {
@@ -71,27 +77,29 @@ function isFinal_(status) {
 /** קורא את כל הלידים. מחזיר מערך אובייקטים (שורות ריקות מדולגות). */
 function readLeads_(cfg) {
   const sh = leadsSheet_(cfg);
-  const upCol = updatedCol_(sh);
+  const ex = extraCols_(sh);
+  const upCol = ex.updated;
   const lastRow = sh.getLastRow();
-  if (lastRow < 2) return { sh: sh, upCol: upCol, leads: [] };
-  const width = Math.max(LAST_BASE_COL_, upCol);
+  if (lastRow < 2) return { sh: sh, upCol: upCol, ex: ex, leads: [] };
+  const width = Math.max(LAST_BASE_COL_, upCol, ex.shaiNotes);
   const rng = sh.getRange(2, 1, lastRow - 1, width);
   const vals = rng.getValues();
   const disp = rng.getDisplayValues();
   const leads = [];
   let prevEntry = null;
   for (let i = 0; i < vals.length; i++) {
-    const lead = buildLead_(i + 2, vals[i], disp[i], prevEntry, upCol);
+    const lead = buildLead_(i + 2, vals[i], disp[i], prevEntry, upCol, ex.shaiNotes);
     if (!lead) continue;
     if (lead._entryDate) prevEntry = lead._entryDate;
     leads.push(lead);
   }
-  return { sh: sh, upCol: upCol, leads: leads };
+  return { sh: sh, upCol: upCol, ex: ex, leads: leads };
 }
 
-function buildLead_(row, v, d, prevEntry, upCol) {
+function buildLead_(row, v, d, prevEntry, upCol, shaiCol) {
   const g = function (c) { return String(d[c - 1] == null ? '' : d[c - 1]).trim(); };
   if (!g(COL_.name) && !g(COL_.phone) && !g(COL_.email)) return null;
+  const shaiNotes = shaiCol ? g(shaiCol) : '';
 
   const entry = parseSheetDate_(v[COL_.entry - 1], d[COL_.entry - 1], prevEntry, false);
   const ref = entry || prevEntry;
@@ -119,7 +127,7 @@ function buildLead_(row, v, d, prevEntry, upCol) {
     call1Date: g(COL_.call1Date), call1Time: g(COL_.call1Time), call2: g(COL_.call2), call3: g(COL_.call3),
     wa1: g(COL_.wa1), wa2: g(COL_.wa2), wa3: g(COL_.wa3),
     calls: calls, was: was,
-    status: status, summary: g(COL_.summary), zoomResult: g(COL_.zoomResult), notes: g(COL_.notes),
+    status: status, shaiNotes: shaiNotes, summary: g(COL_.summary), zoomResult: g(COL_.zoomResult), notes: g(COL_.notes),
     zoomDate: isoDate_(zoom), zoomDateRaw: g(COL_.zoomDate), reward: g(COL_.reward),
     source: g(COL_.source), age: g(COL_.age), cert: g(COL_.cert), difficulty: g(COL_.difficulty),
     improve: g(COL_.improve), change: g(COL_.change), insta: g(COL_.insta),
@@ -150,6 +158,7 @@ function actionListLeads_(req, ctx) {
     statuses: STATUSES_,
     zoomResults: ZOOM_RESULTS_,
     hasUpdatedCol: !!r.upCol,
+    hasShaiNotesCol: !!r.ex.shaiNotes,
     now: Date.now(),
   };
 }
@@ -162,7 +171,7 @@ function locateLead_(cfg, row, id) {
     lead = r.leads.filter(function (l) { return l.id === id; })[0];
   }
   if (!lead) throw apiError_('STALE', 'הליד לא נמצא – אולי השורה השתנתה. רענני את הרשימה.');
-  return { sh: r.sh, upCol: r.upCol, lead: lead };
+  return { sh: r.sh, upCol: r.upCol, ex: r.ex, lead: lead };
 }
 
 function withLock_(fn) {
@@ -197,7 +206,8 @@ function actionUpdateLead_(req, ctx) {
     let changed = false;
 
     Object.keys(fields).forEach(function (k) {
-      const col = EDITABLE_[k];
+      const col = k === 'shaiNotes' ? loc.ex.shaiNotes : EDITABLE_[k];
+      if (k === 'shaiNotes' && !col) throw apiError_('CONFIG', 'עמודת "הערות שי" לא נמצאה בגיליון');
       if (!col) return;
       let v = fields[k] == null ? '' : String(fields[k]).trim();
       if (k === 'status' && v && STATUSES_.indexOf(v) < 0) throw apiError_('BAD_REQUEST', 'סטטוס לא מוכר');
@@ -209,7 +219,9 @@ function actionUpdateLead_(req, ctx) {
         setDateCell_(sh, row, col, d);
       } else {
         if (v === lead[k]) return;
-        sh.getRange(row, col).setValue(v);
+        const cell = sh.getRange(row, col);
+        if (k === 'shaiNotes') cell.setNumberFormat('@');
+        cell.setValue(v);
       }
       changed = true;
     });
@@ -219,7 +231,10 @@ function actionUpdateLead_(req, ctx) {
     const newStatus = fields.status != null ? String(fields.status).trim() : lead.status;
     if (newStatus === 'Ghosting' && lead.status !== 'Ghosting') {
       SpreadsheetApp.flush();
-      const merged = Object.assign({}, lead, { summary: fields.summary != null ? fields.summary : lead.summary });
+      const merged = Object.assign({}, lead, {
+        summary: fields.summary != null ? fields.summary : lead.summary,
+        shaiNotes: fields.shaiNotes != null ? fields.shaiNotes : lead.shaiNotes,
+      });
       ghost = copyToGhosting_(ctx.cfg, merged);
     }
     return lead.id;
@@ -335,12 +350,20 @@ function copyToGhosting_(cfg, lead) {
     'מקור': lead.ad || lead.source,
     'ניסיונות שיחה': lead.calls + ' שיחות',
     'WA שנשלחו': lead.was + ' הודעות',
-    'הערות': lead.summary || '',
+    'הערות': ghostNotes_(lead),
   };
   const out = headers.map(function (h) { return values[h] != null ? values[h] : ''; });
   const target = sh.getRange(last + 1, 1, 1, width);
   target.setNumberFormat('@').setValues([out]);
   return { copied: true };
+}
+
+/** "הערות שי: ... | עיקרי שיחה: ..." (רק החלקים שיש בהם תוכן) */
+function ghostNotes_(lead) {
+  const parts = [];
+  if (String(lead.shaiNotes || '').trim()) parts.push('הערות שי: ' + String(lead.shaiNotes).trim());
+  if (String(lead.summary || '').trim()) parts.push('עיקרי שיחה: ' + String(lead.summary).trim());
+  return parts.join(' | ');
 }
 
 function actionListGhosting_(req, ctx) {
@@ -372,9 +395,12 @@ function onLeadsEdit(e) {
     if (!e || !e.range) return;
     const sh = e.range.getSheet();
     if (sh.getName() !== LEADS_TAB_) return;
-    const upCol = updatedCol_(sh);
+    const ex = extraCols_(sh);
+    const upCol = ex.updated;
     if (!upCol) return;
-    if (e.range.getColumn() > LAST_BASE_COL_) return; // עריכה של העמודה עצמה או אחריה
+    const c1 = e.range.getColumn(), c2 = e.range.getLastColumn();
+    const touchesData = c1 <= LAST_BASE_COL_ || (ex.shaiNotes && c1 <= ex.shaiNotes && c2 >= ex.shaiNotes);
+    if (!touchesData) return; // למשל עריכה של "עודכן לאחרונה" עצמה
     const first = Math.max(2, e.range.getRow());
     const lastRow = e.range.getLastRow();
     if (lastRow < first || lastRow - first > 50) return;

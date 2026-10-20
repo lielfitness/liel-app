@@ -370,7 +370,8 @@
         <div class="g-phone"><a class="ltr" href="${esc(telHref(l.phone))}">${esc(l.phone)}</a></div>
         <div class="g-status">${statusSelect(l)}</div>
         <div class="g-att">${attemptsHtml(l)}</div>
-        <div class="g-notes"><input data-notes value="${esc(l.summary)}" placeholder="הערה…" aria-label="הערות שי"></div>
+        <div class="g-notes g-shai"><label>הערות של שי</label><textarea rows="1" data-field="shaiNotes" placeholder="תזכורת קצרה…">${esc(l.shaiNotes)}</textarea></div>
+        <div class="g-notes g-sum"><label>עיקרי שיחה</label><textarea rows="1" data-field="summary" placeholder="מה עלה בשיחה…">${esc(l.summary)}</textarea></div>
         <div class="g-zoom">${l.zoomDate ? '🎥 ' + esc(fmtIso(l.zoomDate)) : ''}</div>
         <div class="g-saved" aria-live="polite"></div>
       </div>`;
@@ -383,7 +384,7 @@
         <div class="g-row g-head">
           <div class="g-entry">נכנס</div><div class="g-name">שם</div><div class="g-phone">טלפון</div><div class="g-status">סטטוס</div>
           <div class="g-att"><span>ניסיון 1</span><span>ניסיון 2</span><span>ניסיון 3</span><span>WA 1</span><span>WA 2</span><span>WA 3</span></div>
-          <div class="g-notes">הערות שי</div><div class="g-zoom">זום</div><div class="g-saved"></div>
+          <div class="g-notes g-shai">הערות של שי</div><div class="g-notes g-sum">עיקרי שיחה</div><div class="g-zoom">זום</div><div class="g-saved"></div>
         </div>
         ${list.map(gridRowHtml).join('')}
       </div>`;
@@ -411,9 +412,9 @@
     el.querySelector('.g-att').innerHTML = attemptsHtml(lead);
     el.querySelector('.g-status').innerHTML = statusSelect(lead);
     el.querySelector('.g-zoom').textContent = lead.zoomDate ? '🎥 ' + fmtIso(lead.zoomDate) : '';
-    const notes = el.querySelector('[data-notes]');
-    if (document.activeElement !== notes) notes.value = lead.summary || '';
-    notes.dataset.saved = lead.summary || '';
+    el.querySelectorAll('textarea[data-field]').forEach((t) => {
+      if (document.activeElement !== t) t.value = lead[t.dataset.field] || '';
+    });
   }
 
   async function rowSave(lead, action, params, okMsg) {
@@ -466,18 +467,25 @@
       rowSave(lead, 'updateLead', { fields: { status: sel.value } }).catch(() => { sel.value = lead.status; });
     });
 
-    // הערות: נשמר כשיוצאים מהשדה (או Enter)
-    root.addEventListener('focusout', (ev) => {
-      const inp = ev.target.closest('input[data-notes]');
-      if (!inp) return;
-      const lead = leadOf(inp);
-      if (!lead) return;
-      const v = inp.value.trim();
-      if (v === String(lead.summary || '').trim()) return;
-      rowSave(lead, 'updateLead', { fields: { summary: v } }).catch(() => {});
+    // הערות של שי / עיקרי שיחה: שורה אחת שמתרחבת בלחיצה, נשמר כשיוצאים מהשדה
+    const grow = (t) => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 2 + 'px'; };
+    root.addEventListener('focusin', (ev) => {
+      const t = ev.target.closest('textarea[data-field]');
+      if (t) { t.classList.add('open'); grow(t); }
     });
-    root.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' && ev.target.matches('input[data-notes]')) ev.target.blur();
+    root.addEventListener('input', (ev) => {
+      const t = ev.target.closest('textarea[data-field]');
+      if (t) grow(t);
+    });
+    root.addEventListener('focusout', (ev) => {
+      const t = ev.target.closest('textarea[data-field]');
+      if (!t) return;
+      t.classList.remove('open'); t.style.height = '';
+      const lead = leadOf(t);
+      if (!lead) return;
+      const k = t.dataset.field, v = t.value.trim();
+      if (v === String(lead[k] || '').trim()) return;
+      rowSave(lead, 'updateLead', { fields: { [k]: v } }).catch(() => {});
     });
   }
 
@@ -595,7 +603,8 @@
               <div class="status-grid">${statusList.map((s) => `<button type="button" class="chip ${s === lead.status ? 'on' : ''}" data-status="${esc(s)}">${esc(s)}</button>`).join('')}</div>
             </div>
             <div class="field"><label for="f-callResult">תוצאת שיחה</label><input id="f-callResult" value="${esc(lead.callResult)}" placeholder="למשל: לא ענה / ביקש לחזור מחר"></div>
-            <div class="field"><label for="f-summary">הערות שי (סיכום שיחה)</label><textarea id="f-summary">${esc(lead.summary)}</textarea></div>
+            <div class="field"><label for="f-shaiNotes">הערות של שי</label><textarea id="f-shaiNotes" class="short" placeholder="למשל: להתקשר ביום ראשון / ביקשה הודעה בווטסאפ">${esc(lead.shaiNotes)}</textarea></div>
+            <div class="field"><label for="f-summary">עיקרי שיחה</label><textarea id="f-summary" placeholder="מה עלה בשיחה עם הליד">${esc(lead.summary)}</textarea></div>
             <div class="row">
               <div class="field grow"><label for="f-zoomDate">תאריך זום</label><input id="f-zoomDate" type="date" value="${esc(lead.zoomDate)}"></div>
               <div class="field grow"><label for="f-zoomResult">תוצאת זום</label><select id="f-zoomResult">${opt(m.zoomResults, lead.zoomResult)}</select></div>
@@ -643,7 +652,7 @@
     // --- טופס ---
     let status = lead.status;
     const saveBtn = $app.querySelector('[data-act="save"]');
-    const ids = ['callResult', 'summary', 'notes', 'zoomDate', 'zoomResult'];
+    const ids = ['callResult', 'shaiNotes', 'summary', 'notes', 'zoomDate', 'zoomResult'];
     const collect = () => {
       const f = {};
       if (status !== lead.status) f.status = status;
