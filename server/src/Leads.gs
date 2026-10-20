@@ -72,6 +72,15 @@ function normHeader_(h) {
 /** עמודות שנוספו בסוף (אחרי AF) – מאותרות לפי שם הכותרת. 0 = לא קיימת. */
 function extraCols_(sh) {
   const lastCol = sh.getLastColumn();
+  const cache = CacheService.getScriptCache();
+  const ck = 'extraCols_' + lastCol;
+  try { const hit = cache.get(ck); if (hit) return JSON.parse(hit); } catch (e) { /* */ }
+  const res = extraColsRead_(sh, lastCol);
+  try { cache.put(ck, JSON.stringify(res), 600); } catch (e) { /* */ }
+  return res;
+}
+
+function extraColsRead_(sh, lastCol) {
   if (lastCol <= LAST_BASE_COL_) return { updated: 0, shaiNotes: 0 };
   const hdr = sh.getRange(1, LAST_BASE_COL_ + 1, 1, lastCol - LAST_BASE_COL_).getDisplayValues()[0].map(normHeader_);
   const at = function (name) { const i = hdr.indexOf(name); return i < 0 ? 0 : LAST_BASE_COL_ + 1 + i; };
@@ -181,6 +190,15 @@ function publicLead_(l) {
   return o;
 }
 
+// ---------- מדידת שלבים (נשלחת לאפליקציה רק במצב debug) ----------
+let PHASES_ = null, PHASE_T_ = 0;
+function phase_(name) {
+  if (!PHASES_) { PHASES_ = []; PHASE_T_ = Date.now(); }
+  const now = Date.now();
+  PHASES_.push(name + ' ' + (now - PHASE_T_));
+  PHASE_T_ = now;
+}
+
 // ---------- פעולות ----------
 
 function actionListLeads_(req, ctx) {
@@ -199,17 +217,42 @@ function actionListLeads_(req, ctx) {
 /** קורא רק את השורה (ועד 5 שורות לפניה, כדי לפענח תאריכים כמו בקריאה המלאה). */
 function readLeadAt_(sh, ex, row) {
   row = Number(row);
-  if (!(row >= 2) || row > sh.getLastRow()) return null;
+  if (!(row >= 2)) return null;
   const from = Math.max(2, row - 5);
   const width = Math.max(LAST_BASE_COL_, ex.updated, ex.shaiNotes);
-  const rng = sh.getRange(from, 1, row - from + 1, width);
-  const vals = rng.getValues(), disp = rng.getDisplayValues();
-  let prev = null, lead = null;
+  let vals, disp;
+  try {
+    const rng = sh.getRange(from, 1, row - from + 1, width);
+    vals = rng.getValues(); disp = rng.getDisplayValues();
+  } catch (e) { return null; }   // שורה מחוץ לגיליון
+  let prev = null, lead = null, prevForRow = null;
   for (let i = 0; i < vals.length; i++) {
+    if (i === vals.length - 1) prevForRow = prev;
     lead = buildLead_(from + i, vals[i], disp[i], prev, ex.updated, ex.shaiNotes);
     if (lead && lead._entryDate) prev = lead._entryDate;
   }
-  return lead && lead.row === row ? lead : null;
+  if (!lead || lead.row !== row) return null;
+  // לבנייה מחדש אחרי כתיבה, בלי לקרוא שוב מהגיליון
+  lead._raw = { v: vals[vals.length - 1].slice(), d: disp[disp.length - 1].slice(), prev: prevForRow, ex: ex };
+  return lead;
+}
+
+/** כותב תא, וזוכר מה נכתב כדי לבנות את הליד מחדש בזיכרון. display = הטקסט שיוצג בגיליון. */
+function put_(loc, col, value, format) {
+  const c = loc.sh.getRange(loc.lead.row, col);
+  if (format) c.setNumberFormat(format);
+  if (value === '' || value == null) c.clearContent(); else c.setValue(value);
+  if (loc.lead._raw) { loc.lead._raw.v[col - 1] = value == null ? '' : value; loc.lead._raw.d[col - 1] = value == null ? '' : String(value); }
+}
+
+/** הליד אחרי הכתיבה: נבנה מהנתונים שנקראו + מה שנכתב (בלי קריאה נוספת). */
+function leadAfterWrite_(cfg, loc) {
+  const raw = loc.lead._raw;
+  if (raw) {
+    const l = buildLead_(loc.lead.row, raw.v, raw.d, raw.prev, raw.ex.updated, raw.ex.shaiNotes);
+    if (l) return publicLead_(l);
+  }
+  return rereadLead_(cfg, loc.lead.id, loc.lead.row);
 }
 
 function locateLead_(cfg, row, id) {
@@ -229,7 +272,12 @@ function locateLead_(cfg, row, id) {
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) throw apiError_('BUSY', 'השרת עסוק, נסי שוב בעוד רגע');
-  try { return fn(); } finally { invalidateLeads_(); lock.releaseLock(); }
+  try {
+    const out = fn();
+    SpreadsheetApp.flush();
+    if (PHASES_) phase_('flush');
+    return out;
+  } finally { invalidateLeads_(); lock.releaseLock(); }
 }
 
 // אזור הזמן של גיליון הלידים הוא America/Los_Angeles, לכן לא כותבים אובייקט Date
@@ -244,8 +292,9 @@ function nowStamp_() {
   return Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm');
 }
 
-function touch_(sh, row, upCol) {
+function touch_(sh, row, upCol, loc) {
   if (!upCol) return;
+  if (loc) { put_(loc, upCol, nowStamp_(), 'dd/MM/yyyy HH:mm'); return; }
   sh.getRange(row, upCol).setNumberFormat('dd/MM/yyyy HH:mm').setValue(nowStamp_());
 }
 
@@ -287,8 +336,12 @@ function invalidateLeads_() {
 function actionUpdateLead_(req, ctx) {
   const fields = req.fields || {};
   let ghost = null, reward = null;
-  const id = withLock_(function () {
+  let result = null;
+  phase_('start');
+  withLock_(function () {
+    phase_('lock');
     const loc = locateLead_(ctx.cfg, req.row, req.id);
+    phase_('read row');
     const sh = loc.sh, lead = loc.lead, row = lead.row;
     let changed = false;
 
@@ -303,17 +356,16 @@ function actionUpdateLead_(req, ctx) {
         const d = v ? parseIso_(v) : null;
         if (v && !d) throw apiError_('BAD_REQUEST', 'תאריך זום לא תקין');
         if (isoDate_(d) === lead.zoomDate) return;
-        setDateCell_(sh, row, col, d);
+        put_(loc, col, d ? Utilities.formatDate(d, TZ_, 'dd/MM/yyyy') : '', 'dd/MM/yyyy');
       } else {
         if (v === lead[k]) return;
-        const cell = sh.getRange(row, col);
-        if (k === 'shaiNotes') cell.setNumberFormat('@');
-        cell.setValue(v);
+        put_(loc, col, v, k === 'shaiNotes' ? '@' : null);
       }
       changed = true;
     });
 
-    if (changed) touch_(sh, row, loc.upCol);
+    if (changed) touch_(sh, row, loc.upCol, loc);
+    phase_('write');
 
     // R או P השתנו → חישוב מחדש של S (רק בחודשים פתוחים)
     const zoomChanged = (fields.zoomDate != null && String(fields.zoomDate).trim() !== lead.zoomDate) ||
@@ -329,6 +381,8 @@ function actionUpdateLead_(req, ctx) {
         sh.getRange(row, COL_.reward).setValue('');
       }
       reward = { changes: res.changes.length, warning: lockedWarning_(res.locked) };
+      lead._raw = null;   // S אולי השתנה – הליד ייקרא מחדש מהגיליון
+      phase_('reward sync');
     }
 
     const newStatus = fields.status != null ? String(fields.status).trim() : lead.status;
@@ -339,10 +393,14 @@ function actionUpdateLead_(req, ctx) {
         shaiNotes: fields.shaiNotes != null ? fields.shaiNotes : lead.shaiNotes,
       });
       ghost = copyToGhosting_(ctx.cfg, merged);
+      phase_('ghosting');
     }
-    return { id: lead.id, row: row };
+    result = loc;
   });
-  return { lead: rereadLead_(ctx.cfg, id.id, id.row), ghost: ghost, reward: reward };
+  const out = { lead: leadAfterWrite_(ctx.cfg, result), ghost: ghost, reward: reward };
+  phase_('build');
+  if (req.debug) out.phases = PHASES_;
+  return out;
 }
 
 /** "2026-10-21T14:30" → Date */
@@ -362,11 +420,20 @@ function parseLocalDateTime_(s) {
  */
 function actionMarkAttempt_(req, ctx) {
   const kind = req.kind === 'wa' ? 'wa' : 'call';
-  const id = withLock_(function () {
+  let result = null;
+  phase_('start');
+  withLock_(function () {
+    phase_('lock');
     const loc = locateLead_(ctx.cfg, req.row, req.id);
+    phase_('read row');
     const sh = loc.sh, lead = loc.lead, row = lead.row;
-    const disp = sh.getRange(row, 1, 1, LAST_BASE_COL_).getDisplayValues()[0];
-    const filled = function (c) { return !!String(disp[c - 1]).trim(); };
+    // מה שכבר כתוב בשורה – מהקריאה שכבר נעשתה (בלי קריאה נוספת)
+    const byCol = {};
+    byCol[COL_.call1Date] = lead.call1Date; byCol[COL_.call2] = lead.call2; byCol[COL_.call3] = lead.call3;
+    byCol[COL_.wa1] = lead.wa1; byCol[COL_.wa2] = lead.wa2; byCol[COL_.wa3] = lead.wa3;
+    const disp = []; Object.keys(byCol).forEach(function (c) { disp[c - 1] = byCol[c]; });
+    const filled = function (c) { return !!String(byCol[c] || '').trim(); };
+    const today = Utilities.formatDate(todayMidnight_(), TZ_, 'dd/MM/yyyy');
 
     if (kind === 'wa') {
       let col;
@@ -375,22 +442,22 @@ function actionMarkAttempt_(req, ctx) {
         if ([1, 2, 3].indexOf(w) < 0) throw apiError_('BAD_REQUEST', 'מספר WA לא תקין');
         col = WA_COLS_[w - 1];
         if (req.clear) {
-          sh.getRange(row, col).clearContent();
+          put_(loc, col, '');
         } else {
           if (filled(col) && !req.overwrite) throw apiError_('FILLED', 'WA ' + w + ' כבר מסומן');
-          setDateCell_(sh, row, col, todayMidnight_());
+          put_(loc, col, today, 'dd/MM/yyyy');
         }
       } else {
         col = WA_COLS_.filter(function (c) { return !filled(c); })[0];
         if (!col) throw apiError_('FULL', 'כבר נשלחו 3 הודעות WA');
-        setDateCell_(sh, row, col, todayMidnight_());
+        put_(loc, col, today, 'dd/MM/yyyy');
       }
     } else if (req.clear) {
       // ביטול ניסיון שיחה (תאריך/שעה בלבד – תוצאת השיחה ב-F נשארת)
       const c = Number(req.attempt);
       if ([1, 2, 3].indexOf(c) < 0) throw apiError_('BAD_REQUEST', 'מספר ניסיון לא תקין');
-      sh.getRange(row, CALL_COLS_[c - 1]).clearContent();
-      if (c === 1) sh.getRange(row, COL_.call1Time).clearContent();
+      put_(loc, CALL_COLS_[c - 1], '');
+      if (c === 1) put_(loc, COL_.call1Time, '');
     } else {
       const n = Number(req.attempt);
       if ([1, 2, 3].indexOf(n) < 0) throw apiError_('BAD_REQUEST', 'מספר ניסיון לא תקין');
@@ -401,18 +468,22 @@ function actionMarkAttempt_(req, ctx) {
         throw apiError_('FILLED', 'ניסיון ' + n + ' כבר מלא ("' + disp[col - 1] + '")');
       }
       if (n === 1) {
-        setDateCell_(sh, row, COL_.call1Date, new Date(when.getFullYear(), when.getMonth(), when.getDate()));
-        sh.getRange(row, COL_.call1Time).setNumberFormat('@').setValue(Utilities.formatDate(when, TZ_, 'HH:mm'));
-        const result = req.result == null ? '' : String(req.result).trim();
-        if (result) sh.getRange(row, COL_.callResult).setValue(result);
+        put_(loc, COL_.call1Date, Utilities.formatDate(when, TZ_, 'dd/MM/yyyy'), 'dd/MM/yyyy');
+        put_(loc, COL_.call1Time, Utilities.formatDate(when, TZ_, 'HH:mm'), '@');
+        const res = req.result == null ? '' : String(req.result).trim();
+        if (res) put_(loc, COL_.callResult, res);
       } else {
-        sh.getRange(row, col).setNumberFormat('@').setValue(Utilities.formatDate(when, TZ_, 'dd/MM HH:mm'));
+        put_(loc, col, Utilities.formatDate(when, TZ_, 'dd/MM HH:mm'), '@');
       }
     }
-    touch_(sh, row, loc.upCol);
-    return { id: lead.id, row: row };
+    touch_(sh, row, loc.upCol, loc);
+    phase_('write');
+    result = loc;
   });
-  return { lead: rereadLead_(ctx.cfg, id.id, id.row) };
+  const out = { lead: leadAfterWrite_(ctx.cfg, result) };
+  phase_('build');
+  if (req.debug) out.phases = PHASES_;
+  return out;
 }
 
 // ---------- גוסטינג ----------

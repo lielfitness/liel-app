@@ -40,8 +40,9 @@
   if (/[?&]debug=1/.test(location.search)) LS.set('lf_debug', '1');
   if (/[?&]debug=0/.test(location.search)) LS.del('lf_debug');
   const timings = [];
-  function logTiming(action, total, server) {
-    timings.unshift(`${action}: ${(total / 1000).toFixed(2)} שנ׳` + (server != null ? ` (שרת ${(server / 1000).toFixed(2)})` : ''));
+  function logTiming(action, total, server, phases) {
+    timings.unshift(`${action}: ${(total / 1000).toFixed(2)} שנ׳` + (server != null ? ` (שרת ${(server / 1000).toFixed(2)})` : '') +
+      (phases ? ' [' + phases.join(' · ') + ']' : ''));
     timings.length = Math.min(timings.length, 8);
     if (LS.get('lf_debug') !== '1') return;
     let el = document.getElementById('dbg');
@@ -120,6 +121,7 @@
     if (!CFG.apiUrl) throw new Error('האתר עוד לא מחובר לשרת (חסר apiUrl ב-config.js)');
     const body = Object.assign({ action, session: state.session }, params || {});
     if (state.viewAs && action !== 'login') body.viewAs = state.viewAs;
+    if (LS.get('lf_debug') === '1') body.debug = true;
     let res;
     const t0 = performance.now();
     try {
@@ -133,7 +135,7 @@
     }
     let out;
     try { out = await res.json(); } catch (e) { throw new Error('תשובה לא תקינה מהשרת'); }
-    logTiming(action, performance.now() - t0, out.ms);
+    logTiming(action, performance.now() - t0, out.ms, out.data && out.data.phases);
     if (!out.ok) {
       if (out.code === 'AUTH') { logout(true); }
       const err = new Error(out.error || 'שגיאה');
