@@ -11,7 +11,7 @@ function actionHome_(req, ctx) {
 
   const out = {
     leads: {
-      newStatus: leads.filter(function (l) { return l.status === 'ליד חדש' || !l.status; }).length,
+      newStatus: leads.filter(function (l) { return l.statusKey === 'ליד חדש' || !l.statusKey; }).length,
       enteredToday: leads.filter(function (l) { return l.entry && parseIso_(l.entry).getTime() === today; }).length,
       enteredWeek: leads.filter(function (l) { return l.entry && parseIso_(l.entry).getTime() >= weekAgo; }).length,
       untreated: leads.filter(function (l) { return l.untreated; }).length,

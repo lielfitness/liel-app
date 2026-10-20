@@ -112,7 +112,7 @@ function scanZoomBookings() {
 
       if (lead && (!lead.zoomDate || lead.zoomDate === iso)) {
         if (!lead.zoomDate) setDateCell_(r.sh, lead.row, COL_.zoomDate, parseIso_(iso));
-        if (!isFinal_(lead.status) && lead.status !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
+        if (!isFinal_(lead.status) && canonicalStatus_(lead.status) !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
         touch_(r.sh, lead.row, r.upCol);
         SpreadsheetApp.flush();
         const r2 = readLeads_(cfg);

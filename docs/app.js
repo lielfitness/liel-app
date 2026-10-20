@@ -100,17 +100,20 @@
     const text = String(CFG.waTemplate || '').replace('{name}', first).replace('{me}', me);
     return `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
   }
-  function statusPill(s) {
+  function statusPill(s, key) {
     if (!s) return '<span class="pill warn">ללא סטטוס</span>';
+    const raw = s; s = key || s;
     let cls = '';
     if (s === 'Ghosting') cls = 'ghost';
     else if (s === 'נסגר') cls = 'hot';
     else if (FINAL.includes(s)) cls = 'final';
     else if (s === 'זום נקבע') cls = 'hot';
     else if (s === 'ליד חדש') cls = 'warn';
-    return `<span class="pill ${cls}">${esc(s)}</span>`;
+    return `<span class="pill ${cls}">${esc(raw)}</span>`;
   }
   function isAdmin() { return state.role === 'admin'; }
+  /** הסטטוס המנורמל מהשרת (בלי רווחים מיותרים / כתיב שונה) */
+  function sk(l) { return l.statusKey != null ? l.statusKey : String(l.status || '').trim(); }
 
   // ---------- API ----------
   async function api(action, params) {
@@ -327,7 +330,7 @@
 
   // ---------- מסך: לידים ----------
   const FILTERS = [
-    { k: 'active', t: 'פעילים', f: (l) => !FINAL.includes(l.status) },
+    { k: 'active', t: 'פעילים', f: (l) => !FINAL.includes(sk(l)) },
     { k: 'all', t: 'הכל', f: () => true },
   ];
 
@@ -354,7 +357,7 @@
         : `<span>${esc(fmtIso(l.entry) || l.entryRaw)}</span>`;
       return `
         <a class="card lead-card ${l.untreated ? 'untreated' : ''}" href="#/lead/${esc(l.id)}">
-          <div class="top"><div class="name">${esc(l.name || '(ללא שם)')}</div>${statusPill(l.status)}</div>
+          <div class="top"><div class="name">${esc(l.name || '(ללא שם)')}</div>${statusPill(l.status, sk(l))}</div>
           <div class="meta">
             ${extra}
             ${l.phone ? `<span class="ltr">${esc(l.phone)}</span>` : ''}
@@ -368,7 +371,7 @@
         <td>${esc(fmtIso(l.entry) || l.entryRaw)}</td>
         <td><b>${esc(l.name)}</b></td>
         <td><span class="ltr">${esc(l.phone)}</span></td>
-        <td>${statusPill(l.status)}</td>
+        <td>${statusPill(l.status, sk(l))}</td>
         <td>${l.calls}/3</td><td>${l.was}/3</td>
         <td>${esc(fmtIso(l.zoomDate))}</td>
         <td>${esc(l.ad || l.source)}</td>
@@ -403,7 +406,7 @@
   function renderLeadsView() {
     const statuses = state.meta.statuses;
     const counts = {};
-    state.leads.forEach((l) => { counts[l.status || ''] = (counts[l.status || ''] || 0) + 1; });
+    state.leads.forEach((l) => { counts[sk(l)] = (counts[sk(l)] || 0) + 1; });
     const chips = FILTERS.map((f) => ({ k: f.k, t: f.t, n: state.leads.filter(f.f).length }))
       .concat(statuses.filter((s) => counts[s]).map((s) => ({ k: 's:' + s, t: s, n: counts[s] })));
 
@@ -416,8 +419,8 @@
       const f = state.filter;
       let list = state.leads.filter((l) => {
         if (f === 'all') return true;
-        if (f === 'active') return !FINAL.includes(l.status);
-        return f.startsWith('s:') && l.status === f.slice(2);
+        if (f === 'active') return !FINAL.includes(sk(l));
+        return f.startsWith('s:') && sk(l) === f.slice(2);
       });
       list = list.filter((l) => matchSearch(l, state.search)).sort(sortNewest);
       document.getElementById('results').innerHTML = gridHtml(list);
@@ -455,10 +458,12 @@
   }
 
   function statusSelect(l) {
-    const list = state.meta.statuses.includes(l.status) || !l.status ? state.meta.statuses : [l.status].concat(state.meta.statuses);
-    return `<select class="st-sel ${l.status === 'Ghosting' ? 'ghost' : ''}" data-status aria-label="סטטוס">
-      ${l.status ? '' : '<option value="" selected>— בחרי —</option>'}
-      ${list.map((x) => `<option ${x === l.status ? 'selected' : ''}>${esc(x)}</option>`).join('')}
+    const key = sk(l);
+    const list = state.meta.statuses.includes(key) || !key ? state.meta.statuses : [l.status].concat(state.meta.statuses);
+    const cur = state.meta.statuses.includes(key) ? key : l.status;
+    return `<select class="st-sel ${key === 'Ghosting' ? 'ghost' : ''}" data-status aria-label="סטטוס">
+      ${key ? '' : '<option value="" selected>— בחרי —</option>'}
+      ${list.map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('')}
     </select>`;
   }
 
@@ -514,6 +519,7 @@
     const l = Object.assign({}, lead);
     if (action === 'updateLead') {
       Object.keys(params.fields).forEach((k) => { l[k] = params.fields[k]; });
+      if (params.fields.status != null) l.statusKey = params.fields.status;
     } else if (params.kind === 'wa') {
       const n = params.attempt || ([1, 2, 3].find((i) => !String(l['wa' + i] || '').trim()));
       if (n) l['wa' + n] = params.clear ? '' : todayText();
@@ -628,7 +634,7 @@
       const sel = ev.target.closest('select[data-status]');
       if (!sel) return;
       const lead = leadOf(sel);
-      if (!lead || !sel.value || sel.value === lead.status) return;
+      if (!lead || !sel.value || sel.value === lead.status || sel.value === sk(lead)) return;
       if (sel.value === 'Ghosting' && !confirm(`לסמן את ${lead.name} כ-Ghosting? הליד יועתק גם ללשונית הגוסטינג.`)) {
         sel.value = lead.status;
         return;
@@ -747,7 +753,7 @@
     const m = state.meta;
     const tel = telHref(lead.phone), wa = waHref(lead);
     const opt = (list, cur) => ['<option value=""></option>'].concat(list.map((s) => `<option ${s === cur ? 'selected' : ''}>${esc(s)}</option>`)).join('');
-    const statusList = m.statuses.includes(lead.status) || !lead.status ? m.statuses : [lead.status].concat(m.statuses);
+    const statusList = m.statuses.includes(sk(lead)) || !sk(lead) ? m.statuses : [lead.status].concat(m.statuses);
 
     shell(lead.name || 'כרטיס ליד', `
       <div class="lead-layout">
@@ -758,7 +764,7 @@
                 <h2>${esc(lead.name || '(ללא שם)')}</h2>
                 <div class="muted small" style="margin-top:4px">נכנס ${esc(fmtIso(lead.entry) || lead.entryRaw)}${lead.updatedAt ? ' · עודכן ' + esc(fmtTs(lead.updatedAt)) : ''}</div>
               </div>
-              ${statusPill(lead.status)}
+              ${statusPill(lead.status, sk(lead))}
             </div>
             <div class="quick">
               <a class="btn" ${tel ? `href="${esc(tel)}"` : 'disabled'}>📞 חיוג</a>
@@ -786,7 +792,7 @@
           <div class="card form" id="form">
             <div class="field">
               <label>סטטוס</label>
-              <div class="status-grid">${statusList.map((s) => `<button type="button" class="chip ${s === lead.status ? 'on' : ''}" data-status="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+              <div class="status-grid">${statusList.map((s) => `<button type="button" class="chip ${s === sk(lead) ? 'on' : ''}" data-status"${esc(s)}">${esc(s)}</button>`).join('')}</div>
             </div>
             <div class="field"><label for="f-callResult">תוצאת שיחה</label><input id="f-callResult" value="${esc(lead.callResult)}" placeholder="למשל: לא ענה / ביקש לחזור מחר"></div>
             <div class="field"><label for="f-shaiNotes">הערות של שי</label><textarea id="f-shaiNotes" class="short" placeholder="למשל: להתקשר ביום ראשון / ביקשה הודעה בווטסאפ">${esc(lead.shaiNotes)}</textarea></div>

@@ -20,7 +20,36 @@ const WA_COLS_ = [COL_.wa1, COL_.wa2, COL_.wa3];
 const LAST_BASE_COL_ = 32; // AF
 
 const STATUSES_ = ['ליד חדש', 'ניסיון שיחה', 'שיחה בוצעה', 'זום נקבע', 'נסגר', 'לא מעוניין', 'לא רלוונטי', 'עתידי', 'Ghosting'];
-const FINAL_STATUSES_ = ['נסגר', 'לא מעוניין', 'לא רלוונטי', 'ghosting'];
+const FINAL_STATUSES_ = ['נסגר', 'לא מעוניין', 'לא רלוונטי', 'Ghosting'];
+// "לא טופלו": רק הסטטוסים האלה (וסטטוס ריק). כל השאר – לעולם לא.
+const UNTREATED_STATUSES_ = ['ליד חדש', 'ניסיון שיחה', 'שיחה בוצעה', 'עתידי', ''];
+
+// כתיבים שונים שעלולים להופיע בגיליון → הסטטוס הקנוני
+const STATUS_VARIANTS_ = {
+  'ליד חדש': ['ליד חדש', 'חדש'],
+  'ניסיון שיחה': ['ניסיון שיחה', 'נסיון שיחה', 'ניסיון התקשרות', 'נסיון התקשרות'],
+  'שיחה בוצעה': ['שיחה בוצעה', 'בוצעה שיחה', 'שיחה התבצעה'],
+  'עתידי': ['עתידי', 'עתידית'],
+  'זום נקבע': ['זום נקבע', 'זום נקבעה', 'נקבע זום', 'נקבעה פגישה', 'פגישה נקבעה'],
+  'נסגר': ['נסגר', 'נסגרה', 'ליד נסגר'],
+  'לא מעוניין': ['לא מעוניין', 'לא מעוניינת', 'לא מעונין', 'לא מעונינת'],
+  'לא רלוונטי': ['לא רלוונטי', 'לא רלוונטית', 'לא רלבנטי', 'לא רלבנטית'],
+  'Ghosting': ['ghosting', 'ghost', 'גוסטינג', 'גווסטינג', 'גוסט'],
+};
+
+/** מנקה רווחים מיותרים, תווי כיווניות ופיסוק, ומחזיר את הסטטוס הקנוני (או את הטקסט המנוקה אם לא מוכר). */
+function canonicalStatus_(s) {
+  const n = String(s || '')
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\u00a0]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!n) return '';
+  const keys = Object.keys(STATUS_VARIANTS_);
+  for (let i = 0; i < keys.length; i++) {
+    if (STATUS_VARIANTS_[keys[i]].indexOf(n) >= 0) return keys[i];
+  }
+  return n;
+}
 const ZOOM_RESULTS_ = ['נסגר', 'לא נסגר', 'לא הגיע', 'ממתין'];
 const UNTREATED_MS_ = 2 * DAY_MS_;
 
@@ -71,7 +100,7 @@ function leadId_(entryDisp, phone, email, name) {
 }
 
 function isFinal_(status) {
-  return FINAL_STATUSES_.indexOf(String(status || '').trim().toLowerCase()) >= 0;
+  return FINAL_STATUSES_.indexOf(canonicalStatus_(status)) >= 0;
 }
 
 /** קורא את כל הלידים. מחזיר מערך אובייקטים (שורות ריקות מדולגות). */
@@ -127,13 +156,13 @@ function buildLead_(row, v, d, prevEntry, upCol, shaiCol) {
     call1Date: g(COL_.call1Date), call1Time: g(COL_.call1Time), call2: g(COL_.call2), call3: g(COL_.call3),
     wa1: g(COL_.wa1), wa2: g(COL_.wa2), wa3: g(COL_.wa3),
     calls: calls, was: was,
-    status: status, shaiNotes: shaiNotes, summary: g(COL_.summary), zoomResult: g(COL_.zoomResult), notes: g(COL_.notes),
+    status: status, statusKey: canonicalStatus_(status), shaiNotes: shaiNotes, summary: g(COL_.summary), zoomResult: g(COL_.zoomResult), notes: g(COL_.notes),
     zoomDate: isoDate_(zoom), zoomDateRaw: g(COL_.zoomDate), reward: g(COL_.reward),
     source: g(COL_.source), age: g(COL_.age), cert: g(COL_.cert), difficulty: g(COL_.difficulty),
     improve: g(COL_.improve), change: g(COL_.change), insta: g(COL_.insta),
     updatedAt: updated ? updated.getTime() : 0,
     lastActivity: last,
-    untreated: !isFinal_(status) && (!last || Date.now() - last > UNTREATED_MS_),
+    untreated: UNTREATED_STATUSES_.indexOf(canonicalStatus_(status)) >= 0 && (!last || Date.now() - last > UNTREATED_MS_),
     _entryDate: entry,
   };
 }
@@ -231,7 +260,7 @@ function rereadLead_(cfg, id, row) {
 
 // ---------- מטמון בשרת (CacheService) לרשימת הלידים ----------
 // נשמר ל-45 שניות, ומתרוקן בכל כתיבה מהאפליקציה ובכל עריכה ידנית בגיליון.
-const LEADS_CACHE_KEY_ = 'leads_v2';
+const LEADS_CACHE_KEY_ = 'leads_v3';
 const LEADS_CACHE_SEC_ = 45;
 
 function cachedLeads_(cfg) {
