@@ -199,7 +199,7 @@ function rereadLead_(cfg, id) {
 
 function actionUpdateLead_(req, ctx) {
   const fields = req.fields || {};
-  let ghost = null;
+  let ghost = null, reward = null;
   const id = withLock_(function () {
     const loc = locateLead_(ctx.cfg, req.row, req.id);
     const sh = loc.sh, lead = loc.lead, row = lead.row;
@@ -228,6 +228,22 @@ function actionUpdateLead_(req, ctx) {
 
     if (changed) touch_(sh, row, loc.upCol);
 
+    // R או P השתנו → חישוב מחדש של S (רק בחודשים פתוחים)
+    const zoomChanged = (fields.zoomDate != null && String(fields.zoomDate).trim() !== lead.zoomDate) ||
+      (fields.zoomResult != null && String(fields.zoomResult).trim() !== lead.zoomResult);
+    if (zoomChanged) {
+      SpreadsheetApp.flush();
+      const newZoom = fields.zoomDate != null ? String(fields.zoomDate).trim() : lead.zoomDate;
+      const oldMonth = lead.zoomDate.slice(0, 7), newMonth = newZoom.slice(0, 7);
+      const r2 = readLeads_(ctx.cfg);
+      const res = syncRewards_(r2.sh, r2.leads, [oldMonth, newMonth], false);
+      // הזום נמחק: הליד כבר לא בשום חודש – מרוקנים את S אם החודש הישן פתוח
+      if (!newZoom && oldMonth && !isLockedMonth_(oldMonth) && String(lead.reward || '').trim()) {
+        sh.getRange(row, COL_.reward).setValue('');
+      }
+      reward = { changes: res.changes.length, warning: lockedWarning_(res.locked) };
+    }
+
     const newStatus = fields.status != null ? String(fields.status).trim() : lead.status;
     if (newStatus === 'Ghosting' && lead.status !== 'Ghosting') {
       SpreadsheetApp.flush();
@@ -239,7 +255,7 @@ function actionUpdateLead_(req, ctx) {
     }
     return lead.id;
   });
-  return { lead: rereadLead_(ctx.cfg, id), ghost: ghost };
+  return { lead: rereadLead_(ctx.cfg, id), ghost: ghost, reward: reward };
 }
 
 /** "2026-10-21T14:30" → Date */
@@ -389,6 +405,23 @@ function actionListGhosting_(req, ctx) {
 
 // ---------- טריגר עריכה ידנית בגיליון (מותקן ע"י setup) ----------
 
+/** אחרי עריכה ידנית של P/R: S מחושב מחדש לחודשים הפתוחים. חודשים נעולים לא נוגעים. */
+function syncRewardsAfterEdit_(e, first, lastRow) {
+  const cfg = getConfig_();
+  withLock_(function () {
+    const r = readLeads_(cfg);
+    syncRewards_(r.sh, r.leads, openMonths_(), false);
+    // תאריך זום נמחק בתא בודד: אם החודש הישן פתוח, מרוקנים את S של השורה
+    if (first === lastRow && e.range.getColumn() === COL_.zoomDate && !String(e.value || '').trim() && e.oldValue != null) {
+      const old = parseSheetDate_(e.oldValue, String(e.oldValue), null, false);
+      const lead = r.leads.filter(function (l) { return l.row === first; })[0];
+      if (old && !isLockedMonth_(monthKey_(old)) && lead && String(lead.reward || '').trim()) {
+        r.sh.getRange(first, COL_.reward).setValue('');
+      }
+    }
+  });
+}
+
 /** עריכה ידנית בלשונית הלידים → מעדכן "עודכן לאחרונה" בשורות שנערכו. */
 function onLeadsEdit(e) {
   try {
@@ -408,6 +441,8 @@ function onLeadsEdit(e) {
     const vals = [];
     for (let r = first; r <= lastRow; r++) vals.push([now]);
     sh.getRange(first, upCol, vals.length, 1).setNumberFormat('dd/MM/yyyy HH:mm').setValues(vals);
+
+    if (c1 <= COL_.zoomDate && c2 >= COL_.zoomResult) syncRewardsAfterEdit_(e, first, lastRow);
   } catch (err) {
     console.error(err);
   }

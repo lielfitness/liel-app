@@ -46,13 +46,36 @@ function monthMeetings_(leads, month) {
   };
 }
 
+/** חודש נעול: הסכומים לפי מה שרשום ב-S (מה ששולם), לא לפי חישוב מחדש. */
+function lockedMonthMeetings_(leads, month) {
+  const inMonth = leads.filter(function (l) { return l.zoomDate && l.zoomDate.slice(0, 7) === month; });
+  const yes = inMonth.filter(function (l) { return rewardFromS_(l.reward).kind === 'yes'; })
+    .sort(function (a, b) {
+      if (a.zoomDate !== b.zoomDate) return a.zoomDate < b.zoomDate ? -1 : 1;
+      return (rewardFromS_(a.reward).amount || 0) - (rewardFromS_(b.reward).amount || 0) || a.row - b.row;
+    });
+  return {
+    counted: yes.map(function (l, i) {
+      const amt = rewardFromS_(l.reward).amount || 0;
+      return { lead: l, n: i + 1, tier: amt >= 120 ? 3 : (amt >= 100 ? 2 : 1), amount: amt };
+    }),
+    noShow: inMonth.filter(function (l) { return rewardFromS_(l.reward).kind === 'no'; }),
+    pending: inMonth.filter(function (l) { return rewardFromS_(l.reward).kind === 'empty'; }),
+  };
+}
+
 function actionMonth_(req, ctx) {
   const now = new Date();
   const month = /^\d{4}-\d{2}$/.test(req.month || '') ? req.month : monthKey_(now);
   const leads = readLeads_(ctx.cfg).leads;
+  const locked = isLockedMonth_(month);
 
   const entered = leads.filter(function (l) { return l.entry && l.entry.slice(0, 7) === month; });
-  const mm = monthMeetings_(leads, month);
+  const mm = locked ? lockedMonthMeetings_(leads, month) : monthMeetings_(leads, month);
+  // בחודש נעול: שינויים ב-R/P אחרי הנעילה שלא השתקפו ב-S
+  const lockedDiffs = locked ? desiredRewards_(leads, month)
+    .filter(function (d) { return String(d.lead.reward || '').trim() !== d.value; })
+    .map(function (d) { return { id: d.lead.id, name: d.lead.name, date: d.lead.zoomDate, sheet: d.lead.reward, rule: d.value }; }) : [];
 
   const list = mm.counted.map(function (m) {
     const s = rewardFromS_(m.lead.reward);
@@ -71,6 +94,8 @@ function actionMonth_(req, ctx) {
 
   return {
     month: month,
+    locked: locked,
+    lockedDiffs: lockedDiffs,
     leadsCount: entered.length,
     basePerLead: BASE_PER_LEAD_,
     baseTotal: entered.length * BASE_PER_LEAD_,
@@ -83,4 +108,77 @@ function actionMonth_(req, ctx) {
     toNextTier: nextTierAt ? nextTierAt - count : 0,
     nextTierAmount: nextTierAt ? tierAmount_(nextTierAt) : null,
   };
+}
+
+// ---------- כתיבה ל-S (תגמול מגיע?) ----------
+// חלה רק על החודש הנוכחי והקודם (וחודשים עתידיים). חודשים ישנים יותר נעולים – S שלהם לא משתנה.
+
+function prevMonthKey_() {
+  const n = new Date();
+  return monthKey_(new Date(n.getFullYear(), n.getMonth() - 1, 1));
+}
+
+function isLockedMonth_(month) {
+  return !!month && month < prevMonthKey_();
+}
+
+function rewardText_(amount) {
+  return 'כן — ' + amount + '₪';
+}
+
+/** הערך הנכון ל-S לכל ליד שיש לו זום בחודש. */
+function desiredRewards_(leads, month) {
+  const mm = monthMeetings_(leads, month);
+  const out = [];
+  mm.counted.forEach(function (m) { out.push({ lead: m.lead, value: rewardText_(m.amount) }); });
+  mm.noShow.forEach(function (l) { out.push({ lead: l, value: 'לא' }); });
+  mm.pending.forEach(function (l) { out.push({ lead: l, value: '' }); });
+  return out;
+}
+
+/**
+ * מחשב מחדש את S לחודשים הפתוחים מתוך months. dry=true → רק מחזיר מה היה משתנה.
+ * @return {{changes: Array, locked: Array<string>}}
+ */
+function syncRewards_(sh, leads, months, dry) {
+  const uniq = months.filter(function (m, i) { return m && months.indexOf(m) === i; });
+  const locked = uniq.filter(isLockedMonth_);
+  const changes = [];
+  uniq.filter(function (m) { return !isLockedMonth_(m); }).forEach(function (m) {
+    desiredRewards_(leads, m).forEach(function (d) {
+      const cur = String(d.lead.reward || '').trim();
+      if (cur === d.value) return;
+      changes.push({ row: d.lead.row, name: d.lead.name, month: m, from: cur, to: d.value });
+      if (!dry) sh.getRange(d.lead.row, COL_.reward).setValue(d.value);
+    });
+  });
+  return { changes: changes, locked: locked };
+}
+
+function openMonths_() {
+  return [prevMonthKey_(), monthKey_(new Date())];
+}
+
+function lockedWarning_(locked) {
+  return locked.length
+    ? 'החודש ' + locked.join(', ') + ' נעול (כבר שולם) – התגמול ב-S לא שונה. אם צריך תיקון, עדכנו ידנית.'
+    : '';
+}
+
+/** הרצה ידנית מהעורך: מה היה משתנה ב-S (בלי לכתוב). */
+function syncRewardsDryRun() {
+  const r = readLeads_(getConfig_());
+  const res = syncRewards_(r.sh, r.leads, openMonths_(), true);
+  console.log('חודשים: ' + openMonths_().join(', ') + ' | תאים שהיו משתנים ב-S: ' + res.changes.length +
+    (res.changes.length ? '\n' + res.changes.map(function (c) { return 'שורה ' + c.row + ' ' + c.name + ': "' + c.from + '" → "' + c.to + '"'; }).join('\n') : ''));
+}
+
+/** הרצה ידנית מהעורך: כותב את S לחודשים הפתוחים. */
+function syncRewardsNow() {
+  const cfg = getConfig_();
+  withLock_(function () {
+    const r = readLeads_(cfg);
+    const res = syncRewards_(r.sh, r.leads, openMonths_(), false);
+    console.log('חודשים: ' + openMonths_().join(', ') + ' | תאים שנכתבו ב-S: ' + res.changes.length);
+  });
 }

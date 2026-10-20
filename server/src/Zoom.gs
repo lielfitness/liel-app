@@ -114,6 +114,9 @@ function scanZoomBookings() {
         if (!lead.zoomDate) setDateCell_(r.sh, lead.row, COL_.zoomDate, parseIso_(iso));
         if (!isFinal_(lead.status) && lead.status !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
         touch_(r.sh, lead.row, r.upCol);
+        SpreadsheetApp.flush();
+        const r2 = readLeads_(cfg);
+        syncRewards_(r2.sh, r2.leads, [iso.slice(0, 7)], false);
         sendTelegram_('📅 <b>זום חדש נקבע</b>\n' + esc_(lead.name) + '\n' + fmtWhen_(start),
           [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }]);
       } else {
@@ -148,8 +151,11 @@ function actionAssignZoom_(req, ctx) {
     setDateCell_(loc.sh, loc.lead.row, COL_.zoomDate, new Date(s.getFullYear(), s.getMonth(), s.getDate()));
     if (!isFinal_(loc.lead.status)) loc.sh.getRange(loc.lead.row, COL_.status).setValue('זום נקבע');
     touch_(loc.sh, loc.lead.row, loc.upCol);
+    SpreadsheetApp.flush();
+    const r2 = readLeads_(ctx.cfg);
+    const res = syncRewards_(r2.sh, r2.leads, [loc.lead.zoomDate.slice(0, 7), monthKey_(s)], false);
     writeJsonProp_(ZOOM_ALERTS_KEY_, alerts.filter(function (x) { return x.key !== req.key; }));
-    return { ok: true };
+    return { ok: true, warning: lockedWarning_(res.locked) };
   });
 }
 

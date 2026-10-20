@@ -425,6 +425,7 @@
       patchRow(id, d.lead);
       markRow(d.lead ? d.lead.id : id, 'ok', okMsg || 'נשמר ✓');
       if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
+      if (d.reward && d.reward.warning) toast('⚠️ ' + d.reward.warning, true);
       return d;
     } catch (e) {
       markRow(lead.id, 'err', 'לא נשמר ✕');
@@ -682,7 +683,8 @@
         replaceLead(lead.id, d.lead);
         let msg = 'נשמר ✓';
         if (d.ghost) msg += d.ghost.copied ? ' · הועתק לגוסטינג' : ' · ' + d.ghost.reason;
-        toast(msg, d.ghost && !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
+        if (d.reward && d.reward.warning) msg += ' · ⚠️ ' + d.reward.warning;
+        toast(msg, (d.ghost && !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason)) || !!(d.reward && d.reward.warning));
         if (d.lead) renderLead(d.lead);
       } catch (e) {
         toast(e.message, true);
@@ -809,13 +811,15 @@
         <div class="card tile"><div class="num">${ils(d.bonusTotal)}</div><div class="lbl">בונוס פגישות</div></div>
         <div class="card tile"><div class="num">${d.currentTier || '—'}</div><div class="lbl">מדרגה נוכחית</div></div>
       </div>
+      ${d.locked ? `<div class="notice" style="margin-top:10px">🔒 חודש נעול (כבר שולם). הסכומים כאן לפי מה שרשום בגיליון (עמודה S), ושינויים בתאריך/תוצאת זום לא משנים אותם.</div>
+        ${d.lockedDiffs.length ? `<div class="notice">⚠️ שונו אחרי הנעילה – לפי הכלל היה יוצא אחרת (S לא שונה):<br>${d.lockedDiffs.map((x) => `${esc(x.name)} · ${esc(fmtIso(x.date))}: בגיליון "${esc(x.sheet || 'ריק')}", לפי הכלל "${esc(x.rule || 'ריק')}"`).join('<br>')}</div>` : ''}` : `
       <div class="card" style="margin-top:10px">
         ${d.toNextTier
           ? `<b>עוד ${d.toNextTier} ${d.toNextTier === 1 ? 'פגישה' : 'פגישות'}</b> למדרגה הבאה (${ils(d.nextTierAmount)} לפגישה)`
           : '<b>את במדרגה העליונה 🚀</b> (120 ₪ לפגישה)'}
         <div class="progress"><div style="width:${pct}%"></div></div>
         <div class="muted small" style="margin-top:8px">פגישות 1 עד 5: 80 ₪ · פגישות 6 עד 10: 100 ₪ · מ-11 ומעלה: 120 ₪<br>פגישה נספרת כשיש תאריך זום ותוצאת זום (נסגר / לא נסגר / ממתין), בחודש של תאריך הזום</div>
-      </div>
+      </div>`}
 
       <div class="section-title">פירוט פגישות</div>
       ${d.meetings.length ? `<div class="mlist">${d.meetings.map((m) => `
@@ -866,8 +870,8 @@
         const l = state.leads.find((x) => x.id === leadId);
         if (!l || !confirm(`לשייך את הזום ל${l.name}?`)) return;
         try {
-          await api('assignZoom', { key, row: l.row, id: l.id });
-          state.leads = null; toast('שויך ✓'); viewZooms();
+          const r = await api('assignZoom', { key, row: l.row, id: l.id });
+          state.leads = null; toast(r && r.warning ? 'שויך ✓ · ⚠️ ' + r.warning : 'שויך ✓', !!(r && r.warning)); viewZooms();
         } catch (e) { toast(e.message, true); }
       };
       const inp = card.querySelector('[data-pick]');
