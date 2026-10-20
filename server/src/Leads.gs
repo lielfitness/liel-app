@@ -251,9 +251,28 @@ function actionMarkAttempt_(req, ctx) {
     const filled = function (c) { return !!String(disp[c - 1]).trim(); };
 
     if (kind === 'wa') {
-      const free = WA_COLS_.filter(function (c) { return !filled(c); })[0];
-      if (!free) throw apiError_('FULL', 'כבר נשלחו 3 הודעות WA');
-      setDateCell_(sh, row, free, todayMidnight_());
+      let col;
+      if (req.attempt) {
+        const w = Number(req.attempt);
+        if ([1, 2, 3].indexOf(w) < 0) throw apiError_('BAD_REQUEST', 'מספר WA לא תקין');
+        col = WA_COLS_[w - 1];
+        if (req.clear) {
+          sh.getRange(row, col).clearContent();
+        } else {
+          if (filled(col) && !req.overwrite) throw apiError_('FILLED', 'WA ' + w + ' כבר מסומן');
+          setDateCell_(sh, row, col, todayMidnight_());
+        }
+      } else {
+        col = WA_COLS_.filter(function (c) { return !filled(c); })[0];
+        if (!col) throw apiError_('FULL', 'כבר נשלחו 3 הודעות WA');
+        setDateCell_(sh, row, col, todayMidnight_());
+      }
+    } else if (req.clear) {
+      // ביטול ניסיון שיחה (תאריך/שעה בלבד – תוצאת השיחה ב-F נשארת)
+      const c = Number(req.attempt);
+      if ([1, 2, 3].indexOf(c) < 0) throw apiError_('BAD_REQUEST', 'מספר ניסיון לא תקין');
+      sh.getRange(row, CALL_COLS_[c - 1]).clearContent();
+      if (c === 1) sh.getRange(row, COL_.call1Time).clearContent();
     } else {
       const n = Number(req.attempt);
       if ([1, 2, 3].indexOf(n) < 0) throw apiError_('BAD_REQUEST', 'מספר ניסיון לא תקין');

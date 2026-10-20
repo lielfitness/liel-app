@@ -320,9 +320,9 @@
         return f.startsWith('s:') && l.status === f.slice(2);
       });
       list = list.filter((l) => matchSearch(l, state.search)).sort(sortNewest);
-      document.getElementById('results').innerHTML = leadCardsHtml(list);
-      bindTableRows();
+      document.getElementById('results').innerHTML = gridHtml(list);
     };
+    bindGrid(document.getElementById('results'));
     draw();
     const q = document.getElementById('q');
     q.oninput = () => { state.search = q.value.trim(); draw(); };
@@ -333,6 +333,189 @@
         draw();
       };
     });
+  }
+
+  // ---------- רשימה עם עריכה ישירה (כמו שיטס) ----------
+  function shortDate(s) {
+    return String(s || '').replace(/(\d{1,2}[\/.]\d{1,2})[\/.]\d{2,4}/, '$1').trim();
+  }
+  function callText(l, n) {
+    if (n === 1) return shortDate([l.call1Date, l.call1Time].filter(Boolean).join(' '));
+    return shortDate(n === 2 ? l.call2 : l.call3);
+  }
+  function waText(l, n) { return shortDate(l['wa' + n]); }
+
+  function attemptsHtml(l) {
+    const cell = (kind, n, txt) => `
+      <button type="button" class="att ${txt ? 'done' : ''} a-${kind}${n}" data-${kind}="${n}" title="${kind === 'call' ? 'ניסיון שיחה' : 'WA'} ${n}${txt ? ': ' + esc(txt) : ''}">
+        <span class="att-k">${kind === 'call' ? '📞' : '💬'}${n}</span><span class="att-v">${txt ? esc(txt) : '+'}</span>
+      </button>`;
+    return [1, 2, 3].map((n) => cell('call', n, callText(l, n))).join('') +
+      [1, 2, 3].map((n) => cell('wa', n, waText(l, n))).join('');
+  }
+
+  function statusSelect(l) {
+    const list = state.meta.statuses.includes(l.status) || !l.status ? state.meta.statuses : [l.status].concat(state.meta.statuses);
+    return `<select class="st-sel ${l.status === 'Ghosting' ? 'ghost' : ''}" data-status aria-label="סטטוס">
+      ${l.status ? '' : '<option value="" selected>— בחרי —</option>'}
+      ${list.map((x) => `<option ${x === l.status ? 'selected' : ''}>${esc(x)}</option>`).join('')}
+    </select>`;
+  }
+
+  function gridRowHtml(l) {
+    return `
+      <div class="g-row ${l.untreated ? 'untreated' : ''}" data-id="${esc(l.id)}">
+        <div class="g-entry">${esc(fmtIso(l.entry) || l.entryRaw)}</div>
+        <div class="g-name"><a href="#/lead/${esc(l.id)}">${esc(l.name || '(ללא שם)')}</a></div>
+        <div class="g-phone"><a class="ltr" href="${esc(telHref(l.phone))}">${esc(l.phone)}</a></div>
+        <div class="g-status">${statusSelect(l)}</div>
+        <div class="g-att">${attemptsHtml(l)}</div>
+        <div class="g-notes"><input data-notes value="${esc(l.summary)}" placeholder="הערה…" aria-label="הערות שי"></div>
+        <div class="g-zoom">${l.zoomDate ? '🎥 ' + esc(fmtIso(l.zoomDate)) : ''}</div>
+        <div class="g-saved" aria-live="polite"></div>
+      </div>`;
+  }
+
+  function gridHtml(list) {
+    if (!list.length) return '<div class="empty">אין לידים להצגה</div>';
+    return `
+      <div class="grid">
+        <div class="g-row g-head">
+          <div class="g-entry">נכנס</div><div class="g-name">שם</div><div class="g-phone">טלפון</div><div class="g-status">סטטוס</div>
+          <div class="g-att"><span>ניסיון 1</span><span>ניסיון 2</span><span>ניסיון 3</span><span>WA 1</span><span>WA 2</span><span>WA 3</span></div>
+          <div class="g-notes">הערות שי</div><div class="g-zoom">זום</div><div class="g-saved"></div>
+        </div>
+        ${list.map(gridRowHtml).join('')}
+      </div>`;
+  }
+
+  function rowEl(id) { return $app.querySelector(`.g-row[data-id="${CSS.escape(id)}"]`); }
+
+  function markRow(id, kind, msg) {
+    const el = rowEl(id);
+    if (!el) return;
+    const s = el.querySelector('.g-saved');
+    s.className = 'g-saved ' + kind;
+    s.textContent = msg;
+    clearTimeout(s._t);
+    if (kind === 'ok') s._t = setTimeout(() => { s.textContent = ''; s.className = 'g-saved'; }, 2500);
+  }
+
+  /** מעדכן שורה במקום, בלי לפגוע בשדה שהמשתמשת מקלידה בו כרגע. */
+  function patchRow(oldId, lead) {
+    replaceLead(oldId, lead);
+    const el = rowEl(oldId);
+    if (!el || !lead) return;
+    el.dataset.id = lead.id;
+    el.classList.toggle('untreated', !!lead.untreated);
+    el.querySelector('.g-att').innerHTML = attemptsHtml(lead);
+    el.querySelector('.g-status').innerHTML = statusSelect(lead);
+    el.querySelector('.g-zoom').textContent = lead.zoomDate ? '🎥 ' + fmtIso(lead.zoomDate) : '';
+    const notes = el.querySelector('[data-notes]');
+    if (document.activeElement !== notes) notes.value = lead.summary || '';
+    notes.dataset.saved = lead.summary || '';
+  }
+
+  async function rowSave(lead, action, params, okMsg) {
+    markRow(lead.id, 'busy', 'שומר…');
+    try {
+      const d = await api(action, Object.assign({ row: lead.row, id: lead.id }, params));
+      const id = lead.id;
+      patchRow(id, d.lead);
+      markRow(d.lead ? d.lead.id : id, 'ok', okMsg || 'נשמר ✓');
+      if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
+      return d;
+    } catch (e) {
+      markRow(lead.id, 'err', 'לא נשמר ✕');
+      toast('לא נשמר: ' + e.message, true);
+      throw e;
+    }
+  }
+
+  function bindGrid(root) {
+    const leadOf = (el) => {
+      const row = el.closest('.g-row[data-id]');
+      return row && state.leads.find((l) => l.id === row.dataset.id);
+    };
+
+    root.addEventListener('click', async (ev) => {
+      const b = ev.target.closest('[data-call],[data-wa]');
+      if (!b) return;
+      const lead = leadOf(b);
+      if (!lead) return;
+      if (b.dataset.call) return openCallDialog(lead, Number(b.dataset.call));
+      const n = Number(b.dataset.wa);
+      const cur = waText(lead, n);
+      if (cur) {
+        if (!confirm(`לבטל את WA ${n} (${cur})?`)) return;
+        rowSave(lead, 'markAttempt', { kind: 'wa', attempt: n, clear: true }, 'בוטל ✓').catch(() => {});
+      } else {
+        rowSave(lead, 'markAttempt', { kind: 'wa', attempt: n }).catch(() => {});
+      }
+    });
+
+    root.addEventListener('change', (ev) => {
+      const sel = ev.target.closest('select[data-status]');
+      if (!sel) return;
+      const lead = leadOf(sel);
+      if (!lead || !sel.value || sel.value === lead.status) return;
+      if (sel.value === 'Ghosting' && !confirm(`לסמן את ${lead.name} כ-Ghosting? הליד יועתק גם ללשונית הגוסטינג.`)) {
+        sel.value = lead.status;
+        return;
+      }
+      rowSave(lead, 'updateLead', { fields: { status: sel.value } }).catch(() => { sel.value = lead.status; });
+    });
+
+    // הערות: נשמר כשיוצאים מהשדה (או Enter)
+    root.addEventListener('focusout', (ev) => {
+      const inp = ev.target.closest('input[data-notes]');
+      if (!inp) return;
+      const lead = leadOf(inp);
+      if (!lead) return;
+      const v = inp.value.trim();
+      if (v === String(lead.summary || '').trim()) return;
+      rowSave(lead, 'updateLead', { fields: { summary: v } }).catch(() => {});
+    });
+    root.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && ev.target.matches('input[data-notes]')) ev.target.blur();
+    });
+  }
+
+  // חלון קטן לניסיון שיחה (משמש גם ברשימה)
+  function openCallDialog(lead, n) {
+    const d = new Date(), p = (x) => String(x).padStart(2, '0');
+    const now = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    const cur = callText(lead, n);
+    const wrap = document.createElement('div');
+    wrap.className = 'sheet-backdrop';
+    wrap.innerHTML = `
+      <div class="sheet" role="dialog" aria-modal="true" aria-label="ניסיון שיחה ${n}">
+        <div class="row"><b class="grow">ניסיון שיחה ${n} · ${esc(lead.name)}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+        ${cur ? `<div class="notice small">כבר רשום: "${esc(cur)}" – שמירה תחליף אותו.</div>` : ''}
+        <div class="field"><label for="dlg-when">תאריך ושעה</label><input id="dlg-when" type="datetime-local" value="${now}"></div>
+        ${n === 1 ? `<div class="field"><label for="dlg-res">תוצאת שיחה</label><input id="dlg-res" value="${esc(lead.callResult)}" placeholder="למשל: לא זמינה / נקבעה פגישה"></div>` : ''}
+        <div class="row">
+          <button class="btn grow" data-save>שמירה</button>
+          ${cur ? '<button class="btn danger" data-clear>ביטול הניסיון</button>' : ''}
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const close = () => wrap.remove();
+    wrap.addEventListener('click', (e) => { if (e.target === wrap || e.target.closest('[data-x]')) close(); });
+    wrap.querySelector('[data-save]').onclick = async (e) => {
+      const when = wrap.querySelector('#dlg-when').value;
+      if (!when) return toast('צריך לבחור תאריך ושעה', true);
+      const res = wrap.querySelector('#dlg-res');
+      e.currentTarget.disabled = true;
+      close();
+      rowSave(lead, 'markAttempt', { kind: 'call', attempt: n, when, result: res ? res.value : undefined, overwrite: !!cur }).catch(() => {});
+    };
+    const clr = wrap.querySelector('[data-clear]');
+    if (clr) clr.onclick = () => {
+      if (!confirm(`לבטל את ניסיון ${n}?`)) return;
+      close();
+      rowSave(lead, 'markAttempt', { kind: 'call', attempt: n, clear: true }, 'בוטל ✓').catch(() => {});
+    };
   }
 
   // ---------- מסך: לא טופלו ----------

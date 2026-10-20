@@ -259,3 +259,86 @@ dl.info dd { margin: 0; word-break: break-word; }
   display: flex; align-items: center; gap: 10px; padding: 10px 16px; font-size: 14px; flex-wrap: wrap;
 }
 .viewas-bar span { flex: 1; min-width: 200px; }
+
+/* ---------- רשימת לידים עם עריכה ישירה ---------- */
+.grid { margin-top: 12px; display: grid; gap: 8px; }
+.g-row {
+  position: relative; background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; display: grid; gap: 6px 8px; align-items: center;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "name status"
+    "meta meta"
+    "att att"
+    "notes notes";
+}
+.g-row.untreated { border-inline-start: 4px solid var(--danger); }
+.g-head { display: none; }
+.g-name { grid-area: name; min-width: 0; }
+.g-name a { font-weight: 700; font-size: 16px; color: var(--ink); text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-name a:hover { color: var(--brand); text-decoration: underline; }
+.g-status { grid-area: status; }
+.g-entry, .g-phone, .g-zoom { font-size: 13px; color: var(--muted); }
+.g-entry { grid-area: meta; }
+.g-phone, .g-zoom { display: none; }
+.g-att { grid-area: att; display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.g-notes { grid-area: notes; }
+.g-notes input {
+  width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 16px; background: #fafbfc;
+}
+.g-notes input:focus { outline: 2px solid var(--brand); outline-offset: -1px; background: #fff; }
+.g-saved { position: absolute; top: -9px; inset-inline-end: 12px; font-size: 12px; font-weight: 700; padding: 0 8px; border-radius: 999px; }
+.g-saved:empty { display: none; }
+.g-saved.ok { background: var(--ok-soft); color: var(--ok); }
+.g-saved.busy { background: var(--brand-soft); color: var(--brand); }
+.g-saved.err { background: var(--danger); color: #fff; }
+
+.st-sel {
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; font-size: 14px; background: var(--brand-soft);
+  color: var(--brand-dark); font-weight: 500; max-width: 150px;
+}
+.st-sel.ghost { background: #2b2b2b; color: #fff; }
+
+.att {
+  border: 1px dashed #c9cfd6; background: #fff; border-radius: 8px; padding: 4px 2px; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 0; min-height: 44px; line-height: 1.2;
+}
+.att-k { font-size: 11px; color: var(--muted); }
+.att-v { font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.att.done { border-style: solid; border-color: var(--brand); background: var(--brand-soft); }
+.att.done .att-v { color: var(--brand-dark); }
+.att.a-wa1.done, .att.a-wa2.done, .att.a-wa3.done { border-color: #1fa855; background: #e8f7ee; }
+.att.a-wa1.done .att-v, .att.a-wa2.done .att-v, .att.a-wa3.done .att-v { color: #157a3e; }
+.att:active { transform: scale(.96); }
+
+@media (min-width: 900px) {
+  .grid { gap: 0; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .g-row {
+    border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 6px 10px;
+    grid-template-columns: 82px minmax(130px, 1.2fr) 112px 140px minmax(400px, 3fr) minmax(150px, 2fr) 112px;
+    grid-template-areas: "entry name phone status att notes zoom";
+  }
+  .g-row:hover { background: #fafcff; }
+  .g-head { display: grid; position: sticky; top: 0; z-index: 2; background: #fafbfc; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .g-head .g-att span { text-align: center; }
+  .g-entry { grid-area: entry; }
+  .g-phone, .g-zoom { display: block; }
+  .g-phone { grid-area: phone; }
+  .g-zoom { grid-area: zoom; }
+  .g-row.untreated { border-inline-start: 0; box-shadow: inset -4px 0 0 var(--danger); }
+  .att { min-height: 38px; }
+  .g-notes input { padding: 6px 8px; font-size: 14px; }
+  .g-saved { top: 50%; transform: translateY(-50%); inset-inline-end: 4px; }
+}
+
+/* חלון קטן (ניסיון שיחה) */
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.4);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.sheet {
+  background: #fff; width: 100%; max-width: 440px; border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + var(--safe-b));
+  display: grid; gap: 12px; animation: up .18s ease-out;
+}
+@media (min-width: 640px) { .sheet-backdrop { align-items: center; } .sheet { border-radius: 18px; } }
+@keyframes up { from { transform: translateY(30px); opacity: .5; } to { transform: none; opacity: 1; } }
