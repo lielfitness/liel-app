@@ -105,7 +105,7 @@ function buildLead_(row, v, d, prevEntry, upCol, shaiCol) {
   const ref = entry || prevEntry;
   const at = function (c) { return parseSheetDate_(v[c - 1], d[c - 1], ref, true); };
   const zoom = at(COL_.zoomDate);
-  const updated = upCol ? parseUpdated_(v[upCol - 1]) : null;
+  const updated = upCol ? parseUpdated_(d[upCol - 1]) : null;
 
   // "פעילות אחרונה" = עודכן לאחרונה, ואם אין – התאריך המאוחר מבין כניסה/ניסיונות/WA
   // תאריך בלי שעה נחשב כסוף אותו יום; תאריכים עתידיים (הקלדה שגויה) לא נחשבים
@@ -138,9 +138,12 @@ function buildLead_(row, v, d, prevEntry, upCol, shaiCol) {
   };
 }
 
-function parseUpdated_(v) {
-  if (v instanceof Date && !isNaN(v)) return v;
-  return null;
+/** "עודכן לאחרונה" נקרא מהטקסט המוצג (שעון ישראל), לא מה-Date של הגיליון (שעון לוס אנג'לס). */
+function parseUpdated_(disp) {
+  const m = String(disp || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (!m) return null;
+  const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0));
+  return isNaN(d) ? null : d;
 }
 
 function publicLead_(l) {
@@ -180,15 +183,21 @@ function withLock_(fn) {
   try { return fn(); } finally { lock.releaseLock(); }
 }
 
+// אזור הזמן של גיליון הלידים הוא America/Los_Angeles, לכן לא כותבים אובייקט Date
+// (הוא היה מוצג יום/שעות אחרים). כותבים טקסט בשעון ישראל, והגיליון (he_IL) מפרש אותו כתאריך.
 function setDateCell_(sh, row, col, date) {
   const c = sh.getRange(row, col);
   if (!date) { c.clearContent(); return; }
-  c.setNumberFormat('dd/MM/yyyy').setValue(date);
+  c.setNumberFormat('dd/MM/yyyy').setValue(Utilities.formatDate(date, TZ_, 'dd/MM/yyyy'));
+}
+
+function nowStamp_() {
+  return Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm');
 }
 
 function touch_(sh, row, upCol) {
   if (!upCol) return;
-  sh.getRange(row, upCol).setNumberFormat('dd/MM/yyyy HH:mm').setValue(new Date());
+  sh.getRange(row, upCol).setNumberFormat('dd/MM/yyyy HH:mm').setValue(nowStamp_());
 }
 
 function rereadLead_(cfg, id) {
@@ -437,7 +446,7 @@ function onLeadsEdit(e) {
     const first = Math.max(2, e.range.getRow());
     const lastRow = e.range.getLastRow();
     if (lastRow < first || lastRow - first > 50) return;
-    const now = new Date();
+    const now = nowStamp_();
     const vals = [];
     for (let r = first; r <= lastRow; r++) vals.push([now]);
     sh.getRange(first, upCol, vals.length, 1).setNumberFormat('dd/MM/yyyy HH:mm').setValues(vals);
