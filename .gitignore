@@ -7,3 +7,4 @@ server/.clasp.json
 server/.clasprc.json
 server/node_modules/
 .DS_Store
+server/src/LocalConfig.gs

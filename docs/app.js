@@ -367,8 +367,21 @@
             <div class="quick">
               <a class="btn" ${tel ? `href="${esc(tel)}"` : 'disabled'}>📞 חיוג</a>
               <a class="btn green" ${wa ? `href="${esc(wa)}" target="_blank" rel="noopener"` : 'disabled'}>💬 ווטסאפ</a>
-              <button class="btn secondary" data-act="call" ${lead.calls >= 3 ? 'disabled' : ''}>✔︎ ניסיון שיחה <span class="counter">${lead.calls}/3</span></button>
+              <button class="btn secondary" data-act="call">✔︎ ניסיון שיחה <span class="counter">${lead.calls}/3</span></button>
               <button class="btn secondary" data-act="wa" ${lead.was >= 3 ? 'disabled' : ''}>✔︎ נשלח WA <span class="counter">${lead.was}/3</span></button>
+            </div>
+            <div id="callPanel" class="call-panel" hidden>
+              <div class="field">
+                <label>מספר ניסיון</label>
+                <div class="seg">${[1, 2, 3].map((n) => `<button type="button" class="chip" data-n="${n}">ניסיון ${n}</button>`).join('')}</div>
+              </div>
+              <div class="field"><label for="c-when">תאריך ושעה</label><input id="c-when" type="datetime-local"></div>
+              <div class="field" id="c-result-wrap"><label for="c-result">תוצאת שיחה (נכתב ל"ניסיון 1 שיחה")</label><input id="c-result" placeholder="למשל: לא זמינה / נקבעה פגישה"></div>
+              <div class="notice small" id="c-warn" hidden></div>
+              <div class="row">
+                <button class="btn grow" data-act="call-save">שמירת ניסיון</button>
+                <button class="btn ghost" data-act="call-cancel">ביטול</button>
+              </div>
             </div>
             ${state.bookingUrl ? `<a class="btn secondary" style="width:100%;margin-top:10px" href="${esc(state.bookingUrl)}" target="_blank" rel="noopener">🎥 קביעת זום (פגישת אפיון)</a>` : ''}
           </div>
@@ -380,12 +393,12 @@
               <div class="status-grid">${statusList.map((s) => `<button type="button" class="chip ${s === lead.status ? 'on' : ''}" data-status="${esc(s)}">${esc(s)}</button>`).join('')}</div>
             </div>
             <div class="field"><label for="f-callResult">תוצאת שיחה</label><input id="f-callResult" value="${esc(lead.callResult)}" placeholder="למשל: לא ענה / ביקש לחזור מחר"></div>
-            <div class="field"><label for="f-summary">סיכום שיחה</label><textarea id="f-summary">${esc(lead.summary)}</textarea></div>
-            <div class="field"><label for="f-notes">הערות</label><textarea id="f-notes">${esc(lead.notes)}</textarea></div>
+            <div class="field"><label for="f-summary">הערות שי (סיכום שיחה)</label><textarea id="f-summary">${esc(lead.summary)}</textarea></div>
             <div class="row">
               <div class="field grow"><label for="f-zoomDate">תאריך זום</label><input id="f-zoomDate" type="date" value="${esc(lead.zoomDate)}"></div>
               <div class="field grow"><label for="f-zoomResult">תוצאת זום</label><select id="f-zoomResult">${opt(m.zoomResults, lead.zoomResult)}</select></div>
             </div>
+            <div class="field"><label for="f-notes">פירוט תוצאת זום / סכום</label><input id="f-notes" value="${esc(lead.notes)}" placeholder="למשל: כלכלי / 9500"></div>
             ${lead.zoomDateRaw && !lead.zoomDate ? `<div class="notice small">בגיליון כתוב בתאריך הזום: "${esc(lead.zoomDateRaw)}" – לא הצלחתי לפענח.</div>` : ''}
           </div>
           <div class="savebar">
@@ -466,21 +479,67 @@
       }
     };
 
-    $app.querySelectorAll('[data-act="call"],[data-act="wa"]').forEach((b) => {
-      b.onclick = async () => {
-        if (Object.keys(collect()).length && !confirm('יש שינויים שלא נשמרו בטופס. להמשיך בלי לשמור אותם?')) return;
-        b.disabled = true;
-        try {
-          const d = await api('markAttempt', { row: lead.row, id: lead.id, kind: b.dataset.act });
-          replaceLead(lead.id, d.lead);
-          toast(b.dataset.act === 'wa' ? 'סומן WA ✓' : 'סומן ניסיון שיחה ✓');
-          if (d.lead) renderLead(d.lead);
-        } catch (e) {
-          toast(e.message, true);
-          b.disabled = false;
-        }
-      };
-    });
+    const guardDirty = () => !Object.keys(collect()).length || confirm('יש שינויים שלא נשמרו בטופס. להמשיך בלי לשמור אותם?');
+
+    // --- ניסיון שיחה: בחירת מספר ניסיון + תאריך ושעה ---
+    const panel = document.getElementById('callPanel');
+    const slots = { 1: [lead.call1Date, lead.call1Time].filter(Boolean).join(' '), 2: lead.call2, 3: lead.call3 };
+    let attempt = 1;
+    const pickAttempt = (n) => {
+      attempt = n;
+      panel.querySelectorAll('[data-n]').forEach((x) => x.classList.toggle('on', Number(x.dataset.n) === n));
+      document.getElementById('c-result-wrap').hidden = n !== 1;
+      const warn = document.getElementById('c-warn');
+      warn.hidden = !slots[n];
+      warn.textContent = slots[n] ? `בניסיון ${n} כבר כתוב "${slots[n]}" – שמירה תחליף אותו.` : '';
+    };
+    panel.querySelectorAll('[data-n]').forEach((b) => { b.onclick = () => pickAttempt(Number(b.dataset.n)); });
+    $app.querySelector('[data-act="call"]').onclick = () => {
+      if (!panel.hidden) { panel.hidden = true; return; }
+      const d = new Date(), p = (x) => String(x).padStart(2, '0');
+      document.getElementById('c-when').value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+      document.getElementById('c-result').value = lead.callResult || '';
+      const next = [1, 2, 3].find((n) => !slots[n]) || 3;
+      pickAttempt(next);
+      panel.hidden = false;
+    };
+    $app.querySelector('[data-act="call-cancel"]').onclick = () => { panel.hidden = true; };
+    $app.querySelector('[data-act="call-save"]').onclick = async (ev) => {
+      const b = ev.currentTarget;
+      const when = document.getElementById('c-when').value;
+      if (!when) return toast('צריך לבחור תאריך ושעה', true);
+      if (!guardDirty()) return;
+      b.disabled = true; b.textContent = 'שומר…';
+      try {
+        const d = await api('markAttempt', {
+          row: lead.row, id: lead.id, kind: 'call', attempt, when,
+          result: attempt === 1 ? document.getElementById('c-result').value : undefined,
+          overwrite: !!slots[attempt],
+        });
+        replaceLead(lead.id, d.lead);
+        toast(`נשמר ניסיון ${attempt} ✓`);
+        if (d.lead) renderLead(d.lead);
+      } catch (e) {
+        toast(e.message, true);
+        b.disabled = false; b.textContent = 'שמירת ניסיון';
+      }
+    };
+
+    // --- WA: העמודה הפנויה הבאה בתאריך היום ---
+    const waBtn = $app.querySelector('[data-act="wa"]');
+    waBtn.onclick = async () => {
+      if (!guardDirty()) return;
+      waBtn.disabled = true;
+      try {
+        const d = await api('markAttempt', { row: lead.row, id: lead.id, kind: 'wa' });
+        replaceLead(lead.id, d.lead);
+        toast('סומן WA ✓');
+        if (d.lead) renderLead(d.lead);
+      } catch (e) {
+        toast(e.message, true);
+        waBtn.disabled = false;
+      }
+    };
   }
 
   function replaceLead(oldId, lead) {

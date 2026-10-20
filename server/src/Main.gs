@@ -2,10 +2,10 @@
  * Liel Fitness – API לאפליקציה.
  * פרויקט נפרד: לא נוגע בסקריפטים הקיימים, רק קורא/כותב לגיליונות לפי ID.
  *
- * הגדרות (Script Properties, מוכנסות ידנית ע"י ליאל):
- *   CONFIG              JSON: clientId, users, leadsSheetId, finSheetId, calendarId, bookingUrl, appUrl
- *   TELEGRAM_BOT_TOKEN  טוקן הבוט הקיים (סוד)
- *   TELEGRAM_CHAT_ID    הצ'אט של ליאל
+ * Script Properties (ליאל מכניס ידנית):
+ *   TELEGRAM_BOT_TOKEN  טוקן הבוט הקיים (סוד – רק כאן)
+ *   CONFIG (לא חובה)    JSON שגובר על LocalConfig.gs
+ * הגדרות שאינן סוד: LocalConfig.gs (בפרויקט בלבד, לא בריפו הציבורי)
  * נוצר אוטומטית ע"י setup(): SESSION_SECRET
  */
 
@@ -80,8 +80,9 @@ let CONFIG_CACHE_ = null;
 function getConfig_() {
   if (CONFIG_CACHE_) return CONFIG_CACHE_;
   const raw = PropertiesService.getScriptProperties().getProperty('CONFIG');
-  if (!raw) throw apiError_('CONFIG', 'חסר CONFIG ב-Script Properties');
-  const cfg = JSON.parse(raw);
+  const base = typeof LOCAL_CONFIG_ !== 'undefined' ? LOCAL_CONFIG_ : {};
+  const cfg = Object.assign({}, base, raw ? JSON.parse(raw) : {});
+  if (!cfg.leadsSheetId) throw apiError_('CONFIG', 'חסרות הגדרות (LocalConfig.gs / CONFIG)');
   const users = {};
   Object.keys(cfg.users || {}).forEach(function (k) { users[k.trim().toLowerCase()] = cfg.users[k]; });
   cfg.users = users;

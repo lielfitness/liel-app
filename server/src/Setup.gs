@@ -8,9 +8,10 @@ function setup() {
   const cfg = getConfig_();
   const log = [];
 
-  ['clientId', 'leadsSheetId', 'finSheetId', 'appUrl'].forEach(function (k) {
-    if (!cfg[k]) throw new Error('חסר "' + k + '" ב-CONFIG');
+  ['leadsSheetId', 'finSheetId', 'appUrl'].forEach(function (k) {
+    if (!cfg[k]) throw new Error('חסר "' + k + '" בהגדרות');
   });
+  if (!cfg.clientId) log.push('⚠️ עדיין אין clientId – הכניסה לאפליקציה לא תעבוד עד שיתווסף');
   log.push('משתמשים: ' + Object.keys(cfg.users).length);
 
   if (!props.getProperty('SESSION_SECRET')) {
@@ -39,8 +40,8 @@ function setup() {
     log.push('נוצר טריגר: עריכה ידנית בגיליון הלידים → "עודכן לאחרונה"');
   }
 
-  const tg = props.getProperty('TELEGRAM_BOT_TOKEN') && props.getProperty('TELEGRAM_CHAT_ID');
-  log.push(tg ? 'טלגרם: מוגדר' : 'טלגרם: עדיין לא מוגדר (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)');
+  const tg = props.getProperty('TELEGRAM_BOT_TOKEN') && (props.getProperty('TELEGRAM_CHAT_ID') || cfg.telegramChatId);
+  log.push(tg ? 'טלגרם: מוגדר' : 'טלגרם: עדיין לא מוגדר (חסר TELEGRAM_BOT_TOKEN)');
 
   console.log('✅ setup הסתיים\n' + log.join('\n'));
 }

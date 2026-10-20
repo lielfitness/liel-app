@@ -219,7 +219,7 @@ function actionUpdateLead_(req, ctx) {
     const newStatus = fields.status != null ? String(fields.status).trim() : lead.status;
     if (newStatus === 'Ghosting' && lead.status !== 'Ghosting') {
       SpreadsheetApp.flush();
-      const merged = Object.assign({}, lead, { notes: fields.notes != null ? fields.notes : lead.notes });
+      const merged = Object.assign({}, lead, { summary: fields.summary != null ? fields.summary : lead.summary });
       ghost = copyToGhosting_(ctx.cfg, merged);
     }
     return lead.id;
@@ -227,24 +227,50 @@ function actionUpdateLead_(req, ctx) {
   return { lead: rereadLead_(ctx.cfg, id), ghost: ghost };
 }
 
-/** סימון ניסיון שיחה/WA: ממלא את העמודה הפנויה הבאה בתאריך היום. */
+/** "2026-10-21T14:30" → Date */
+function parseLocalDateTime_(s) {
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+  return d.getMonth() === Number(m[2]) - 1 ? d : null;
+}
+
+/**
+ * ניסיון שיחה: שי בוחרת מספר ניסיון (1/2/3) ותאריך+שעה.
+ *   ניסיון 1 → G = תאריך (dd/MM/yyyy), H = שעה (HH:mm), F = תוצאת השיחה (אם הוקלדה)
+ *   ניסיון 2/3 → I / K = "dd/MM HH:mm" (תא אחד)
+ * WA: העמודה הפנויה הבאה (J → L → M) בתאריך היום.
+ * לא משנה סטטוס. תא מלא נדרס רק עם overwrite.
+ */
 function actionMarkAttempt_(req, ctx) {
   const kind = req.kind === 'wa' ? 'wa' : 'call';
   const id = withLock_(function () {
     const loc = locateLead_(ctx.cfg, req.row, req.id);
     const sh = loc.sh, lead = loc.lead, row = lead.row;
-    const cols = kind === 'wa' ? WA_COLS_ : CALL_COLS_;
     const disp = sh.getRange(row, 1, 1, LAST_BASE_COL_).getDisplayValues()[0];
-    const free = cols.filter(function (c) { return !String(disp[c - 1]).trim(); })[0];
-    if (!free) throw apiError_('FULL', kind === 'wa' ? 'כבר נשלחו 3 הודעות WA' : 'כבר יש 3 ניסיונות שיחה');
+    const filled = function (c) { return !!String(disp[c - 1]).trim(); };
 
-    setDateCell_(sh, row, free, todayMidnight_());
-    if (free === COL_.call1Date && !String(disp[COL_.call1Time - 1]).trim()) {
-      sh.getRange(row, COL_.call1Time).setNumberFormat('@')
-        .setValue(Utilities.formatDate(new Date(), TZ_, 'HH:mm'));
-    }
-    if (!lead.status || lead.status === 'ליד חדש') {
-      sh.getRange(row, COL_.status).setValue('ניסיון שיחה');
+    if (kind === 'wa') {
+      const free = WA_COLS_.filter(function (c) { return !filled(c); })[0];
+      if (!free) throw apiError_('FULL', 'כבר נשלחו 3 הודעות WA');
+      setDateCell_(sh, row, free, todayMidnight_());
+    } else {
+      const n = Number(req.attempt);
+      if ([1, 2, 3].indexOf(n) < 0) throw apiError_('BAD_REQUEST', 'מספר ניסיון לא תקין');
+      const when = parseLocalDateTime_(req.when);
+      if (!when) throw apiError_('BAD_REQUEST', 'תאריך ושעה לא תקינים');
+      const col = CALL_COLS_[n - 1];
+      if (filled(col) && !req.overwrite) {
+        throw apiError_('FILLED', 'ניסיון ' + n + ' כבר מלא ("' + disp[col - 1] + '")');
+      }
+      if (n === 1) {
+        setDateCell_(sh, row, COL_.call1Date, new Date(when.getFullYear(), when.getMonth(), when.getDate()));
+        sh.getRange(row, COL_.call1Time).setNumberFormat('@').setValue(Utilities.formatDate(when, TZ_, 'HH:mm'));
+        const result = req.result == null ? '' : String(req.result).trim();
+        if (result) sh.getRange(row, COL_.callResult).setValue(result);
+      } else {
+        sh.getRange(row, col).setNumberFormat('@').setValue(Utilities.formatDate(when, TZ_, 'dd/MM HH:mm'));
+      }
     }
     touch_(sh, row, loc.upCol);
     return lead.id;
@@ -290,7 +316,7 @@ function copyToGhosting_(cfg, lead) {
     'מקור': lead.ad || lead.source,
     'ניסיונות שיחה': lead.calls + ' שיחות',
     'WA שנשלחו': lead.was + ' הודעות',
-    'הערות': lead.notes || '',
+    'הערות': lead.summary || '',
   };
   const out = headers.map(function (h) { return values[h] != null ? values[h] : ''; });
   const target = sh.getRange(last + 1, 1, 1, width);

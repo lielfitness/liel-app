@@ -6,8 +6,8 @@
 function sendTelegram_(html, buttons) {
   const p = PropertiesService.getScriptProperties();
   const token = p.getProperty('TELEGRAM_BOT_TOKEN');
-  const chatId = p.getProperty('TELEGRAM_CHAT_ID');
-  if (!token || !chatId) { console.warn('טלגרם לא מוגדר – ההודעה לא נשלחה'); return false; }
+  const chatId = p.getProperty('TELEGRAM_CHAT_ID') || getConfig_().telegramChatId;
+  if (!token || !chatId) { console.warn('טלגרם לא מוגדר (TELEGRAM_BOT_TOKEN) – ההודעה לא נשלחה'); return false; }
   const body = { chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true };
   if (buttons && buttons.length) body.reply_markup = { inline_keyboard: [buttons] };
   const res = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
