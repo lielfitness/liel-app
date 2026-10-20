@@ -1,0 +1,9 @@
+# לא עולה לריפו הציבורי
+SPEC.md
+CLAUDE.md
+backups/
+.env
+server/.clasp.json
+server/.clasprc.json
+server/node_modules/
+.DS_Store
