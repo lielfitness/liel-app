@@ -52,3 +52,26 @@ function testTelegram() {
     [{ text: 'פתח את האפליקציה', url: getConfig_().appUrl }]);
   console.log(ok ? 'נשלח' : 'לא נשלח – בדוק את TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID');
 }
+
+/** מדידת מהירות (קריאה בלבד – לא כותב לגיליון). להרצה ידנית מהעורך. */
+function benchmarkSpeed() {
+  const cfg = getConfig_();
+  const time = function (fn) { const t = Date.now(); fn(); return Date.now() - t; };
+  let r;
+  const fullRead1 = time(function () { r = readLeads_(cfg); });
+  const fullRead2 = time(function () { readLeads_(cfg); });
+  const last = r.leads[r.leads.length - 1];
+  invalidateLeads_();
+  const cacheMiss = time(function () { cachedLeads_(cfg); });
+  const cacheHit = time(function () { cachedLeads_(cfg); });
+  const sh = leadsSheet_(cfg), ex = extraCols_(sh);
+  const rowRead = time(function () { readLeadAt_(sh, ex, last.row); readLeadAt_(sh, ex, last.row); });
+  console.log([
+    '⏱ מדידת שרת (מילישניות), ' + r.leads.length + ' לידים',
+    'טעינת רשימה – לפני (קריאה מלאה מהגיליון): ' + fullRead1 + ' / ' + fullRead2,
+    'טעינת רשימה – אחרי, בפעם הראשונה (קריאה + שמירה במטמון): ' + cacheMiss,
+    'טעינת רשימה – אחרי, מהמטמון: ' + cacheHit,
+    'שמירה – לפני (2 קריאות מלאות סביב הכתיבה): ~' + (fullRead1 + fullRead2),
+    'שמירה – אחרי (2 קריאות של שורה בלבד): ' + rowRead,
+  ].join('\n'));
+}

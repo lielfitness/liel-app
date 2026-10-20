@@ -25,6 +25,30 @@
   };
 
   const $app = document.getElementById('app');
+
+  // ---------- זיכרון מקומי (לפי משתמש ותצוגה). נמחק ביציאה. ----------
+  const store = {
+    key(name) { return 'lf_c:' + (state.email || '') + ':' + (state.viewAs || '') + ':' + name; },
+    get(name) { try { const v = LS.get(this.key(name)); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
+    set(name, data) { try { LS.set(this.key(name), JSON.stringify(data)); } catch (e) { /* מקום */ } },
+    clearAll() {
+      try { Object.keys(localStorage).filter((k) => k.indexOf('lf_c:') === 0).forEach((k) => localStorage.removeItem(k)); } catch (e) { /* */ }
+    },
+  };
+
+  // ---------- מדידת זמנים (מוצג רק עם ?debug=1) ----------
+  if (/[?&]debug=1/.test(location.search)) LS.set('lf_debug', '1');
+  if (/[?&]debug=0/.test(location.search)) LS.del('lf_debug');
+  const timings = [];
+  function logTiming(action, total, server) {
+    timings.unshift(`${action}: ${(total / 1000).toFixed(2)} שנ׳` + (server != null ? ` (שרת ${(server / 1000).toFixed(2)})` : ''));
+    timings.length = Math.min(timings.length, 8);
+    if (LS.get('lf_debug') !== '1') return;
+    let el = document.getElementById('dbg');
+    if (!el) { el = document.createElement('div'); el.id = 'dbg'; document.body.appendChild(el); }
+    el.innerHTML = timings.map(esc).join('<br>');
+  }
+  let navSeq = 0;   // מתחלף בכל מעבר מסך – כדי שתשובה מאוחרת לא תצייר מסך ישן
   const FINAL = ['נסגר', 'לא מעוניין', 'לא רלוונטי', 'Ghosting'];
 
   // ---------- עזרים ----------
@@ -94,6 +118,7 @@
     const body = Object.assign({ action, session: state.session }, params || {});
     if (state.viewAs && action !== 'login') body.viewAs = state.viewAs;
     let res;
+    const t0 = performance.now();
     try {
       res = await fetch(CFG.apiUrl, {
         method: 'POST',
@@ -105,6 +130,7 @@
     }
     let out;
     try { out = await res.json(); } catch (e) { throw new Error('תשובה לא תקינה מהשרת'); }
+    logTiming(action, performance.now() - t0, out.ms);
     if (!out.ok) {
       if (out.code === 'AUTH') { logout(true); }
       const err = new Error(out.error || 'שגיאה');
@@ -117,6 +143,7 @@
   // ---------- כניסה ----------
   function logout(silent) {
     state.session = null; state.role = ''; state.email = ''; state.leads = null;
+    store.clearAll();
     state.viewAs = ''; state.realRole = '';
     ['lf_session', 'lf_role', 'lf_email', 'lf_viewas'].forEach(LS.del);
     try { window.google && google.accounts.id.disableAutoSelect(); } catch (e) { /* */ }
@@ -157,6 +184,8 @@
       const out = await api('login', { idToken: resp.credential });
       state.session = out.session; state.role = out.role; state.email = out.email;
       LS.set('lf_session', out.session); LS.set('lf_role', out.role); LS.set('lf_email', out.email);
+      // התשובה של הכניסה כבר אומרת מי המשתמש – אין צורך לחכות לקריאה נוספת
+      if (!store.get('me')) store.set('me', { email: out.email, role: out.role, realRole: out.role, bookingUrl: '' });
       await boot();
     } catch (e) {
       renderLogin(e.message);
@@ -196,7 +225,7 @@
       ${state.viewAs ? `<div class="viewas-bar"><span>👁 תצוגה כמו שי – כך היא רואה את האפליקציה. שמירות נכתבות באמת לגיליון.</span><button class="btn small secondary" data-act="viewas-off">חזרה לתצוגה שלי</button></div>` : ''}
       <main>${content}</main>
       <nav class="bottomnav">${nav.map(link).join('')}</nav>`;
-    $app.querySelector('[data-act="refresh"]').onclick = () => { state.leads = null; route(); refreshAlerts(); };
+    $app.querySelector('[data-act="refresh"]').onclick = () => { leadsFetchedAt = 0; route(); refreshAlerts(); };
     $app.querySelector('[data-act="logout"]').onclick = () => { if (confirm('לצאת מהאפליקציה?')) logout(); };
     const vOn = $app.querySelector('[data-act="viewas-on"]');
     if (vOn) vOn.onclick = () => setViewAs('leads');
@@ -209,7 +238,7 @@
   async function setViewAs(v) {
     state.viewAs = v;
     if (v) LS.set('lf_viewas', v); else LS.del('lf_viewas');
-    state.leads = null; state.month = null; state.alertsCount = 0;
+    state.leads = null; state.month = null; state.alertsCount = 0; leadsFetchedAt = 0;
     $app.innerHTML = '<div class="splash"><div class="spinner"></div></div>';
     location.hash = '';
     await boot();
@@ -220,19 +249,79 @@
     shell(title, `<div class="notice">${esc(e.message || e)}</div><button class="btn secondary" onclick="location.reload()">נסו שוב</button>`);
   }
 
-  async function ensureLeads(force) {
-    if (state.leads && !force) return state.leads;
-    const d = await api('listLeads');
+  function applyLeadsData(d) {
     state.leads = d.leads;
     state.meta = { statuses: d.statuses, zoomResults: d.zoomResults, hasUpdatedCol: d.hasUpdatedCol };
+  }
+  function persistLeads() {
+    if (!state.leads || !state.meta) return;
+    store.set('leads', Object.assign({ leads: state.leads }, state.meta));
+  }
+
+  let leadsFetch = null, leadsFetchedAt = 0;
+  /** מביא רשימה עדכנית מהשרת (לא יותר מפעם ב-10 שניות, אלא אם force). מחזיר true אם משהו השתנה. */
+  function refreshLeads(force) {
+    if (leadsFetch) return leadsFetch;
+    if (!force && state.leads && Date.now() - leadsFetchedAt < 10000) return Promise.resolve(false);
+    leadsFetch = api('listLeads').then((d) => {
+      leadsFetchedAt = Date.now();
+      // לידים עם שמירה שעוד בדרך – נשארים בגרסה המקומית
+      const local = {};
+      (state.leads || []).forEach((l) => { if (pendingByLead[l.id]) local[l.id] = l; });
+      d.leads = d.leads.map((l) => local[l.id] || l);
+      const before = JSON.stringify(state.leads);
+      applyLeadsData(d);
+      persistLeads();
+      return before !== JSON.stringify(state.leads);
+    }).finally(() => { leadsFetch = null; });
+    return leadsFetch;
+  }
+
+  /** מחזיר את הלידים מיד (מהזיכרון) אם יש; אחרת מחכה לשרת. */
+  async function ensureLeads(force) {
+    if (!state.leads) { const c = store.get('leads'); if (c) applyLeadsData(c); }
+    if (state.leads && !force) return state.leads;
+    await refreshLeads(true);
     return state.leads;
+  }
+
+  /** רענון ברקע: אם הגיעו נתונים חדשים ועדיין באותו מסך – onChange(). */
+  function revalidateLeads(onChange) {
+    const seq = navSeq;
+    refreshLeads(false).then((changed) => { if (changed && seq === navSeq) onChange(); })
+      .catch((e) => { if (seq === navSeq && e.code !== 'AUTH') toast('לא הצלחתי לרענן: ' + e.message, true); });
+  }
+
+  /** מסכים שלא מבוססים על רשימת הלידים: מציג מהזיכרון מיד ומרענן ברקע. */
+  async function swr(name, action, params, title, render) {
+    const seq = navSeq;
+    const cached = store.get(name);
+    if (cached) render(cached); else loading(title);
+    try {
+      const fresh = await api(action, params);
+      store.set(name, fresh);
+      if (seq !== navSeq) return;
+      if (!cached || JSON.stringify(cached) !== JSON.stringify(fresh)) {
+        if (cached && isEditing()) return;   // לא מציירים מחדש באמצע הקלדה
+        render(fresh);
+      }
+    } catch (e) {
+      if (seq !== navSeq || e.code === 'AUTH') return;
+      if (!cached) errorView(title, e); else toast('לא הצלחתי לרענן: ' + e.message, true);
+    }
+  }
+
+  function isEditing() {
+    const a = document.activeElement;
+    return !!document.querySelector('.sheet-backdrop') ||
+      !!(a && a !== document.body && $app.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
   }
 
   async function refreshAlerts() {
     try {
       const d = await api('zoomAlerts');
       const n = d.alerts.length;
-      if (n !== state.alertsCount) { state.alertsCount = n; route(); }
+      if (n !== state.alertsCount) { state.alertsCount = n; if (!isEditing() && !cardBusy()) route(); }
     } catch (e) { /* לא קריטי */ }
   }
 
@@ -299,8 +388,19 @@
   }
 
   async function viewLeads() {
-    loading('לידים');
+    if (!state.leads && !store.get('leads')) loading('לידים');
     try { await ensureLeads(); } catch (e) { return errorView('לידים', e); }
+    renderLeadsView();
+    revalidateLeads(() => {
+      if (isEditing()) {   // באמצע הקלדה: רק מעדכנים שורות קיימות
+        state.leads.forEach((l) => { if (rowEl(l.id)) patchRow(l.id, l); });
+      } else {
+        const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y);
+      }
+    });
+  }
+
+  function renderLeadsView() {
     const statuses = state.meta.statuses;
     const counts = {};
     state.leads.forEach((l) => { counts[l.status || ''] = (counts[l.status || ''] || 0) + 1; });
@@ -390,6 +490,84 @@
       </div>`;
   }
 
+  // ---------- עדכון מיידי (אופטימי): המסך משתנה מיד, השמירה לגיליון ברקע ----------
+  const pendingByLead = {};   // id → מספר שמירות שעוד בדרך
+  const queueByLead = {};     // id → שרשרת שמירות (לפי הסדר, אחת אחרי השנייה)
+  const seqByLead = {};
+
+  function p2(n) { return String(n).padStart(2, '0'); }
+  function todayText() { const d = new Date(); return `${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear()}`; }
+  function whenParts(when) {   // "2026-10-21T14:30"
+    const m = String(when).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    return m ? { date: `${m[3]}/${m[2]}/${m[1]}`, short: `${m[3]}/${m[2]} ${m[4]}:${m[5]}`, time: `${m[4]}:${m[5]}` } : null;
+  }
+  function recount(l) {
+    l.calls = [l.call1Date, l.call2, l.call3].filter((x) => String(x || '').trim()).length;
+    l.was = [l.wa1, l.wa2, l.wa3].filter((x) => String(x || '').trim()).length;
+    l.updatedAt = Date.now(); l.lastActivity = Date.now();
+    l.untreated = false;
+    return l;
+  }
+
+  /** מה משתנה בליד מיד על המסך, לפי הפעולה (כמו שהשרת יכתוב לגיליון). */
+  function applyLocal(lead, action, params) {
+    const l = Object.assign({}, lead);
+    if (action === 'updateLead') {
+      Object.keys(params.fields).forEach((k) => { l[k] = params.fields[k]; });
+    } else if (params.kind === 'wa') {
+      const n = params.attempt || ([1, 2, 3].find((i) => !String(l['wa' + i] || '').trim()));
+      if (n) l['wa' + n] = params.clear ? '' : todayText();
+    } else if (params.kind === 'call') {
+      const n = params.attempt, w = params.clear ? null : whenParts(params.when);
+      if (n === 1) {
+        l.call1Date = w ? w.date : ''; l.call1Time = w ? w.time : '';
+        if (w && String(params.result || '').trim()) l.callResult = String(params.result).trim();
+      } else {
+        l['call' + n] = w ? w.short : '';
+      }
+    }
+    return recount(l);
+  }
+
+  function setLead(lead) {
+    const i = state.leads ? state.leads.findIndex((x) => x.id === lead.id) : -1;
+    if (i >= 0) state.leads[i] = lead;
+    persistLeads();
+  }
+
+  /**
+   * שמירה אופטימית: מעדכן מיד, שולח ברקע (לפי הסדר לכל ליד), ובכישלון – מחזיר למצב הקודם ומודיע.
+   * hooks.onChange(lead) – לצייר מחדש; hooks.okMsg – הודעת הצלחה.
+   */
+  function optimistic(lead, action, params, hooks) {
+    hooks = hooks || {};
+    const before = lead;
+    const local = applyLocal(lead, action, params);
+    setLead(local);
+    hooks.onChange && hooks.onChange(local, 'local');
+    const id = lead.id;
+    const seq = (seqByLead[id] = (seqByLead[id] || 0) + 1);
+    pendingByLead[id] = (pendingByLead[id] || 0) + 1;
+    const run = () => api(action, Object.assign({ row: lead.row, id: id }, params));
+    const p = (queueByLead[id] || Promise.resolve()).catch(() => {}).then(run);
+    queueByLead[id] = p;
+    p.then((d) => {
+      if (seq === seqByLead[id] && d.lead) { setLead(d.lead); hooks.onChange && hooks.onChange(d.lead, 'server'); }
+      hooks.onOk && hooks.onOk(d);
+      if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
+      if (d.reward && d.reward.warning) toast('⚠️ ' + d.reward.warning, true);
+    }).catch((e) => {
+      if (e.code === 'AUTH') return;
+      if (seq === seqByLead[id]) { setLead(before); hooks.onChange && hooks.onChange(before, 'revert'); }
+      hooks.onFail && hooks.onFail(e);
+      toast('השינוי לא נשמר בגיליון והוחזר למצב הקודם: ' + e.message, true);
+    }).finally(() => {
+      pendingByLead[id]--;
+      if (!pendingByLead[id]) { delete pendingByLead[id]; }
+    });
+    return p;
+  }
+
   function rowEl(id) { return $app.querySelector(`.g-row[data-id="${CSS.escape(id)}"]`); }
 
   function markRow(id, kind, msg) {
@@ -404,7 +582,6 @@
 
   /** מעדכן שורה במקום, בלי לפגוע בשדה שהמשתמשת מקלידה בו כרגע. */
   function patchRow(oldId, lead) {
-    replaceLead(oldId, lead);
     const el = rowEl(oldId);
     if (!el || !lead) return;
     el.dataset.id = lead.id;
@@ -417,21 +594,12 @@
     });
   }
 
-  async function rowSave(lead, action, params, okMsg) {
-    markRow(lead.id, 'busy', 'שומר…');
-    try {
-      const d = await api(action, Object.assign({ row: lead.row, id: lead.id }, params));
-      const id = lead.id;
-      patchRow(id, d.lead);
-      markRow(d.lead ? d.lead.id : id, 'ok', okMsg || 'נשמר ✓');
-      if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
-      if (d.reward && d.reward.warning) toast('⚠️ ' + d.reward.warning, true);
-      return d;
-    } catch (e) {
-      markRow(lead.id, 'err', 'לא נשמר ✕');
-      toast('לא נשמר: ' + e.message, true);
-      throw e;
-    }
+  function rowSave(lead, action, params, okMsg) {
+    return optimistic(lead, action, params, {
+      onChange: (l, why) => { patchRow(l.id, l); if (why === 'local') markRow(l.id, 'busy', 'שומר…'); },
+      onOk: () => markRow(lead.id, 'ok', okMsg || 'נשמר ✓'),
+      onFail: () => markRow(lead.id, 'err', 'לא נשמר ✕'),
+    });
   }
 
   function bindGrid(root) {
@@ -529,8 +697,13 @@
 
   // ---------- מסך: לא טופלו ----------
   async function viewUntreated() {
-    loading('לא טופלו');
+    if (!state.leads && !store.get('leads')) loading('לא טופלו');
     try { await ensureLeads(); } catch (e) { return errorView('לא טופלו', e); }
+    renderUntreated();
+    revalidateLeads(renderUntreated);
+  }
+
+  function renderUntreated() {
     const list = state.leads.filter((l) => l.untreated)
       .sort((a, b) => (a.lastActivity || 0) - (b.lastActivity || 0));
     shell('לא טופלו', `
@@ -542,16 +715,28 @@
 
   // ---------- מסך: כרטיס ליד ----------
   async function viewLead(id) {
-    loading('כרטיס ליד');
+    if (!state.leads && !store.get('leads')) loading('כרטיס ליד');
     try { await ensureLeads(); } catch (e) { return errorView('כרטיס ליד', e); }
     let lead = state.leads.find((l) => l.id === id);
     if (!lead) {
+      loading('כרטיס ליד');
       try { await ensureLeads(true); } catch (e) { return errorView('כרטיס ליד', e); }
       lead = state.leads.find((l) => l.id === id);
     }
     if (!lead) return shell('כרטיס ליד', '<div class="empty">הליד לא נמצא. אולי הפרטים שלו שונו בגיליון.</div>', { back: true });
     renderLead(lead);
+    revalidateLeads(() => {
+      const fresh = state.leads.find((l) => l.id === id);
+      if (fresh && !cardBusy()) renderLead(fresh);
+    });
   }
+
+  let cardDirty = () => false;
+  function cardBusy() {
+    const panel = document.getElementById('callPanel');
+    return cardDirty() || (panel && !panel.hidden) || isEditing();
+  }
+  function onLeadCard(id) { return location.hash === '#/lead/' + id; }
 
   function infoRow(label, val, ltr) {
     if (!val) return '';
@@ -664,6 +849,9 @@
       return f;
     };
     const dirty = () => { saveBtn.disabled = !Object.keys(collect()).length; };
+    cardDirty = () => Object.keys(collect()).length > 0;
+    // אחרי שמירה ברקע: מציירים מחדש רק אם עדיין בכרטיס הזה ולא באמצע עריכה
+    const redraw = (l) => { if (onLeadCard(l.id) && !cardBusy()) renderLead(l); };
     ids.forEach((k) => { document.getElementById('f-' + k).addEventListener('input', dirty); });
     $app.querySelectorAll('[data-status]').forEach((b) => {
       b.onclick = () => {
@@ -677,19 +865,11 @@
       const fields = collect();
       if (!Object.keys(fields).length) return;
       if (fields.status === 'Ghosting' && !confirm('לסמן Ghosting? הליד יועתק גם ללשונית הגוסטינג.')) return;
-      saveBtn.disabled = true; saveBtn.textContent = 'שומר…';
-      try {
-        const d = await api('updateLead', { row: lead.row, id: lead.id, fields });
-        replaceLead(lead.id, d.lead);
-        let msg = 'נשמר ✓';
-        if (d.ghost) msg += d.ghost.copied ? ' · הועתק לגוסטינג' : ' · ' + d.ghost.reason;
-        if (d.reward && d.reward.warning) msg += ' · ⚠️ ' + d.reward.warning;
-        toast(msg, (d.ghost && !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason)) || !!(d.reward && d.reward.warning));
-        if (d.lead) renderLead(d.lead);
-      } catch (e) {
-        toast(e.message, true);
-        saveBtn.disabled = false; saveBtn.textContent = 'שמירה';
-      }
+      cardDirty = () => false;
+      optimistic(lead, 'updateLead', { fields }, {
+        onChange: (l, why) => { if (why === 'local') renderLead(l); else redraw(l); },
+        onOk: (d) => { if (!d.ghost && !(d.reward && d.reward.warning)) toast('נשמר ✓'); },
+      });
     };
 
     const guardDirty = () => !Object.keys(collect()).length || confirm('יש שינויים שלא נשמרו בטופס. להמשיך בלי לשמור אותם?');
@@ -722,36 +902,28 @@
       const when = document.getElementById('c-when').value;
       if (!when) return toast('צריך לבחור תאריך ושעה', true);
       if (!guardDirty()) return;
-      b.disabled = true; b.textContent = 'שומר…';
-      try {
-        const d = await api('markAttempt', {
-          row: lead.row, id: lead.id, kind: 'call', attempt, when,
-          result: attempt === 1 ? document.getElementById('c-result').value : undefined,
-          overwrite: !!slots[attempt],
-        });
-        replaceLead(lead.id, d.lead);
-        toast(`נשמר ניסיון ${attempt} ✓`);
-        if (d.lead) renderLead(d.lead);
-      } catch (e) {
-        toast(e.message, true);
-        b.disabled = false; b.textContent = 'שמירת ניסיון';
-      }
+      panel.hidden = true; cardDirty = () => false;
+      const n = attempt;
+      optimistic(lead, 'markAttempt', {
+        kind: 'call', attempt: n, when,
+        result: n === 1 ? document.getElementById('c-result').value : undefined,
+        overwrite: !!slots[n],
+      }, {
+        onChange: (l, why) => { if (why === 'local') renderLead(l); else redraw(l); },
+        onOk: () => toast(`נשמר ניסיון ${n} ✓`),
+      });
+      void b;
     };
 
     // --- WA: העמודה הפנויה הבאה בתאריך היום ---
     const waBtn = $app.querySelector('[data-act="wa"]');
     waBtn.onclick = async () => {
       if (!guardDirty()) return;
-      waBtn.disabled = true;
-      try {
-        const d = await api('markAttempt', { row: lead.row, id: lead.id, kind: 'wa' });
-        replaceLead(lead.id, d.lead);
-        toast('סומן WA ✓');
-        if (d.lead) renderLead(d.lead);
-      } catch (e) {
-        toast(e.message, true);
-        waBtn.disabled = false;
-      }
+      cardDirty = () => false;
+      optimistic(lead, 'markAttempt', { kind: 'wa' }, {
+        onChange: (l, why) => { if (why === 'local') renderLead(l); else redraw(l); },
+        onOk: () => toast('סומן WA ✓'),
+      });
     };
   }
 
@@ -764,10 +936,11 @@
   }
 
   // ---------- מסך: גוסטינג ----------
-  async function viewGhosting() {
-    loading('גוסטינג');
-    let d;
-    try { d = await api('listGhosting'); } catch (e) { return errorView('גוסטינג', e); }
+  function viewGhosting() {
+    return swr('ghosting', 'listGhosting', {}, 'גוסטינג', renderGhosting);
+  }
+
+  function renderGhosting(d) {
     const rows = d.rows.slice().reverse();
     shell('גוסטינג', `
       <div class="muted small">${rows.length} לידים · החדשים למעלה</div>
@@ -791,9 +964,10 @@
   async function viewMonth() {
     const title = isAdmin() ? 'שכר שי' : 'החודש שלי';
     if (!state.month) { const n = new Date(); state.month = n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); }
-    loading(title);
-    let d;
-    try { d = await api('month', { month: state.month }); } catch (e) { return errorView(title, e); }
+    return swr('month:' + state.month, 'month', { month: state.month }, title, (d) => renderMonth(title, d));
+  }
+
+  function renderMonth(title, d) {
     const n = d.meetings.length;
     const from = n < 6 ? 0 : 5, to = n < 6 ? 6 : 11;
     const pct = d.toNextTier ? Math.round(((n - from) / (to - from)) * 100) : 100;
@@ -871,7 +1045,7 @@
         if (!l || !confirm(`לשייך את הזום ל${l.name}?`)) return;
         try {
           const r = await api('assignZoom', { key, row: l.row, id: l.id });
-          state.leads = null; toast(r && r.warning ? 'שויך ✓ · ⚠️ ' + r.warning : 'שויך ✓', !!(r && r.warning)); viewZooms();
+          leadsFetchedAt = 0; toast(r && r.warning ? 'שויך ✓ · ⚠️ ' + r.warning : 'שויך ✓', !!(r && r.warning)); viewZooms();
         } catch (e) { toast(e.message, true); }
       };
       const inp = card.querySelector('[data-pick]');
@@ -892,10 +1066,11 @@
   }
 
   // ---------- מסך: בית (ליאל) ----------
-  async function viewHome() {
-    loading('תמונת מצב');
-    let d;
-    try { d = await api('home'); } catch (e) { return errorView('תמונת מצב', e); }
+  function viewHome() {
+    return swr('home', 'home', {}, 'תמונת מצב', renderHome);
+  }
+
+  function renderHome(d) {
     state.alertsCount = d.zoomAlerts;
     const L = d.leads, F = d.fin;
     shell('תמונת מצב', `
@@ -931,6 +1106,7 @@
 
   // ---------- נתב ----------
   function route() {
+    navSeq++;
     if (!state.session) return renderLogin();
     const parts = location.hash.replace(/^#\/?/, '').split('/');
     const page = parts[0];
@@ -944,17 +1120,31 @@
     location.replace(isAdmin() ? '#/home' : '#/leads');
   }
 
+  function applyMe(me) {
+    state.role = me.role; state.realRole = me.realRole || me.role;
+    state.email = me.email; state.bookingUrl = me.bookingUrl;
+    LS.set('lf_role', state.realRole);
+    if (state.viewAs && state.realRole !== 'admin') { state.viewAs = ''; LS.del('lf_viewas'); }
+  }
+
   async function boot() {
     if (!state.session) return renderLogin();
-    try {
-      const me = await api('me');
-      state.role = me.role; state.realRole = me.realRole || me.role;
-      state.email = me.email; state.bookingUrl = me.bookingUrl;
-      LS.set('lf_role', state.realRole);
-      if (state.viewAs && state.realRole !== 'admin') { state.viewAs = ''; LS.del('lf_viewas'); }
-    } catch (e) {
-      if (e.code === 'AUTH' || e.code === 'FORBIDDEN') return renderLogin(e.code === 'FORBIDDEN' ? e.message : '');
-      return errorView('Liel Fitness', e);
+    // אם כבר נכנסו בעבר – מציגים מיד, ובודקים את החיבור ברקע
+    const cachedMe = store.get('me');
+    const checkMe = api('me').then((me) => {
+      const changed = !cachedMe || cachedMe.role !== me.role || cachedMe.realRole !== me.realRole;
+      applyMe(me); store.set('me', me);
+      return changed;
+    });
+    if (cachedMe) {
+      applyMe(cachedMe);
+      checkMe.then((changed) => { if (changed) route(); })
+        .catch((e) => { if (e.code === 'FORBIDDEN') renderLogin(e.message); });
+    } else {
+      try { await checkMe; } catch (e) {
+        if (e.code === 'AUTH' || e.code === 'FORBIDDEN') return renderLogin(e.code === 'FORBIDDEN' ? e.message : '');
+        return errorView('Liel Fitness', e);
+      }
     }
     window.onhashchange = route;
     if (!location.hash || location.hash === '#/' ) location.replace(isAdmin() ? '#/home' : '#/leads');
@@ -962,7 +1152,10 @@
     refreshAlerts();
     // רענון ברקע כשחוזרים לאפליקציה
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && state.session) { state.leads = null; refreshAlerts(); }
+      if (document.visibilityState === 'visible' && state.session) {
+        leadsFetchedAt = 0; refreshAlerts();
+        if (!isEditing() && !cardBusy()) route();
+      }
     });
   }
 

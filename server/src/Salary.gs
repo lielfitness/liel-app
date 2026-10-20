@@ -67,7 +67,7 @@ function lockedMonthMeetings_(leads, month) {
 function actionMonth_(req, ctx) {
   const now = new Date();
   const month = /^\d{4}-\d{2}$/.test(req.month || '') ? req.month : monthKey_(now);
-  const leads = readLeads_(ctx.cfg).leads;
+  const leads = cachedLeads_(ctx.cfg).leads;
   const locked = isLockedMonth_(month);
 
   const entered = leads.filter(function (l) { return l.entry && l.entry.slice(0, 7) === month; });

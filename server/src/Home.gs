@@ -4,7 +4,7 @@
 
 function actionHome_(req, ctx) {
   const cfg = ctx.cfg;
-  const leads = readLeads_(cfg).leads;
+  const leads = cachedLeads_(cfg).leads;
   const today = todayMidnight_().getTime();
   const weekAgo = today - 6 * DAY_MS_;
   const inWeek = today + 7 * DAY_MS_;

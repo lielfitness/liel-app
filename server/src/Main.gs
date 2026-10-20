@@ -28,6 +28,7 @@ function doGet() {
 }
 
 function doPost(e) {
+  const t0 = Date.now();
   let out;
   try {
     const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
@@ -36,6 +37,7 @@ function doPost(e) {
     out = { ok: false, code: err.code || 'ERROR', error: String(err.message || err) };
     if (!err.code) console.error(err && err.stack || err);
   }
+  out.ms = Date.now() - t0;
   return ContentService.createTextOutput(JSON.stringify(out))
     .setMimeType(ContentService.MimeType.JSON);
 }

@@ -155,19 +155,39 @@ function publicLead_(l) {
 // ---------- פעולות ----------
 
 function actionListLeads_(req, ctx) {
-  const r = readLeads_(ctx.cfg);
+  const c = cachedLeads_(ctx.cfg);
   return {
-    leads: r.leads.map(publicLead_),
+    leads: c.leads,
     statuses: STATUSES_,
     zoomResults: ZOOM_RESULTS_,
-    hasUpdatedCol: !!r.upCol,
-    hasShaiNotesCol: !!r.ex.shaiNotes,
+    hasUpdatedCol: c.hasUpdatedCol,
+    hasShaiNotesCol: c.hasShaiNotesCol,
     now: Date.now(),
   };
 }
 
 /** מאתר את השורה של הליד: קודם לפי מספר השורה, ואם השורה זזה – לפי המזהה. */
+/** קורא רק את השורה (ועד 5 שורות לפניה, כדי לפענח תאריכים כמו בקריאה המלאה). */
+function readLeadAt_(sh, ex, row) {
+  row = Number(row);
+  if (!(row >= 2) || row > sh.getLastRow()) return null;
+  const from = Math.max(2, row - 5);
+  const width = Math.max(LAST_BASE_COL_, ex.updated, ex.shaiNotes);
+  const rng = sh.getRange(from, 1, row - from + 1, width);
+  const vals = rng.getValues(), disp = rng.getDisplayValues();
+  let prev = null, lead = null;
+  for (let i = 0; i < vals.length; i++) {
+    lead = buildLead_(from + i, vals[i], disp[i], prev, ex.updated, ex.shaiNotes);
+    if (lead && lead._entryDate) prev = lead._entryDate;
+  }
+  return lead && lead.row === row ? lead : null;
+}
+
 function locateLead_(cfg, row, id) {
+  const sh = leadsSheet_(cfg);
+  const ex = extraCols_(sh);
+  const quick = readLeadAt_(sh, ex, row);
+  if (quick && quick.id === id) return { sh: sh, upCol: ex.updated, ex: ex, lead: quick };
   const r = readLeads_(cfg);
   let lead = r.leads.filter(function (l) { return l.row === Number(row); })[0];
   if (!lead || lead.id !== id) {
@@ -180,7 +200,7 @@ function locateLead_(cfg, row, id) {
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) throw apiError_('BUSY', 'השרת עסוק, נסי שוב בעוד רגע');
-  try { return fn(); } finally { lock.releaseLock(); }
+  try { return fn(); } finally { invalidateLeads_(); lock.releaseLock(); }
 }
 
 // אזור הזמן של גיליון הלידים הוא America/Los_Angeles, לכן לא כותבים אובייקט Date
@@ -200,10 +220,39 @@ function touch_(sh, row, upCol) {
   sh.getRange(row, upCol).setNumberFormat('dd/MM/yyyy HH:mm').setValue(nowStamp_());
 }
 
-function rereadLead_(cfg, id) {
+function rereadLead_(cfg, id, row) {
+  const sh = leadsSheet_(cfg);
+  const quick = row ? readLeadAt_(sh, extraCols_(sh), row) : null;
+  if (quick && quick.id === id) return publicLead_(quick);
   const r = readLeads_(cfg);
   const l = r.leads.filter(function (x) { return x.id === id; })[0];
   return l ? publicLead_(l) : null;
+}
+
+// ---------- מטמון בשרת (CacheService) לרשימת הלידים ----------
+// נשמר ל-45 שניות, ומתרוקן בכל כתיבה מהאפליקציה ובכל עריכה ידנית בגיליון.
+const LEADS_CACHE_KEY_ = 'leads_v2';
+const LEADS_CACHE_SEC_ = 45;
+
+function cachedLeads_(cfg) {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get(LEADS_CACHE_KEY_);
+  if (hit) {
+    try {
+      return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(hit), 'application/x-gzip')).getDataAsString());
+    } catch (e) { /* נקרא מחדש */ }
+  }
+  const r = readLeads_(cfg);
+  const data = { leads: r.leads.map(publicLead_), hasUpdatedCol: !!r.upCol, hasShaiNotesCol: !!r.ex.shaiNotes };
+  try {
+    const z = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(data), 'application/json')).getBytes());
+    if (z.length < 95000) cache.put(LEADS_CACHE_KEY_, z, LEADS_CACHE_SEC_);
+  } catch (e) { /* בלי מטמון */ }
+  return data;
+}
+
+function invalidateLeads_() {
+  try { CacheService.getScriptCache().remove(LEADS_CACHE_KEY_); } catch (e) { /* */ }
 }
 
 function actionUpdateLead_(req, ctx) {
@@ -262,9 +311,9 @@ function actionUpdateLead_(req, ctx) {
       });
       ghost = copyToGhosting_(ctx.cfg, merged);
     }
-    return lead.id;
+    return { id: lead.id, row: row };
   });
-  return { lead: rereadLead_(ctx.cfg, id), ghost: ghost, reward: reward };
+  return { lead: rereadLead_(ctx.cfg, id.id, id.row), ghost: ghost, reward: reward };
 }
 
 /** "2026-10-21T14:30" → Date */
@@ -332,9 +381,9 @@ function actionMarkAttempt_(req, ctx) {
       }
     }
     touch_(sh, row, loc.upCol);
-    return lead.id;
+    return { id: lead.id, row: row };
   });
-  return { lead: rereadLead_(ctx.cfg, id) };
+  return { lead: rereadLead_(ctx.cfg, id.id, id.row) };
 }
 
 // ---------- גוסטינג ----------
@@ -437,6 +486,7 @@ function onLeadsEdit(e) {
     if (!e || !e.range) return;
     const sh = e.range.getSheet();
     if (sh.getName() !== LEADS_TAB_) return;
+    invalidateLeads_();
     const ex = extraCols_(sh);
     const upCol = ex.updated;
     if (!upCol) return;
