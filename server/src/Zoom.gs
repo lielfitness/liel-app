@@ -196,7 +196,21 @@ function scanZoomBookings(via) {
       });
       props.setProperty('ZOOM_LINKS_BACKFILL', String(Object.keys(links).length));
     }
-    const cancelled = Object.keys(links).filter(function (id) { return !present[id] && links[id].start > Date.now(); });
+    // מועמדים לביטול: פגישה עתידית שנעלמה מרשימת האירועים (מקושרת לליד, או שנראתה בסריקה קודמת).
+    // הערה: ביטול ביומן גוגל לא מוחק את האירוע לגמרי – getEventById עדיין מחזיר אותו, אבל getEvents כבר לא.
+    const done = readJsonProp_('ZOOM_CANCEL_DONE', {});
+    Object.keys(done).forEach(function (k) { if (done[k] < Date.now() - 30 * DAY_MS_) delete done[k]; });
+    const candidates = {};
+    Object.keys(links).forEach(function (id) {
+      if (!present[id] && links[id].start > Date.now()) candidates[id] = { link: links[id], start: links[id].start };
+    });
+    Object.keys(seen).forEach(function (k) {
+      const id = eventIdOfKey_(k);
+      if (!present[id] && seen[k] > Date.now() && !candidates[id] && !done[id]) candidates[id] = { link: null, start: seen[k] };
+    });
+    const cancelled = Object.keys(candidates);
+    scanLog_({ via: via === 'calendar' ? 'calendar' : (via === 'manual' ? 'manual' : 'timer'), events: all.length, newEvents: events.length,
+      links: Object.keys(links).length, candidates: cancelled.length });
     if (!events.length && !cancelled.length) { writeJsonProp_(ZOOM_SEEN_KEY_, seen); writeJsonProp_(ZOOM_LINKS_KEY_, links); return; }
 
     let r = readLeads_(cfg);
@@ -208,12 +222,24 @@ function scanZoomBookings(via) {
 
     // ---- ביטולים ----
     cancelled.forEach(function (id) {
-      const link = links[id];
+      const c = candidates[id];
+      let ev = null;
+      try { ev = zoomCalendar_(cfg).getEventById(id); } catch (e) { ev = null; }
+      // הכותרת כבר לא "פגישת אפיון" → לא ביטול, רק לא רלוונטי יותר
+      if (ev && String(ev.getTitle()).indexOf(ZOOM_TITLE_) < 0) { delete links[id]; done[id] = Date.now(); return; }
+      let link = c.link;
+      if (!link) {
+        // לא היה קישור (פגישה מלפני שהקישור נוסף): מתאימים לליד רק אם תאריך הזום שלו הוא בדיוק של הפגישה
+        if (!ev) { done[id] = Date.now(); return; }
+        const m = matchLead_(r.leads, bookerInfo_(ev, cfg));
+        const s0 = new Date(c.start);
+        const iso0 = isoDate_(new Date(s0.getFullYear(), s0.getMonth(), s0.getDate()));
+        if (!m.lead || m.lead.zoomDate !== iso0) { done[id] = Date.now(); return; }
+        link = { leadId: m.lead.id, row: m.lead.row, name: m.lead.name, start: c.start, iso: iso0 };
+      }
       delete links[id];
-      // ליתר ביטחון: האירוע באמת לא קיים (ולא רק שונתה הכותרת שלו)
-      let still = null;
-      try { still = zoomCalendar_(cfg).getEventById(id); } catch (e) { still = null; }
-      if (still) return;
+      done[id] = Date.now();
+      scanLog_({ cancel: link.name, iso: link.iso, eventFound: !!ev });
       const lead = findLead(link);
       const btn = lead ? [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }] : [];
       if (!lead) {
@@ -302,7 +328,42 @@ function scanZoomBookings(via) {
     writeJsonProp_(ZOOM_ALERTS_KEY_, alerts.filter(function (a) { return a.start > Date.now() - 30 * DAY_MS_; }));
     writeJsonProp_(ZOOM_SEEN_KEY_, seen);
     writeJsonProp_(ZOOM_LINKS_KEY_, links);
+    writeJsonProp_('ZOOM_CANCEL_DONE', done);
   });
+}
+
+/** יומן קצר של הסריקות האחרונות (לאבחון). */
+function scanLog_(entry) {
+  const log = readJsonProp_('ZOOM_SCAN_LOG', []);
+  entry.t = Utilities.formatDate(new Date(), TZ_, 'dd/MM HH:mm:ss');
+  log.push(entry);
+  writeJsonProp_('ZOOM_SCAN_LOG', log.slice(-20));
+}
+
+/** להרצה ידנית מהעורך: מה הסריקה רואה – קישורים, אירועים, ואיך אירוע שבוטל נראה. לא משנה כלום. */
+function zoomDiagnostics() {
+  const cfg = getConfig_();
+  const props = PropertiesService.getScriptProperties();
+  const out = [];
+  out.push('טריגרים: ' + ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction() + '/' + t.getEventType(); }).join(', '));
+  out.push('CAL_TRIGGER=' + props.getProperty('CAL_TRIGGER') + ' | BACKFILL=' + props.getProperty('ZOOM_LINKS_BACKFILL'));
+  const links = readJsonProp_(ZOOM_LINKS_KEY_, {});
+  out.push('קישורים (' + Object.keys(links).length + '): ' + Object.keys(links).map(function (k) { return links[k].name + ' ' + links[k].iso; }).join(' | '));
+  const all = zoomEvents_(cfg);
+  const present = {};
+  all.forEach(function (ev) { present[ev.getId()] = 1; });
+  out.push('אירועי "' + ZOOM_TITLE_ + '" ביומן עכשיו: ' + all.map(function (ev) { return fmtWhen_(ev.getStartTime()) + ' ' + ev.getTitle(); }).join(' | '));
+  const seen = readJsonProp_(ZOOM_SEEN_KEY_, {});
+  Object.keys(seen).forEach(function (k) {
+    const id = eventIdOfKey_(k);
+    if (present[id]) return;
+    let ev = null, err = '';
+    try { ev = zoomCalendar_(cfg).getEventById(id); } catch (e) { err = e.message; }
+    out.push('נעלם מהרשימה: ' + fmtWhen_(new Date(seen[k])) + ' → getEventById: ' +
+      (ev ? 'עדיין מחזיר אירוע ("' + ev.getTitle() + '", ' + fmtWhen_(ev.getStartTime()) + ')' : (err ? 'שגיאה: ' + err : 'null (נמחק לגמרי)')));
+  });
+  out.push('סריקות אחרונות: ' + JSON.stringify(readJsonProp_('ZOOM_SCAN_LOG', []).slice(-8)));
+  console.log(out.join('\n'));
 }
 
 function actionZoomAlerts_() {
