@@ -207,12 +207,18 @@ function actionListLeads_(req, ctx) {
   const c = cachedLeads_(ctx.cfg);
   return {
     leads: c.leads,
-    statuses: STATUSES_,
-    zoomResults: ZOOM_RESULTS_,
+    statuses: allowedValues_(STATUSES_, ctx.role),
+    zoomResults: allowedValues_(ZOOM_RESULTS_, ctx.role),
+    sources: leadSources_(c.leads),
     hasUpdatedCol: c.hasUpdatedCol,
     hasShaiNotesCol: c.hasShaiNotesCol,
-    now: Date.now(),
   };
+}
+
+// שי (leads) לא יכולה לסמן "נסגר" – לא בסטטוס (N) ולא בתוצאת זום (P). נאכף כאן בשרת.
+const ADMIN_ONLY_VALUES_ = ['נסגר'];
+function allowedValues_(list, role) {
+  return role === 'admin' ? list : list.filter(function (v) { return ADMIN_ONLY_VALUES_.indexOf(v) < 0; });
 }
 
 /** מאתר את השורה של הליד: קודם לפי מספר השורה, ואם השורה זזה – לפי המזהה. */
@@ -397,6 +403,10 @@ function actionUpdateLead_(req, ctx) {
       if (!col) return;
       let v = fields[k] == null ? '' : String(fields[k]).trim();
       if (k === 'status' && v && STATUSES_.indexOf(v) < 0) throw apiError_('BAD_REQUEST', 'סטטוס לא מוכר');
+      if ((k === 'status' || k === 'zoomResult') && v && v !== String(lead[k] || '').trim() &&
+          allowedValues_([v], ctx.role).length === 0) {
+        throw apiError_('FORBIDDEN', 'אין הרשאה לסמן "' + v + '" – רק ליאל יכול');
+      }
       if (k === 'zoomResult' && v && ZOOM_RESULTS_.indexOf(v) < 0) throw apiError_('BAD_REQUEST', 'תוצאת זום לא מוכרת');
       if (k === 'zoomDate') {
         const d = v ? parseIso_(v) : null;

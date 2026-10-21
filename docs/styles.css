@@ -368,3 +368,11 @@ dl.info dd { margin: 0; word-break: break-word; }
 
 .undo-btn { font-size: 22px; font-weight: 700; }
 .undo-btn[disabled] { opacity: .35; cursor: default; }
+
+.search-row { gap: 8px; flex-wrap: nowrap; }
+.add-lead { flex: 0 0 auto; min-height: 46px; padding: 0 14px; }
+.g-row.pending { opacity: .6; pointer-events: none; }
+.ltr-input { direction: ltr; text-align: right; }
+.copy-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.copy-row .muted { width: 44px; flex: 0 0 auto; }
+.ltr-text { direction: ltr; unicode-bidi: plaintext; text-align: right; word-break: break-all; }

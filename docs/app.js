@@ -338,9 +338,16 @@
 
   // ---------- מסך: לידים ----------
   const FILTERS = [
-    { k: 'active', t: 'פעילים', f: (l) => !FINAL.includes(sk(l)) },
-    { k: 'all', t: 'הכל', f: () => true },
+    { k: 'active', t: 'פעילים', f: () => true },   // כל הלידים, בכל סטטוס
   ];
+  // כפתור הסינון "נסגר" נספר לפי תוצאת הזום (P), לא לפי הסטטוס (N)
+  function matchesFilter(l, f) {
+    if (!f || f === 'active' || f === 'all') return true;
+    if (!f.startsWith('s:')) return true;
+    const st = f.slice(2);
+    if (st === 'נסגר') return String(l.zoomResult || '').trim() === 'נסגר';
+    return sk(l) === st;
+  }
 
   function sortNewest(a, b) {
     if (a.entry !== b.entry) return (b.entry || '') < (a.entry || '') ? -1 : 1;
@@ -413,28 +420,29 @@
 
   function renderLeadsView() {
     const statuses = state.meta.statuses;
+    if (state.filter === 'all') state.filter = 'active';
     const counts = {};
-    state.leads.forEach((l) => { counts[sk(l)] = (counts[sk(l)] || 0) + 1; });
+    statuses.forEach((st) => { counts[st] = state.leads.filter((l) => matchesFilter(l, 's:' + st)).length; });
     const chips = FILTERS.map((f) => ({ k: f.k, t: f.t, n: state.leads.filter(f.f).length }))
-      .concat(statuses.filter((s) => counts[s]).map((s) => ({ k: 's:' + s, t: s, n: counts[s] })));
+      .concat(statuses.filter((st) => counts[st]).map((st) => ({ k: 's:' + st, t: st, n: counts[st] })));
 
     shell('לידים', `
-      <input class="search" type="search" placeholder="חיפוש לפי שם, טלפון או מייל" value="${esc(state.search)}" id="q" autocomplete="off">
+      <div class="row search-row">
+        <input class="search grow" type="search" placeholder="חיפוש לפי שם, טלפון או מייל" value="${esc(state.search)}" id="q" autocomplete="off">
+        <button class="btn add-lead" data-act="add-lead">＋ ליד</button>
+      </div>
       <div class="chips">${chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span></button>`).join('')}</div>
       <div id="results"></div>`);
 
     const draw = () => {
       const f = state.filter;
-      let list = state.leads.filter((l) => {
-        if (f === 'all') return true;
-        if (f === 'active') return !FINAL.includes(sk(l));
-        return f.startsWith('s:') && sk(l) === f.slice(2);
-      });
+      let list = state.leads.filter((l) => matchesFilter(l, f));
       list = list.filter((l) => matchSearch(l, state.search)).sort(sortNewest);
       document.getElementById('results').innerHTML = gridHtml(list);
     };
     bindGrid(document.getElementById('results'));
     draw();
+    $app.querySelector('[data-act="add-lead"]').onclick = openAddLead;
     const q = document.getElementById('q');
     q.oninput = () => { state.search = q.value.trim(); draw(); };
     $app.querySelectorAll('.chip[data-f]').forEach((b) => {
@@ -477,7 +485,7 @@
 
   function gridRowHtml(l) {
     return `
-      <div class="g-row ${l.untreated ? 'untreated' : ''}" data-id="${esc(l.id)}">
+      <div class="g-row ${l.untreated ? 'untreated' : ''} ${l._pending ? 'pending' : ''}" data-id="${esc(l.id)}">
         <div class="g-entry">${esc(fmtIso(l.entry) || l.entryRaw)}</div>
         <div class="g-name"><a href="#/lead/${esc(l.id)}">${esc(l.name || '(ללא שם)')}</a></div>
         <div class="g-phone"><a class="ltr" href="${esc(telHref(l.phone))}">${esc(l.phone)}</a></div>
@@ -569,6 +577,7 @@
     const p = (queueByLead[id] || Promise.resolve()).catch(() => {}).then(run);
     queueByLead[id] = p;
     p.then((d) => {
+      markDerivedStale();
       if (d.undoCount != null) { state.undoCount = d.undoCount; updateUndoBtn(); }
       if (seq === seqByLead[id] && d.lead) { setLead(d.lead); hooks.onChange && hooks.onChange(d.lead, 'server'); }
       hooks.onOk && hooks.onOk(d);
@@ -733,6 +742,140 @@
     });
   }
 
+  // ---------- חלון כללי מלמטה ----------
+  function openSheet(html) {
+    const wrap = document.createElement('div');
+    wrap.className = 'sheet-backdrop';
+    wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">${html}</div>`;
+    document.body.appendChild(wrap);
+    const close = () => wrap.remove();
+    wrap.addEventListener('click', (e) => { if (e.target === wrap || e.target.closest('[data-x]')) close(); });
+    return { el: wrap, close };
+  }
+
+  // ---------- הוספת ליד ידני ----------
+  function isoToday() { const d = new Date(); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; }
+
+  function openAddLead() {
+    const sources = (state.meta && state.meta.sources) || [];
+    const sh = openSheet(`
+      <div class="row"><b class="grow">הוספת ליד</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="field"><label for="al-name">שם *</label><input id="al-name" autocomplete="off"></div>
+      <div class="field"><label for="al-phone">טלפון *</label><input id="al-phone" type="tel" inputmode="tel" class="ltr-input" autocomplete="off"></div>
+      <div class="field"><label for="al-email">מייל</label><input id="al-email" type="email" inputmode="email" class="ltr-input" autocomplete="off"></div>
+      <div class="field"><label for="al-source">מקור</label><input id="al-source" list="al-sources" placeholder="בחרו מהרשימה או כתבו" autocomplete="off">
+        <datalist id="al-sources">${sources.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>
+      <div class="notice small" id="al-warn" hidden></div>
+      <button class="btn" data-save>הוספה</button>`);
+    const $ = (id) => sh.el.querySelector(id);
+    setTimeout(() => $('#al-name').focus(), 50);
+    let confirmedDup = false;
+    $('[data-save]').onclick = () => {
+      const name = $('#al-name').value.trim(), phone = $('#al-phone').value.trim();
+      const email = $('#al-email').value.trim(), source = $('#al-source').value.trim();
+      const warn = $('#al-warn');
+      if (!name) { warn.hidden = false; warn.textContent = 'חסר שם'; return; }
+      if (phone.replace(/\D/g, '').length < 9) { warn.hidden = false; warn.textContent = 'מספר טלפון לא תקין'; return; }
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { warn.hidden = false; warn.textContent = 'כתובת מייל לא תקינה'; return; }
+      // בדיקת כפילות מיידית מול הרשימה שבזיכרון
+      const pk = (x) => String(x || '').replace(/\D/g, '').slice(-9);
+      const dups = (state.leads || []).filter((l) => pk(l.phone) && pk(l.phone) === pk(phone));
+      if (dups.length && !confirmedDup) {
+        warn.hidden = false;
+        warn.innerHTML = `⚠️ הטלפון כבר קיים אצל: ${dups.map((d) => `<b>${esc(d.name)}</b> (${esc(fmtIso(d.entry) || d.entryRaw)}, ${esc(d.status || 'ללא סטטוס')})`).join(', ')}.<br>ללחוץ שוב על "הוספה" כדי להוסיף בכל זאת.`;
+        confirmedDup = true;
+        return;
+      }
+      sh.close();
+      addLeadOptimistic({ name, phone, email, source }, confirmedDup);
+    };
+  }
+
+  function addLeadOptimistic(f, force) {
+    const tmpId = 'tmp-' + Date.now();
+    const who = (CFG.senderNames || {})[state.realRole] || '';
+    const temp = {
+      id: tmpId, row: 0, _pending: true, entry: isoToday(), entryRaw: todayText(), name: f.name, phone: f.phone, email: f.email,
+      ad: 'ידני – ' + who, source: f.source, status: 'ליד חדש', statusKey: 'ליד חדש', calls: 0, was: 0,
+      updatedAt: Date.now(), lastActivity: Date.now(), untreated: false,
+    };
+    state.leads = [temp].concat(state.leads || []);
+    persistLeads();
+    if (location.hash === '#/leads') { const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y); }
+    toast('נוסף ✓ (נשמר לגיליון ברקע)');
+    api('addLead', Object.assign({}, f, { force: !!force })).then((d) => {
+      if (d.duplicate) {
+        // השרת מצא כפילות שלא הייתה ברשימה שבזיכרון
+        state.leads = state.leads.filter((l) => l.id !== tmpId); persistLeads();
+        if (location.hash === '#/leads') renderLeadsView();
+        if (confirm(`הטלפון כבר קיים אצל: ${d.duplicate.map((x) => x.name).join(', ')}. להוסיף בכל זאת?`)) addLeadOptimistic(f, true);
+        return;
+      }
+      const i = state.leads.findIndex((l) => l.id === tmpId);
+      if (i >= 0 && d.lead) state.leads[i] = d.lead; else if (d.lead) state.leads.unshift(d.lead);
+      persistLeads();
+      if (location.hash === '#/leads' && !isEditing()) { const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y); }
+      markDerivedStale();
+    }).catch((e) => {
+      state.leads = state.leads.filter((l) => l.id !== tmpId); persistLeads();
+      if (location.hash === '#/leads') renderLeadsView();
+      if (e.code !== 'AUTH') toast('הליד לא נוסף לגיליון: ' + e.message, true);
+    });
+  }
+
+  // ---------- קביעת זום: פרטי הליד להעתקה, ואז היומן ----------
+  function copyText(t, btn) {
+    const done = () => { if (btn) { const o = btn.textContent; btn.textContent = 'הועתק ✓'; setTimeout(() => { btn.textContent = o; }, 1500); } };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(done, () => fallback());
+    else fallback();
+    function fallback() {
+      const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); done(); } catch (e) { /* */ } ta.remove();
+    }
+  }
+
+  function openBookingHelper(lead) {
+    const items = [['שם', lead.name], ['מייל', lead.email], ['טלפון', lead.phone]].filter((x) => String(x[1] || '').trim());
+    const sh = openSheet(`
+      <div class="row"><b class="grow">קביעת זום – ${esc(lead.name)}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="notice info small">דף ההזמנה של גוגל ממלא אוטומטית את הפרטים שלך. <b>החליפי את הפרטים בדף לפרטי הליד</b> – כך הליד יתעדכן אוטומטית באפליקציה.</div>
+      ${items.map(([k, v], i) => `<div class="copy-row"><span class="muted small">${k}</span><span class="grow ltr-text">${esc(v)}</span><button class="btn small secondary" data-copy="${i}">העתק</button></div>`).join('')}
+      <button class="btn" data-open>📅 פתח את היומן</button>`);
+    sh.el.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = () => copyText(String(items[Number(b.dataset.copy)][1]), b); });
+    sh.el.querySelector('[data-open]').onclick = () => { window.open(state.bookingUrl, '_blank', 'noopener'); sh.close(); };
+  }
+
+  // ---------- טעינה ברקע של כל המסכים ----------
+  let derivedTimer = null;
+  /** אחרי שינוי: הנתונים של "בית"/"החודש שלי" מתרעננים ברקע (לא מיד, כדי לא להעמיס) */
+  function markDerivedStale() {
+    clearTimeout(derivedTimer);
+    derivedTimer = setTimeout(() => prefetchAll(true), 4000);
+  }
+
+  function monthKeyNow(delta) {
+    const n = new Date(); const d = new Date(n.getFullYear(), n.getMonth() + (delta || 0), 1);
+    return d.getFullYear() + '-' + p2(d.getMonth() + 1);
+  }
+
+  function prefetchOne(name, action, params) {
+    return api(action, params || {}).then((d) => { store.set(name, d); }).catch(() => {});
+  }
+
+  /** טוען ברקע את הנתונים של כל המסכים, כדי שכל מעבר בין לשוניות יוצג מיד מהזיכרון. */
+  function prefetchAll(onlyDerived) {
+    const jobs = [];
+    if (!onlyDerived) {
+      jobs.push(refreshLeads(false).catch(() => {}));
+      jobs.push(prefetchOne('ghosting', 'listGhosting'));
+      jobs.push(prefetchOne('zooms', 'zoomAlerts'));
+    }
+    if (isAdmin()) jobs.push(prefetchOne('home', 'home'));
+    jobs.push(prefetchOne('month:' + monthKeyNow(0), 'month', { month: monthKeyNow(0) }));
+    if (!onlyDerived) jobs.push(prefetchOne('month:' + monthKeyNow(-1), 'month', { month: monthKeyNow(-1) }));
+    return Promise.all(jobs);
+  }
+
   // חלון קטן לניסיון שיחה (משמש גם ברשימה)
   function openCallDialog(lead, n) {
     const d = new Date(), p = (x) => String(x).padStart(2, '0');
@@ -821,7 +964,8 @@
   function renderLead(lead) {
     const m = state.meta;
     const tel = telHref(lead.phone), wa = waHref(lead);
-    const opt = (list, cur) => ['<option value=""></option>'].concat(list.map((s) => `<option ${s === cur ? 'selected' : ''}>${esc(s)}</option>`)).join('');
+    const opt = (list, cur) => ['<option value=""></option>'].concat((cur && !list.includes(cur) ? [cur] : []).concat(list)
+      .map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`)).join('');
     const statusList = m.statuses.includes(sk(lead)) || !sk(lead) ? m.statuses : [lead.status].concat(m.statuses);
 
     shell(lead.name || 'כרטיס ליד', `
@@ -854,7 +998,7 @@
                 <button class="btn ghost" data-act="call-cancel">ביטול</button>
               </div>
             </div>
-            ${state.bookingUrl ? `<a class="btn secondary" style="width:100%;margin-top:10px" href="${esc(state.bookingUrl)}" target="_blank" rel="noopener">🎥 קביעת זום (פגישת אפיון)</a>` : ''}
+            ${state.bookingUrl ? `<button class="btn secondary" style="width:100%;margin-top:10px" data-act="book">🎥 קביעת זום (פגישת אפיון)</button>` : ''}
           </div>
 
           <div class="section-title">עדכון</div>
@@ -909,6 +1053,9 @@
           </div>
         </div>
       </div>`, { back: true });
+
+    const bookBtn = $app.querySelector('[data-act="book"]');
+    if (bookBtn) bookBtn.onclick = () => openBookingHelper(lead);
 
     // --- טופס ---
     let status = lead.status;
@@ -1092,11 +1239,14 @@
   }
 
   // ---------- מסך: זומים לשיוך ----------
-  async function viewZooms() {
-    loading('זומים לשיוך');
-    let d;
-    try { d = await api('zoomAlerts'); await ensureLeads(); } catch (e) { return errorView('זומים לשיוך', e); }
+  function viewZooms() {
+    ensureLeads().catch(() => {});
+    return swr('zooms', 'zoomAlerts', {}, 'זומים לשיוך', renderZooms);
+  }
+
+  function renderZooms(d) {
     state.alertsCount = d.alerts.length;
+    const leadsNow = state.leads || [];
     const alerts = d.alerts.slice().sort((a, b) => a.start - b.start);
     shell('זומים לשיוך', alerts.length ? `
       <div class="notice info">אירועי "פגישת אפיון" שלא שויכו אוטומטית לליד. בחרו ליד כדי למלא את תאריך הזום.</div>
@@ -1108,20 +1258,30 @@
           <input class="search" style="margin-top:10px" placeholder="חפשו ליד לשיוך…" data-pick>
           <div class="picker"></div>
           <div class="row" style="margin-top:8px">
-            ${a.leadId ? `<button class="btn small" data-assign="${esc(a.leadId)}">שייך ל${esc((state.leads.find((l) => l.id === a.leadId) || {}).name || 'ליד שנמצא')} (עדכון תאריך)</button>` : ''}
+            ${a.leadId ? `<button class="btn small" data-assign="${esc(a.leadId)}">שייך ל${esc((leadsNow.find((l) => l.id === a.leadId) || {}).name || 'ליד שנמצא')} (עדכון תאריך)</button>` : ''}
             <button class="btn ghost small" data-dismiss>התעלם</button>
           </div>
         </div>`).join('')}</div>` : '<div class="empty">אין זומים שמחכים לשיוך ✓</div>');
 
     $app.querySelectorAll('[data-key]').forEach((card) => {
       const key = card.dataset.key;
-      const assign = async (leadId) => {
-        const l = state.leads.find((x) => x.id === leadId);
+      // הסרה מיידית מהמסך; אם השרת נכשל – חוזר עם הודעה
+      const removeLocal = () => {
+        const before = store.get('zooms') || d;
+        const after = { alerts: before.alerts.filter((x) => x.key !== key) };
+        store.set('zooms', after); state.alertsCount = after.alerts.length;
+        renderZooms(after);
+        return before;
+      };
+      const assign = (leadId) => {
+        const l = (state.leads || []).find((x) => x.id === leadId);
         if (!l || !confirm(`לשייך את הזום ל${l.name}?`)) return;
-        try {
-          const r = await api('assignZoom', { key, row: l.row, id: l.id });
-          leadsFetchedAt = 0; toast(r && r.warning ? 'שויך ✓ · ⚠️ ' + r.warning : 'שויך ✓', !!(r && r.warning)); viewZooms();
-        } catch (e) { toast(e.message, true); }
+        const before = removeLocal();
+        toast('שויך ✓');
+        api('assignZoom', { key, row: l.row, id: l.id }).then((r) => {
+          leadsFetchedAt = 0; refreshLeads(true).catch(() => {}); markDerivedStale();
+          if (r && r.warning) toast('⚠️ ' + r.warning, true);
+        }).catch((e) => { store.set('zooms', before); if (location.hash === '#/zooms') renderZooms(before); toast('השיוך לא נשמר: ' + e.message, true); });
       };
       const inp = card.querySelector('[data-pick]');
       const picker = card.querySelector('.picker');
@@ -1133,9 +1293,11 @@
       };
       const ab = card.querySelector('[data-assign]');
       if (ab) ab.onclick = () => assign(ab.dataset.assign);
-      card.querySelector('[data-dismiss]').onclick = async () => {
+      card.querySelector('[data-dismiss]').onclick = () => {
         if (!confirm('להתעלם מהזום הזה? הוא לא ישויך לאף ליד.')) return;
-        try { await api('dismissZoom', { key }); toast('הוסר'); viewZooms(); } catch (e) { toast(e.message, true); }
+        const before = removeLocal();
+        toast('הוסר');
+        api('dismissZoom', { key }).catch((e) => { store.set('zooms', before); if (location.hash === '#/zooms') renderZooms(before); toast('לא הוסר: ' + e.message, true); });
       };
     });
   }
@@ -1153,7 +1315,7 @@
       <div class="tiles">
         <a class="card tile" href="#/leads" data-filter="s:ליד חדש"><div class="num">${L.newStatus}</div><div class="lbl">בסטטוס "ליד חדש"</div></a>
         <a class="card tile ${L.untreated ? 'alert' : ''}" href="#/untreated"><div class="num">${L.untreated}</div><div class="lbl">לא טופלו יומיים+</div></a>
-        <a class="card tile" href="#/leads" data-filter="all"><div class="num">${L.enteredToday}</div><div class="lbl">נכנסו היום · ${L.enteredWeek} השבוע</div></a>
+        <a class="card tile" href="#/leads" data-filter="active"><div class="num">${L.enteredToday}</div><div class="lbl">נכנסו היום · ${L.enteredWeek} השבוע</div></a>
         <a class="card tile ${d.zoomAlerts ? 'alert' : ''}" href="#/zooms"><div class="num">${d.zoomAlerts}</div><div class="lbl">זומים לשיוך ידני</div></a>
       </div>
 
@@ -1162,6 +1324,11 @@
         <a class="card mrow" href="#/lead/${esc(z.id)}" style="text-decoration:none;color:inherit">
           <div class="grow"><b>${esc(z.name)}</b></div><span class="pill">${esc(fmtIso(z.date))}</span>
         </a>`).join('')}</div>` : '<div class="card muted">אין זומים השבוע</div>'}
+
+      ${d.zoomAuto ? `<div class="card small" style="margin-top:10px">
+        <b>עדכון אוטומטי של זומים:</b> ${d.zoomAuto.trigger === 'ok' ? '⚡ מיידי (טריגר שינוי ביומן) + גיבוי כל 10 דק׳' : esc(d.zoomAuto.trigger)}
+        ${d.zoomAuto.last ? `<br>אחרון: ${esc(d.zoomAuto.last.name)} – עודכן ${d.zoomAuto.last.seconds != null ? `תוך ${d.zoomAuto.last.seconds < 120 ? d.zoomAuto.last.seconds + ' שניות' : Math.round(d.zoomAuto.last.seconds / 60) + ' דקות'}` : ''} מהקביעה (${esc(d.zoomAuto.last.via)}, התאמה לפי ${esc(d.zoomAuto.last.how || '')})` : ''}
+      </div>` : ''}
 
       <div class="section-title">עסק</div>
       ${d.finError ? `<div class="notice">${esc(d.finError)}</div>` : `
@@ -1227,10 +1394,11 @@
     if (!location.hash || location.hash === '#/' ) location.replace(isAdmin() ? '#/home' : '#/leads');
     route();
     refreshAlerts();
+    setTimeout(() => prefetchAll(false), 400);
     // רענון ברקע כשחוזרים לאפליקציה
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && state.session) {
-        leadsFetchedAt = 0; refreshAlerts();
+        leadsFetchedAt = 0; refreshAlerts(); prefetchAll(false);
         if (!isEditing() && !cardBusy()) route();
       }
     });

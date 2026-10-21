@@ -22,6 +22,7 @@ const ACTIONS = {
   dismissZoom:  { roles: ['admin', 'leads'], fn: actionDismissZoom_ },
   home:         { roles: ['admin'],          fn: actionHome_ },
   undo:         { roles: ['admin', 'leads'], fn: actionUndo_ },
+  addLead:      { roles: ['admin', 'leads'], fn: actionAddLead_ },
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
 };
 
