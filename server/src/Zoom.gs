@@ -56,7 +56,7 @@ function normName_(s) {
 
 function bookerInfo_(ev, cfg) {
   const skip = Object.keys(cfg.users);
-  const me = String(Session.getEffectiveUser().getEmail() || '').toLowerCase();
+  const me = ownerEmail_(cfg);
   const emails = {};
   const staffNames = {};   // שמות של ליאל/שי – כשהן מזמינות בשם עצמן, זה לא השם של הליד
   ev.getGuestList().forEach(function (g) {
@@ -128,16 +128,33 @@ function onCalendarChange() {
   try { scanZoomBookings('calendar'); } catch (e) { console.warn('onCalendarChange: ' + (e.message || e)); }
 }
 
-function ensureCalendarTrigger_() {
+/** המייל של בעל היומן – לפי מזהה היומן (ביומן הראשי זה המייל), בלי Session (שדורש הרשאה נוספת). */
+let OWNER_EMAIL_ = null;
+function ownerEmail_(cfg) {
+  if (OWNER_EMAIL_ == null) OWNER_EMAIL_ = String(zoomCalendar_(cfg || getConfig_()).getId() || '').toLowerCase();
+  return OWNER_EMAIL_;
+}
+
+function ensureCalendarTrigger_(force) {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('CAL_TRIGGER') === 'ok') return;
+  if (!force && props.getProperty('CAL_TRIGGER') === 'ok') return props.getProperty('CAL_TRIGGER');
   try {
     const has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'onCalendarChange'; });
-    if (!has) ScriptApp.newTrigger('onCalendarChange').forUserCalendar(Session.getEffectiveUser().getEmail()).onEventUpdated().create();
+    if (!has) ScriptApp.newTrigger('onCalendarChange').forUserCalendar(zoomCalendar_(getConfig_()).getId()).onEventUpdated().create();
     props.setProperty('CAL_TRIGGER', 'ok');
   } catch (e) {
     props.setProperty('CAL_TRIGGER', 'error: ' + (e.message || e));
   }
+  return props.getProperty('CAL_TRIGGER');
+}
+
+/** להרצה ידנית מהעורך: מתקין את הטריגר המיידי ובודק שסריקת הזומים עובדת. */
+function installZoomTrigger() {
+  const status = ensureCalendarTrigger_(true);
+  console.log(status === 'ok' ? '✅ הטריגר המיידי מותקן ("שינוי ביומן")' : '❌ ' + status);
+  console.log('יומן: ' + ownerEmail_() + ' | אירועי "' + ZOOM_TITLE_ + '" ב-120 הימים הקרובים: ' + zoomEvents_(getConfig_()).length);
+  scanZoomBookings('manual');
+  console.log('✅ סריקת זומים רצה בלי שגיאות');
 }
 
 /** הטריגר (כל 10 דקות, וגם מטריגר היומן). */
