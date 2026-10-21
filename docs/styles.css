@@ -376,3 +376,5 @@ dl.info dd { margin: 0; word-break: break-word; }
 .copy-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .copy-row .muted { width: 44px; flex: 0 0 auto; }
 .ltr-text { direction: ltr; unicode-bidi: plaintext; text-align: right; word-break: break-all; }
+
+.pill.cancel, .st-sel.cancel { background: #ffe0c2; color: #9a4000; }

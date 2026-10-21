@@ -111,6 +111,7 @@
     else if (FINAL.includes(s)) cls = 'final';
     else if (s === 'זום נקבע') cls = 'hot';
     else if (s === 'ליד חדש') cls = 'warn';
+    else if (s === 'פגישה בוטלה') cls = 'cancel';
     return `<span class="pill ${cls}">${esc(raw)}</span>`;
   }
   function isAdmin() { return state.role === 'admin'; }
@@ -477,7 +478,7 @@
     const key = sk(l);
     const list = state.meta.statuses.includes(key) || !key ? state.meta.statuses : [l.status].concat(state.meta.statuses);
     const cur = state.meta.statuses.includes(key) ? key : l.status;
-    return `<select class="st-sel ${key === 'Ghosting' ? 'ghost' : ''}" data-status aria-label="סטטוס">
+    return `<select class="st-sel ${key === 'Ghosting' ? 'ghost' : key === 'פגישה בוטלה' ? 'cancel' : ''}" data-status aria-label="סטטוס">
       ${key ? '' : '<option value="" selected>— בחרי —</option>'}
       ${list.map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('')}
     </select>`;

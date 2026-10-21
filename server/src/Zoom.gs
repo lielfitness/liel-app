@@ -257,7 +257,8 @@ function scanZoomBookings(via) {
         return;
       }
       setDateCell_(r.sh, lead.row, COL_.zoomDate, null);
-      if (canonicalStatus_(lead.status) === 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('ניסיון שיחה');
+      const newStatus = !isFinal_(lead.status) ? 'פגישה בוטלה' : '';   // סטטוס סופי (לא מעוניין וכו') לא נדרס
+      if (newStatus) r.sh.getRange(lead.row, COL_.status).setValue(newStatus);
       if (String(lead.reward || '').trim() && !isLockedMonth_(link.iso.slice(0, 7))) r.sh.getRange(lead.row, COL_.reward).setValue('');
       touch_(r.sh, lead.row, r.upCol);
       SpreadsheetApp.flush();
@@ -265,7 +266,7 @@ function scanZoomBookings(via) {
       syncRewards_(r2.sh, r2.leads, [link.iso.slice(0, 7)], false);
       r = readLeads_(cfg);
       sendTelegram_('❌ <b>זום בוטל – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(link.start)) +
-        '\nתאריך הזום נמחק' + (canonicalStatus_(lead.status) === 'זום נקבע' ? ' והסטטוס חזר ל"ניסיון שיחה"' : ''), btn);
+        '\nתאריך הזום נמחק' + (newStatus ? ' והסטטוס עבר ל"פגישה בוטלה"' : ' (הסטטוס "' + esc_(lead.status) + '" לא שונה)'), btn);
     });
 
     events.forEach(function (ev) {
