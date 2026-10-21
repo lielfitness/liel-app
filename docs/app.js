@@ -149,7 +149,7 @@
   // ---------- כניסה ----------
   function logout(silent) {
     state.session = null; state.role = ''; state.email = ''; state.leads = null;
-    store.clearAll();
+    store.clearAll(); undoStack = null;
     state.viewAs = ''; state.realRole = '';
     ['lf_session', 'lf_role', 'lf_email', 'lf_viewas'].forEach(LS.del);
     try { window.google && google.accounts.id.disableAutoSelect(); } catch (e) { /* */ }
@@ -232,7 +232,7 @@
       ${state.viewAs ? `<div class="viewas-bar"><span>👁 תצוגה כמו שי – כך היא רואה את האפליקציה. שמירות נכתבות באמת לגיליון.</span><button class="btn small secondary" data-act="viewas-off">חזרה לתצוגה שלי</button></div>` : ''}
       <main>${content}</main>
       <nav class="bottomnav">${nav.map(link).join('')}</nav>`;
-    $app.querySelector('[data-act="refresh"]').onclick = () => { leadsFetchedAt = 0; route(); refreshAlerts(); };
+    $app.querySelector('[data-act="refresh"]').onclick = () => { leadsFetchedAt = 0; state.forceFresh = true; route(); refreshAlerts(); };
     $app.querySelector('[data-act="logout"]').onclick = () => { if (confirm('לצאת מהאפליקציה?')) logout(); };
     $app.querySelector('[data-act="undo"]').onclick = undoLast;
     const vOn = $app.querySelector('[data-act="viewas-on"]');
@@ -246,7 +246,7 @@
   async function setViewAs(v) {
     state.viewAs = v;
     if (v) LS.set('lf_viewas', v); else LS.del('lf_viewas');
-    state.leads = null; state.month = null; state.alertsCount = 0; leadsFetchedAt = 0;
+    state.leads = null; state.month = null; state.alertsCount = 0; leadsFetchedAt = 0; undoStack = null;
     $app.innerHTML = '<div class="splash"><div class="spinner"></div></div>';
     location.hash = '';
     await boot();
@@ -271,7 +271,8 @@
   function refreshLeads(force) {
     if (leadsFetch) return leadsFetch;
     if (!force && state.leads && Date.now() - leadsFetchedAt < 10000) return Promise.resolve(false);
-    leadsFetch = api('listLeads').then((d) => {
+    const fresh = !!state.forceFresh; state.forceFresh = false;
+    leadsFetch = api('listLeads', fresh ? { fresh: true } : {}).then((d) => {
       leadsFetchedAt = Date.now();
       // לידים עם שמירה שעוד בדרך – נשארים בגרסה המקומית
       const local = {};
@@ -306,7 +307,9 @@
     const cached = store.get(name);
     if (cached) render(cached); else loading(title);
     try {
-      const fresh = await api(action, params);
+      const p = Object.assign({}, params || {});
+      if (state.forceFresh) { p.fresh = true; state.forceFresh = false; }
+      const fresh = await api(action, p);
       store.set(name, fresh);
       if (seq !== navSeq) return;
       if (!cached || JSON.stringify(cached) !== JSON.stringify(fresh)) {
@@ -559,6 +562,8 @@
     const id = lead.id;
     const seq = (seqByLead[id] = (seqByLead[id] || 0) + 1);
     pendingByLead[id] = (pendingByLead[id] || 0) + 1;
+    const undoEntry = { leadId: id, before: before };
+    pushUndoLocal(undoEntry);
     state.undoCount++; updateUndoBtn();
     const run = () => api(action, Object.assign({ row: lead.row, id: id }, params));
     const p = (queueByLead[id] || Promise.resolve()).catch(() => {}).then(run);
@@ -572,6 +577,7 @@
     }).catch((e) => {
       if (e.code === 'AUTH') return;
       state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
+      dropUndoLocal(undoEntry);
       if (seq === seqByLead[id]) { setLead(before); hooks.onChange && hooks.onChange(before, 'revert'); }
       hooks.onFail && hooks.onFail(e);
       toast('השינוי לא נשמר בגיליון והוחזר למצב הקודם: ' + e.message, true);
@@ -583,33 +589,58 @@
   }
 
   // ---------- בטל (↶) ----------
+  // מחסנית מקומית: מצב הליד לפני כל פעולה – כדי שהביטול יופיע במסך מיד
+  let undoStack = null;
+  function getUndoStack() { if (!undoStack) undoStack = store.get('undo') || []; return undoStack; }
+  function saveUndoStack() { store.set('undo', getUndoStack().slice(-15)); }
+  function pushUndoLocal(entry) { const st = getUndoStack(); st.push(entry); while (st.length > 15) st.shift(); saveUndoStack(); }
+  function dropUndoLocal(entry) { const st = getUndoStack(); const i = st.indexOf(entry); if (i >= 0) { st.splice(i, 1); saveUndoStack(); } }
+
+  function showLead(lead) {
+    if (rowEl(lead.id)) patchRow(lead.id, lead);
+    else if (onLeadCard(lead.id)) { if (!cardBusy()) renderLead(lead); }
+    else if (!isEditing()) route();
+  }
+
   function updateUndoBtn() {
     const b = $app.querySelector('[data-act="undo"]');
-    if (b) b.disabled = !state.undoCount || undoBusy;
+    if (b) b.disabled = !state.undoCount;
   }
-  let undoBusy = false;
-  async function undoLast() {
-    if (undoBusy || !state.undoCount) return;
-    undoBusy = true; updateUndoBtn();
-    toast('מבטל…');
-    try {
-      // קודם מחכים שכל השמירות שבדרך יסתיימו – כדי לבטל לפי הסדר הנכון
-      await Promise.allSettled(Object.values(queueByLead));
-      const d = await api('undo');
-      if (d.undoCount != null) state.undoCount = d.undoCount;
-      if (d.lead) {
-        setLead(d.lead);
-        if (rowEl(d.lead.id)) patchRow(d.lead.id, d.lead);
-        else if (onLeadCard(d.lead.id) && !cardBusy()) renderLead(d.lead);
-        else if (!isEditing()) route();
-      }
-      leadsFetchedAt = 0;
-      toast(d.message + (d.warning ? ' · ⚠️ ' + d.warning : ''), !d.done || !!d.warning);
-    } catch (e) {
-      if (e.code !== 'AUTH') toast('הביטול נכשל: ' + e.message, true);
-    } finally {
-      undoBusy = false; updateUndoBtn();
+  let undoChain = Promise.resolve();
+  function undoLast() {
+    if (!state.undoCount) return;
+    // מיידי: מחזירים את הליד במסך למצב שלפני הפעולה
+    const entry = getUndoStack().pop() || null;
+    saveUndoStack();
+    let current = null;
+    if (entry && state.leads) {
+      current = state.leads.find((l) => l.id === entry.leadId) || null;
+      if (current) { setLead(entry.before); showLead(entry.before); }
     }
+    state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
+    toast(entry ? '↶ בוטל' : 'מבטל…');
+    // ברקע: הביטול בגיליון (לפי הסדר, אחרי שכל השמירות שבדרך הסתיימו)
+    undoChain = undoChain.then(async () => {
+      await Promise.allSettled(Object.values(queueByLead));
+      try {
+        const d = await api('undo');
+        if (d.undoCount != null) state.undoCount = d.undoCount;
+        if (d.done) {
+          if (d.lead) { setLead(d.lead); showLead(d.lead); }
+          toast(d.message + (d.warning ? ' · ⚠️ ' + d.warning : ''), !!d.warning);
+        } else {
+          // הגיליון לא אישר (למשל מישהו שינה מאז) → המסך חוזר למה שהיה
+          if (current) { setLead(current); showLead(current); }
+          toast(d.message, true);
+          leadsFetchedAt = 0; refreshLeads(true).then((ch) => { if (ch && !isEditing() && !cardBusy()) route(); }).catch(() => {});
+        }
+      } catch (e) {
+        if (current) { setLead(current); showLead(current); }
+        if (e.code !== 'AUTH') toast('הביטול נכשל, המסך הוחזר: ' + e.message, true);
+        api('undoCount').then((c) => { state.undoCount = c.undoCount; updateUndoBtn(); }).catch(() => {});
+      }
+      updateUndoBtn();
+    });
   }
 
   function rowEl(id) { return $app.querySelector(`.g-row[data-id="${CSS.escape(id)}"]`); }

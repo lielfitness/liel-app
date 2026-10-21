@@ -30,6 +30,7 @@ function describeFields_(fields) {
 /** שומר פעולה לביטול (בלי "עודכן לאחרונה"). */
 function recordUndo_(email, loc, desc, extra) {
   if (!email || !loc.undo) return;
+  loc.undoCount = null;
   const changes = Object.keys(loc.undo).map(function (c) { return loc.undo[c]; })
     .filter(function (c) { return c.ad != null && c.bd !== c.ad; });
   if (!changes.length && !(extra && extra.ghost)) return;
@@ -41,16 +42,21 @@ function recordUndo_(email, loc, desc, extra) {
   const json = JSON.stringify(entry);
   if (json.length > 8500) return;   // שינוי ארוך במיוחד – לא נשמר לביטול
   const props = PropertiesService.getScriptProperties();
-  props.setProperty(undoEntryKey_(email, entry.id), json);
   const idx = undoIndex_(email);
   idx.push(entry.id);
   while (idx.length > UNDO_MAX_) props.deleteProperty(undoEntryKey_(email, idx.shift()));
-  writeJsonProp_(undoIndexKey_(email), idx);
+  const upd = {};
+  upd[undoEntryKey_(email, entry.id)] = json;
+  upd[undoIndexKey_(email)] = JSON.stringify(idx);
+  props.setProperties(upd);   // כתיבה אחת
+  loc.undoCount = idx.length;
 }
 
+let UNDO_LEFT_ = null;
 function popUndo_(email) {
   const idx = undoIndex_(email);
   const id = idx.pop();
+  UNDO_LEFT_ = idx.length;
   if (!id) return null;
   const props = PropertiesService.getScriptProperties();
   const raw = props.getProperty(undoEntryKey_(email, id));
@@ -69,17 +75,20 @@ function actionUndoCount_(req, ctx) {
 
 function actionUndo_(req, ctx) {
   let out = null, loc = null;
+  phase_('start');
   withLock_(function () {
     const e = popUndo_(ctx.email);
     if (!e) { out = { done: false, message: 'אין מה לבטל' }; return; }
 
-    try { loc = locateLead_(ctx.cfg, e.row, e.leadId); } catch (err) {
+    phase_('pop');
+    try { loc = locateForWrite_(ctx.cfg, e.row, e.leadId); } catch (err) {
       out = { done: false, message: 'אי אפשר לבטל: הליד ' + e.name + ' לא נמצא בגיליון (אולי נמחק).' };
       return;
     }
-    const sh = loc.sh, row = loc.lead.row;
+    phase_(loc.fast ? 'read row (api)' : 'read row');
+    const row = loc.lead.row;
     const width = Math.max(LAST_BASE_COL_, loc.ex.updated, loc.ex.shaiNotes);
-    const cur = loc.lead._raw ? loc.lead._raw.d : sh.getRange(row, 1, 1, width).getDisplayValues()[0];
+    const cur = loc.lead._raw ? loc.lead._raw.d : loc.sh.getRange(row, 1, 1, width).getDisplayValues()[0];
 
     // מישהו שינה את אותו שדה אחרי הפעולה? לא דורסים.
     const conflict = e.changes.filter(function (c) { return String(cur[c.col - 1] || '').trim() !== String(c.ad || '').trim(); });
@@ -89,19 +98,36 @@ function actionUndo_(req, ctx) {
       return;
     }
 
+    let ssh = null;   // לפעולות ישנות שנשמרו בפורמט הקודם
     e.changes.forEach(function (c) {
-      const r = sh.getRange(row, c.col);
-      r.setNumberFormat(c.bf || 'General');
-      const v = deserializeCell_(c.bv);
-      if (v === '' || v == null) r.clearContent(); else r.setValue(v);
-      if (loc.lead._raw) { loc.lead._raw.v[c.col - 1] = v; loc.lead._raw.d[c.col - 1] = c.bd; }
+      const isNew = ('uv' in c) || ('nf' in c);
+      if (loc.fast && isNew) {
+        loc.pending[c.col] = fastRestoreCell_(c.uv, c.nf);
+      } else if (isNew) {
+        // מסלול רגיל עם רשומה חדשה: משחזרים לפי התצוגה הקודמת
+        const r = loc.sh.getRange(row, c.col);
+        if (!c.bd) r.clearContent(); else r.setValue(c.bd);
+      } else {
+        ssh = ssh || loc.sh || leadsSheet_(ctx.cfg);
+        const r = ssh.getRange(row, c.col);
+        r.setNumberFormat(c.bf || 'General');
+        const v = deserializeCell_(c.bv);
+        if (v === '' || v == null) r.clearContent(); else r.setValue(v);
+      }
+      if (loc.lead._raw) { loc.lead._raw.v[c.col - 1] = c.bd; loc.lead._raw.d[c.col - 1] = c.bd; }
     });
-    if (e.changes.length) touch_(sh, row, loc.upCol, loc);
+    if (e.changes.length) touch_(null, row, loc.upCol, loc);
+    commitFast_(loc);
+    phase_('write');
 
     let extra = '';
     if (e.ghost) extra = removeGhostRow_(ctx.cfg, e.ghost);
 
     let warning = '';
+    if (!e.zoomMonths && !e.ghost) {
+      loc.out = leadAfterWrite_(ctx.cfg, loc);
+      if (loc.out) CACHE_PATCH_ = loc.out;
+    }
     if (e.zoomMonths) {
       SpreadsheetApp.flush();
       const r2 = readLeads_(ctx.cfg);
@@ -117,8 +143,10 @@ function actionUndo_(req, ctx) {
     if (extra) message += ' · ' + extra;
     out = { done: true, message: message, warning: warning };
   });
-  if (out.done && loc) out.lead = leadAfterWrite_(ctx.cfg, loc);
-  out.undoCount = undoCount_(ctx.email);
+  if (out.done && loc) out.lead = loc.out || leadAfterWrite_(ctx.cfg, loc);
+  out.undoCount = UNDO_LEFT_ != null ? UNDO_LEFT_ : undoCount_(ctx.email);
+  phase_('build');
+  if (req.debug) out.phases = PHASES_;
   return out;
 }
 
@@ -149,5 +177,6 @@ function removeGhostRow_(cfg, g) {
   }
   if (!target) return 'לא מצאתי את השורה בגוסטינג – כדאי לבדוק ידנית';
   sh.deleteRow(target);
+  invalidateGhost_();
   return 'הוסר מהגוסטינג';
 }

@@ -203,6 +203,7 @@ function phase_(name) {
 // ---------- פעולות ----------
 
 function actionListLeads_(req, ctx) {
+  if (req.fresh) invalidateLeads_();
   const c = cachedLeads_(ctx.cfg);
   return {
     leads: c.leads,
@@ -241,14 +242,24 @@ function readLeadAt_(sh, ex, row) {
 /** כותב תא, וזוכר מה נכתב כדי לבנות את הליד מחדש בזיכרון. display = הטקסט שיוצג בגיליון. */
 function put_(loc, col, value, format) {
   if (loc.undo && col !== loc.upCol && !loc.undo[col]) {
-    const snap = rowSnapshot_(loc);
-    loc.undo[col] = { col: col, bv: serializeCell_(snap.v[col - 1]), bf: snap.f[col - 1] || '', bd: String(snap.d[col - 1] == null ? '' : snap.d[col - 1]) };
+    if (loc.fast) {
+      const fc = loc.cells[col - 1] || {};
+      loc.undo[col] = { col: col, uv: fc.userEnteredValue || null, nf: (fc.userEnteredFormat && fc.userEnteredFormat.numberFormat) || null,
+        bd: fc.formattedValue != null ? String(fc.formattedValue) : '' };
+    } else {
+      const snap = rowSnapshot_(loc);
+      loc.undo[col] = { col: col, bv: serializeCell_(snap.v[col - 1]), bf: snap.f[col - 1] || '', bd: String(snap.d[col - 1] == null ? '' : snap.d[col - 1]) };
+    }
   }
   // טקסט חופשי שנראה כמו מספר/תאריך – נשמר כטקסט (שהגיליון לא יהפוך אותו לתאריך)
   if (!format && typeof value === 'string' && /^[\d\s.\/:\-]+$/.test(value) && /\d/.test(value)) format = '@';
-  const c = loc.sh.getRange(loc.lead.row, col);
-  if (format) c.setNumberFormat(format);
-  if (value === '' || value == null) c.clearContent(); else c.setValue(value);
+  if (loc.fast) {
+    loc.pending[col] = fastCell_(value, format);
+  } else {
+    const c = loc.sh.getRange(loc.lead.row, col);
+    if (format) c.setNumberFormat(format);
+    if (value === '' || value == null) c.clearContent(); else c.setValue(value);
+  }
   if (loc.lead._raw) { loc.lead._raw.v[col - 1] = value == null ? '' : value; loc.lead._raw.d[col - 1] = value == null ? '' : String(value); }
   if (loc.undo && loc.undo[col]) loc.undo[col].ad = value == null ? '' : String(value);
 }
@@ -298,12 +309,20 @@ function locateLead_(cfg, row, id) {
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) throw apiError_('BUSY', 'השרת עסוק, נסי שוב בעוד רגע');
+  CACHE_PATCH_ = null;
+  let ok = false;
   try {
     const out = fn();
     SpreadsheetApp.flush();
     if (PHASES_) phase_('flush');
+    ok = true;
     return out;
-  } finally { invalidateLeads_(); lock.releaseLock(); }
+  } finally {
+    if (ok && CACHE_PATCH_) patchLeadsCache_(CACHE_PATCH_); else invalidateLeads_();
+    CACHE_PATCH_ = null;
+    if (PHASES_) phase_('cache');
+    lock.releaseLock();
+  }
 }
 
 // אזור הזמן של גיליון הלידים הוא America/Los_Angeles, לכן לא כותבים אובייקט Date
@@ -336,7 +355,7 @@ function rereadLead_(cfg, id, row) {
 // ---------- מטמון בשרת (CacheService) לרשימת הלידים ----------
 // נשמר ל-45 שניות, ומתרוקן בכל כתיבה מהאפליקציה ובכל עריכה ידנית בגיליון.
 const LEADS_CACHE_KEY_ = 'leads_v3';
-const LEADS_CACHE_SEC_ = 45;
+const LEADS_CACHE_SEC_ = 120;
 
 function cachedLeads_(cfg) {
   const cache = CacheService.getScriptCache();
@@ -366,10 +385,10 @@ function actionUpdateLead_(req, ctx) {
   phase_('start');
   withLock_(function () {
     phase_('lock');
-    const loc = locateLead_(ctx.cfg, req.row, req.id);
+    const loc = locateForWrite_(ctx.cfg, req.row, req.id);
     loc.undo = {};
-    phase_('read row');
-    const sh = loc.sh, lead = loc.lead, row = lead.row;
+    phase_(loc.fast ? 'read row (api)' : 'read row');
+    const lead = loc.lead, row = lead.row;
     let changed = false, zoomMonths = null;
 
     Object.keys(fields).forEach(function (k) {
@@ -391,7 +410,8 @@ function actionUpdateLead_(req, ctx) {
       changed = true;
     });
 
-    if (changed) touch_(sh, row, loc.upCol, loc);
+    if (changed) touch_(null, row, loc.upCol, loc);
+    commitFast_(loc);
     phase_('write');
 
     // R או P השתנו → חישוב מחדש של S (רק בחודשים פתוחים)
@@ -405,7 +425,7 @@ function actionUpdateLead_(req, ctx) {
       const res = syncRewards_(r2.sh, r2.leads, [oldMonth, newMonth], false);
       // הזום נמחק: הליד כבר לא בשום חודש – מרוקנים את S אם החודש הישן פתוח
       if (!newZoom && oldMonth && !isLockedMonth_(oldMonth) && String(lead.reward || '').trim()) {
-        sh.getRange(row, COL_.reward).setValue('');
+        r2.sh.getRange(row, COL_.reward).setValue('');
       }
       reward = { changes: res.changes.length, warning: lockedWarning_(res.locked) };
       zoomMonths = [oldMonth, newMonth];
@@ -425,8 +445,10 @@ function actionUpdateLead_(req, ctx) {
     }
     recordUndo_(ctx.email, loc, describeFields_(fields), { zoomMonths: zoomMonths, ghost: ghost && ghost.copied ? ghost : null });
     result = loc;
+    result.out = leadAfterWrite_(ctx.cfg, loc);
+    if (!zoomMonths && result.out) CACHE_PATCH_ = result.out;   // רק הליד הזה השתנה
   });
-  const out = { lead: leadAfterWrite_(ctx.cfg, result), ghost: ghost, reward: reward, undoCount: undoCount_(ctx.email) };
+  const out = { lead: result.out, ghost: ghost, reward: reward, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email) };
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;
@@ -453,10 +475,10 @@ function actionMarkAttempt_(req, ctx) {
   phase_('start');
   withLock_(function () {
     phase_('lock');
-    const loc = locateLead_(ctx.cfg, req.row, req.id);
+    const loc = locateForWrite_(ctx.cfg, req.row, req.id);
     loc.undo = {};
-    phase_('read row');
-    const sh = loc.sh, lead = loc.lead, row = lead.row;
+    phase_(loc.fast ? 'read row (api)' : 'read row');
+    const lead = loc.lead, row = lead.row;
     // מה שכבר כתוב בשורה – מהקריאה שכבר נעשתה (בלי קריאה נוספת)
     const byCol = {};
     byCol[COL_.call1Date] = lead.call1Date; byCol[COL_.call2] = lead.call2; byCol[COL_.call3] = lead.call3;
@@ -506,13 +528,16 @@ function actionMarkAttempt_(req, ctx) {
         put_(loc, col, Utilities.formatDate(when, TZ_, 'dd/MM HH:mm'), '@');
       }
     }
-    touch_(sh, row, loc.upCol, loc);
+    touch_(null, row, loc.upCol, loc);
+    commitFast_(loc);
     phase_('write');
     const n = Number(req.attempt) || (WA_COLS_.indexOf(Object.keys(loc.undo).map(Number)[0]) + 1);
     recordUndo_(ctx.email, loc, (kind === 'wa' ? 'WA ' : 'ניסיון שיחה ') + n, {});
     result = loc;
+    result.out = leadAfterWrite_(ctx.cfg, loc);
+    if (result.out) CACHE_PATCH_ = result.out;
   });
-  const out = { lead: leadAfterWrite_(ctx.cfg, result), undoCount: undoCount_(ctx.email) };
+  const out = { lead: result.out, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email) };
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;
@@ -561,6 +586,7 @@ function copyToGhosting_(cfg, lead) {
   const out = headers.map(function (h) { return values[h] != null ? values[h] : ''; });
   const target = sh.getRange(last + 1, 1, 1, width);
   target.setNumberFormat('@').setValues([out]);
+  invalidateGhost_();
   return { copied: true, row: last + 1, phone: lead.phone, name: lead.name };
 }
 
@@ -573,6 +599,17 @@ function ghostNotes_(lead) {
 }
 
 function actionListGhosting_(req, ctx) {
+  const cache = CacheService.getScriptCache();
+  if (req.fresh) invalidateGhost_();
+  const hit = cache.get(GHOST_CACHE_KEY_);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { /* */ } }
+  const data = readGhosting_(ctx);
+  const json = JSON.stringify(data);
+  if (json.length < 95000) cache.put(GHOST_CACHE_KEY_, json, 300);
+  return data;
+}
+
+function readGhosting_(ctx) {
   const sh = ghostSheet_(ctx.cfg);
   const width = Math.max(sh.getLastColumn(), 1);
   const headers = sh.getRange(2, 1, 1, width).getDisplayValues()[0].map(normHeader_);
@@ -617,6 +654,7 @@ function onLeadsEdit(e) {
   try {
     if (!e || !e.range) return;
     const sh = e.range.getSheet();
+    if (sh.getName() === GHOST_TAB_) { invalidateGhost_(); return; }
     if (sh.getName() !== LEADS_TAB_) return;
     invalidateLeads_();
     const ex = extraCols_(sh);
