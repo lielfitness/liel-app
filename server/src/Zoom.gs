@@ -8,6 +8,20 @@
 const ZOOM_TITLE_ = 'פגישת אפיון';
 const ZOOM_SEEN_KEY_ = 'ZOOM_SEEN';
 const ZOOM_ALERTS_KEY_ = 'ZOOM_ALERTS';
+const ZOOM_LINKS_KEY_ = 'ZOOM_LINKS';   // מזהה אירוע ביומן → הליד ששויך אליו (לזיהוי ביטולים והזזות)
+
+function eventIdOfKey_(key) { return String(key || '').split('|')[0]; }
+
+function linkZoom_(links, evId, lead, startMs, iso) {
+  links[evId] = { leadId: lead.id, row: lead.row, name: lead.name, start: startMs, iso: iso };
+}
+
+/** קישורים לפגישות שכבר עברו לא נחוצים יותר. */
+function pruneLinks_(links) {
+  const cutoff = Date.now() - 2 * DAY_MS_;
+  Object.keys(links).forEach(function (k) { if (!links[k] || links[k].start < cutoff) delete links[k]; });
+  return links;
+}
 
 function zoomCalendar_(cfg) {
   const id = cfg.calendarId;
@@ -163,22 +177,100 @@ function scanZoomBookings(via) {
   if (via !== 'calendar') ensureCalendarTrigger_();
   withLock_(function () {
     const seen = pruneSeen_(readJsonProp_(ZOOM_SEEN_KEY_, null) || {});
-    const events = zoomEvents_(cfg).filter(function (ev) { return !seen[eventKey_(ev)]; });
-    if (!events.length) { writeJsonProp_(ZOOM_SEEN_KEY_, seen); return; }
+    const links = pruneLinks_(readJsonProp_(ZOOM_LINKS_KEY_, {}));
+    const all = zoomEvents_(cfg);
+    const present = {};
+    all.forEach(function (ev) { present[ev.getId()] = ev; });
+    const events = all.filter(function (ev) { return !seen[eventKey_(ev)]; });
+    // פגישה עתידית ששויכה לליד ונעלמה מהיומן = בוטלה
+    // חד-פעמי: קישור פגישות עתידיות שכבר היו ביומן לפני שהקישור נוסף (בלי לכתוב לגיליון)
+    const props = PropertiesService.getScriptProperties();
+    if (!props.getProperty('ZOOM_LINKS_BACKFILL')) {
+      const rb = readLeads_(cfg);
+      all.forEach(function (ev) {
+        if (links[ev.getId()] || ev.getStartTime().getTime() < Date.now()) return;
+        const st = ev.getStartTime();
+        const isoB = isoDate_(new Date(st.getFullYear(), st.getMonth(), st.getDate()));
+        const m = matchLead_(rb.leads, bookerInfo_(ev, cfg));
+        if (m.lead && m.lead.zoomDate === isoB) linkZoom_(links, ev.getId(), m.lead, st.getTime(), isoB);
+      });
+      props.setProperty('ZOOM_LINKS_BACKFILL', String(Object.keys(links).length));
+    }
+    const cancelled = Object.keys(links).filter(function (id) { return !present[id] && links[id].start > Date.now(); });
+    if (!events.length && !cancelled.length) { writeJsonProp_(ZOOM_SEEN_KEY_, seen); writeJsonProp_(ZOOM_LINKS_KEY_, links); return; }
 
-    const r = readLeads_(cfg);
+    let r = readLeads_(cfg);
     const alerts = readJsonProp_(ZOOM_ALERTS_KEY_, []);
     const appUrl = String(cfg.appUrl || '').replace(/\/?$/, '/');
+    const findLead = function (link) {
+      return r.leads.filter(function (l) { return l.id === link.leadId; })[0] || null;
+    };
+
+    // ---- ביטולים ----
+    cancelled.forEach(function (id) {
+      const link = links[id];
+      delete links[id];
+      // ליתר ביטחון: האירוע באמת לא קיים (ולא רק שונתה הכותרת שלו)
+      let still = null;
+      try { still = zoomCalendar_(cfg).getEventById(id); } catch (e) { still = null; }
+      if (still) return;
+      const lead = findLead(link);
+      const btn = lead ? [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }] : [];
+      if (!lead) {
+        sendTelegram_('❌ <b>זום בוטל – ' + esc_(link.name) + '</b>\n' + fmtWhen_(new Date(link.start)) + '\nהליד לא נמצא בגיליון – לא שיניתי כלום', btn);
+        return;
+      }
+      if (String(lead.zoomResult || '').trim()) {
+        sendTelegram_('❌ <b>זום בוטל – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(link.start)) +
+          '\nכבר יש תוצאת זום ("' + esc_(lead.zoomResult) + '") – לא שיניתי כלום', btn);
+        return;
+      }
+      if (lead.zoomDate && lead.zoomDate !== link.iso) {
+        sendTelegram_('❌ <b>זום בוטל – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(link.start)) +
+          '\nבגיליון רשום תאריך זום אחר (' + fmtDate_(parseIso_(lead.zoomDate)) + ') – לא שיניתי כלום', btn);
+        return;
+      }
+      setDateCell_(r.sh, lead.row, COL_.zoomDate, null);
+      if (canonicalStatus_(lead.status) === 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('ניסיון שיחה');
+      if (String(lead.reward || '').trim() && !isLockedMonth_(link.iso.slice(0, 7))) r.sh.getRange(lead.row, COL_.reward).setValue('');
+      touch_(r.sh, lead.row, r.upCol);
+      SpreadsheetApp.flush();
+      const r2 = readLeads_(cfg);
+      syncRewards_(r2.sh, r2.leads, [link.iso.slice(0, 7)], false);
+      r = readLeads_(cfg);
+      sendTelegram_('❌ <b>זום בוטל – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(link.start)) +
+        '\nתאריך הזום נמחק' + (canonicalStatus_(lead.status) === 'זום נקבע' ? ' והסטטוס חזר ל"ניסיון שיחה"' : ''), btn);
+    });
 
     events.forEach(function (ev) {
       const key = eventKey_(ev);
       const start = ev.getStartTime();
+      const iso = isoDate_(new Date(start.getFullYear(), start.getMonth(), start.getDate()));
+
+      // ---- פגישה שהוזזה (אותו אירוע, שעה/יום אחרים) ----
+      const prevLink = links[ev.getId()];
+      if (prevLink && prevLink.start !== start.getTime()) {
+        const pl = findLead(prevLink);
+        if (pl && !String(pl.zoomResult || '').trim() && (!pl.zoomDate || pl.zoomDate === prevLink.iso)) {
+          if (pl.zoomDate !== iso) setDateCell_(r.sh, pl.row, COL_.zoomDate, parseIso_(iso));
+          touch_(r.sh, pl.row, r.upCol);
+          SpreadsheetApp.flush();
+          const r2 = readLeads_(cfg);
+          syncRewards_(r2.sh, r2.leads, [prevLink.iso.slice(0, 7), iso.slice(0, 7)], false);
+          linkZoom_(links, ev.getId(), pl, start.getTime(), iso);
+          sendTelegram_('🔁 <b>זום הוזז – ' + esc_(pl.name) + '</b>\n' + fmtWhen_(new Date(prevLink.start)) + ' ← ' + fmtWhen_(start),
+            [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + pl.id }]);
+          seen[key] = start.getTime();
+          return;
+        }
+      }
+
       const info = bookerInfo_(ev, cfg);
       const match = matchLead_(r.leads, info);
       const lead = match.lead;
-      const iso = isoDate_(new Date(start.getFullYear(), start.getMonth(), start.getDate()));
 
       if (lead && (!lead.zoomDate || lead.zoomDate === iso)) {
+        linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
         if (!lead.zoomDate) setDateCell_(r.sh, lead.row, COL_.zoomDate, parseIso_(iso));
         if (!isFinal_(lead.status) && canonicalStatus_(lead.status) !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
         touch_(r.sh, lead.row, r.upCol);
@@ -209,6 +301,7 @@ function scanZoomBookings(via) {
 
     writeJsonProp_(ZOOM_ALERTS_KEY_, alerts.filter(function (a) { return a.start > Date.now() - 30 * DAY_MS_; }));
     writeJsonProp_(ZOOM_SEEN_KEY_, seen);
+    writeJsonProp_(ZOOM_LINKS_KEY_, links);
   });
 }
 
@@ -229,6 +322,9 @@ function actionAssignZoom_(req, ctx) {
     SpreadsheetApp.flush();
     const r2 = readLeads_(ctx.cfg);
     const res = syncRewards_(r2.sh, r2.leads, [loc.lead.zoomDate.slice(0, 7), monthKey_(s)], false);
+    const links = pruneLinks_(readJsonProp_(ZOOM_LINKS_KEY_, {}));
+    linkZoom_(links, eventIdOfKey_(a.key), loc.lead, a.start, isoDate_(new Date(s.getFullYear(), s.getMonth(), s.getDate())));
+    writeJsonProp_(ZOOM_LINKS_KEY_, links);
     writeJsonProp_(ZOOM_ALERTS_KEY_, alerts.filter(function (x) { return x.key !== req.key; }));
     return { ok: true, warning: lockedWarning_(res.locked) };
   });
