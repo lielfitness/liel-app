@@ -39,6 +39,16 @@ function pendingFor_(pending, createdMs) {
   return pending.filter(function (p) { return createdMs >= p.at - 60000 && createdMs <= p.at + PENDING_MS_; });
 }
 
+/** ליד בלי מייל (D ריק) → המייל של המוזמן מהפגישה (לא של ליאל/שי). לא דורס מייל קיים. */
+function fillLeadEmail_(r, lead, info) {
+  const cur = String(lead.email || '').trim();
+  if (cur && cur !== '-') return '';
+  const em = (info.emails || [])[0];
+  if (!em) return '';
+  r.sh.getRange(lead.row, COL_.email).setValue(em);
+  return em;
+}
+
 function eventIdOfKey_(key) { return String(key || '').split('|')[0]; }
 
 function linkZoom_(links, evId, lead, startMs, iso) {
@@ -317,6 +327,7 @@ function scanZoomBookings(via) {
       if (lead && resched && (!lead.zoomDate || lead.zoomDate === resched.oldIso || lead.zoomDate === iso) && !String(lead.zoomResult || '').trim()) {
         // הפגישה החדשה נוצרה ושויכה → עכשיו (ורק עכשיו) מוחקים את הישנה
         linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
+        const addedEmailR = fillLeadEmail_(r, lead, info);
         if (lead.zoomDate !== iso) setDateCell_(r.sh, lead.row, COL_.zoomDate, parseIso_(iso));
         if (!isFinal_(lead.status) && canonicalStatus_(lead.status) !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
         touch_(r.sh, lead.row, r.upCol);
@@ -328,7 +339,8 @@ function scanZoomBookings(via) {
         const r2 = readLeads_(cfg);
         syncRewards_(r2.sh, r2.leads, [resched.oldIso.slice(0, 7), iso.slice(0, 7)], false);
         r = readLeads_(cfg);
-        sendTelegram_('🔁 <b>זום הוזז – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(resched.oldStart)) + ' ← ' + fmtWhen_(start) + delNote,
+        sendTelegram_('🔁 <b>זום הוזז – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(resched.oldStart)) + ' ← ' + fmtWhen_(start) + delNote +
+          (addedEmailR ? '\n📧 נוסף מייל לליד: ' + esc_(addedEmailR) : ''),
           [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }]);
         seen[key] = start.getTime();
         return;
@@ -336,6 +348,7 @@ function scanZoomBookings(via) {
 
       if (lead && (!lead.zoomDate || lead.zoomDate === iso)) {
         linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
+        const addedEmail = fillLeadEmail_(r, lead, info);
         if (!lead.zoomDate) setDateCell_(r.sh, lead.row, COL_.zoomDate, parseIso_(iso));
         if (!isFinal_(lead.status) && canonicalStatus_(lead.status) !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
         touch_(r.sh, lead.row, r.upCol);
@@ -343,7 +356,8 @@ function scanZoomBookings(via) {
         const r2 = readLeads_(cfg);
         syncRewards_(r2.sh, r2.leads, [iso.slice(0, 7)], false);
         sendTelegram_('📅 <b>זום חדש נקבע</b>\n' + esc_(lead.name) + '\n' + fmtWhen_(start) +
-          (match.viaPending ? '\nℹ️ שויך לפי "קביעת זום" מהכרטיס – בפגישה ביומן לא היה מייל/טלפון של הליד. כדאי לוודא.' : ''),
+          (match.viaPending ? '\nℹ️ שויך לפי "קביעת זום" מהכרטיס – בפגישה ביומן לא היה מייל/טלפון של הליד. כדאי לוודא.' : '') +
+          (addedEmail ? '\n📧 נוסף מייל לליד: ' + esc_(addedEmail) : ''),
           [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }]);
         // כמה זמן עבר מהקביעה ביומן עד שהליד עודכן
         const created = ev.getDateCreated ? ev.getDateCreated().getTime() : 0;

@@ -39,6 +39,12 @@ function recordUndo_(email, loc, desc, extra) {
     leadId: loc.lead.id, row: loc.lead.row, name: loc.lead.name, desc: desc,
     changes: changes, zoomMonths: extra && extra.zoomMonths || null, ghost: extra && extra.ghost || null,
   };
+  pushUndoEntry_(email, entry, loc);
+}
+
+function pushUndoEntry_(email, entry, loc) {
+  entry.id = entry.id || Utilities.getUuid().slice(0, 8);
+  entry.ts = entry.ts || Date.now();
   const json = JSON.stringify(entry);
   if (json.length > 8500) return;   // שינוי ארוך במיוחד – לא נשמר לביטול
   const props = PropertiesService.getScriptProperties();
@@ -49,7 +55,7 @@ function recordUndo_(email, loc, desc, extra) {
   upd[undoEntryKey_(email, entry.id)] = json;
   upd[undoIndexKey_(email)] = JSON.stringify(idx);
   props.setProperties(upd);   // כתיבה אחת
-  loc.undoCount = idx.length;
+  if (loc) loc.undoCount = idx.length;
 }
 
 let UNDO_LEFT_ = null;
@@ -79,6 +85,7 @@ function actionUndo_(req, ctx) {
   withLock_(function () {
     const e = popUndo_(ctx.email);
     if (!e) { out = { done: false, message: 'אין מה לבטל' }; return; }
+    if (e.kind === 'delete') { out = restoreDeleted_(ctx, e); return; }
 
     phase_('pop');
     try { loc = locateForWrite_(ctx.cfg, e.row, e.leadId); } catch (err) {
@@ -144,6 +151,7 @@ function actionUndo_(req, ctx) {
     out = { done: true, message: message, warning: warning };
   });
   if (out.done && loc) out.lead = loc.out || leadAfterWrite_(ctx.cfg, loc);
+  if (out.done && out.restoredRow) out.lead = rereadLead_(ctx.cfg, out.leadId, out.restoredRow);
   out.undoCount = UNDO_LEFT_ != null ? UNDO_LEFT_ : undoCount_(ctx.email);
   phase_('build');
   if (req.debug) out.phases = PHASES_;

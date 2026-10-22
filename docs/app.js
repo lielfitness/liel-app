@@ -625,8 +625,11 @@
     // מיידי: מחזירים את הליד במסך למצב שלפני הפעולה
     const entry = getUndoStack().pop() || null;
     saveUndoStack();
-    let current = null;
-    if (entry && state.leads) {
+    let current = null, reinserted = false;
+    if (entry && entry.kind === 'delete' && state.leads && !state.leads.find((l) => l.id === entry.leadId)) {
+      state.leads.splice(Math.max(0, entry.at || 0), 0, entry.before); persistLeads(); reinserted = true;
+      if (location.hash === '#/leads' && !isEditing()) renderLeadsView();
+    } else if (entry && state.leads) {
       current = state.leads.find((l) => l.id === entry.leadId) || null;
       if (current) { setLead(entry.before); showLead(entry.before); }
     }
@@ -644,6 +647,7 @@
         } else {
           // הגיליון לא אישר (למשל מישהו שינה מאז) → המסך חוזר למה שהיה
           if (current) { setLead(current); showLead(current); }
+          if (reinserted) { state.leads = state.leads.filter((l) => l.id !== entry.leadId); persistLeads(); if (location.hash === '#/leads') renderLeadsView(); }
           toast(d.message, true);
           leadsFetchedAt = 0; refreshLeads(true).then((ch) => { if (ch && !isEditing() && !cardBusy()) route(); }).catch(() => {});
         }
@@ -838,6 +842,30 @@
     }
   }
 
+  // מחיקת ליד (ליאל): מהמסך מיד, בגיליון ברקע (עם העתקה ל"לידים שנמחקו"); ↶ מחזיר
+  function deleteLead(lead) {
+    const ze = lead.zoomEvent && lead.zoomEvent.start > Date.now() ? lead.zoomEvent : null;
+    let msg = `למחוק את ${lead.name}?\nזה ימחק את השורה מהגיליון (עותק נשמר בלשונית "לידים שנמחקו", ו-↶ מחזיר).`;
+    if (ze) msg = `⚠️ ל${lead.name} יש זום ביומן ב-${fmtTs(ze.start)} – הפגישה לא תבוטל אוטומטית.\n\n` + msg;
+    if (!confirm(msg)) return;
+    const idx = state.leads.findIndex((l) => l.id === lead.id);
+    state.leads = state.leads.filter((l) => l.id !== lead.id); persistLeads();
+    const entry = { kind: 'delete', leadId: lead.id, before: lead, at: idx };
+    pushUndoLocal(entry);
+    state.undoCount++;
+    location.hash = '#/leads';
+    toast('נמחק ✓ (↶ מחזיר)');
+    api('deleteLead', { row: lead.row, id: lead.id, name: lead.name, phone: lead.phone, force: true }).then((d) => {
+      if (d.undoCount != null) { state.undoCount = d.undoCount; updateUndoBtn(); }
+      leadsFetchedAt = 0; refreshLeads(true).catch(() => {}); markDerivedStale();
+    }).catch((e) => {
+      dropUndoLocal(entry); state.undoCount = Math.max(0, state.undoCount - 1);
+      state.leads.splice(Math.max(0, idx), 0, lead); persistLeads();
+      if (location.hash === '#/leads') renderLeadsView();
+      if (e.code !== 'AUTH') toast('הליד לא נמחק: ' + e.message, true);
+    });
+  }
+
   // ביטול פגישה מהאפליקציה: מיידי במסך, המחיקה ביומן (וההודעה למוזמנים) ברקע
   function cancelZoom(lead) {
     const ze = lead.zoomEvent;
@@ -868,8 +896,7 @@
         <div class="row"><b class="grow">${opts.reschedule ? 'שינוי מועד' : 'קביעת זום'} – ${esc(lead.name)}</b><button class="btn small" data-close>סגור ✕</button></div>
         ${opts.reschedule ? '<div class="small booking-hint">🔁 בחרי מועד חדש. <b>הפגישה הישנה תימחק רק אחרי שהחדשה תיקבע</b> – אם לא תקבעי, שום דבר לא משתנה.</div>' : ''}
         <div class="small booking-hint">מלאי בדף את <b>פרטי הליד</b> (לא את שלך):</div>
-        ${!String(lead.email || '').trim() ? `<div class="notice small no-email">📧 לליד אין מייל – אחרי הקביעה שלחי לו בווטסאפ את המועד ואת קישור ה-Meet.
-          ${waNumber(lead.phone) ? `<a class="btn small green" href="${esc(bookingWaHref(lead))}" target="_blank" rel="noopener">💬 ווטסאפ ל${esc(String(lead.name || '').split(/[\s|]+/)[0])}</a>` : ''}</div>` : ''}
+        ${!String(lead.email || '').trim() || String(lead.email).trim() === '-' ? '<div class="notice small no-email">📧 לליד אין מייל – שאלי אותו ומלאי אותו בדף</div>' : ''}
         <div class="booking-copy">${items.map(([k, v], i) => `<button class="chip" data-copy="${i}" title="העתקה">${k}: <span class="ltr-text">${esc(v)}</span> ⧉</button>`).join('')}</div>
       </div>
       ${embed ? `<iframe class="booking-frame" src="${esc(embed)}" title="פגישת אפיון"></iframe>` : '<div class="empty">חסרה כתובת להטמעה</div>'}
@@ -885,13 +912,6 @@
     };
     wrap.querySelector('[data-close]').onclick = close;
     wrap.querySelector('[data-ext]').addEventListener('click', () => { pendingBooking = { lead, at: Date.now() }; });
-  }
-
-  function bookingWaHref(lead) {
-    const n = waNumber(lead.phone);
-    const first = String(lead.name || '').split(/[\s|]+/)[0] || '';
-    const text = `היי ${first}, קבענו לך פגישת זום עם ליאל ב-[יום ותאריך] בשעה [שעה] 🙂\nהקישור לפגישה (Google Meet): [קישור]`;
-    return `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
   }
 
   // ---------- אחרי קביעת זום: בדיקה אוטומטית אם הליד עודכן ----------
@@ -1100,6 +1120,7 @@
         </div>
 
         <div>
+          ${state.realRole === 'admin' && !state.viewAs ? '<button class="btn danger small" data-act="delete-lead" style="margin-top:14px">🗑 מחיקת ליד</button>' : ''}
           <div class="section-title">פרטים</div>
           <div class="card">
             <dl class="info">
@@ -1137,6 +1158,8 @@
     if (reBtn) reBtn.onclick = () => openBookingHelper(lead, { reschedule: true });
     const cxBtn = $app.querySelector('[data-act="cancel-zoom"]');
     if (cxBtn) cxBtn.onclick = () => cancelZoom(lead);
+    const delBtn = $app.querySelector('[data-act="delete-lead"]');
+    if (delBtn) delBtn.onclick = () => deleteLead(lead);
 
     // --- טופס ---
     let status = lead.status;

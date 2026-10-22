@@ -26,6 +26,7 @@ const ACTIONS = {
   getLead:      { roles: ['admin', 'leads'], fn: actionGetLead_ },
   pendingBooking: { roles: ['admin', 'leads'], fn: actionPendingBooking_ },
   cancelZoom:   { roles: ['admin', 'leads'], fn: actionCancelZoom_ },
+  deleteLead:   { roles: ['admin'],          fn: actionDeleteLead_ },
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
 };
 
