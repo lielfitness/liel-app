@@ -687,3 +687,9 @@ function onLeadsEdit(e) {
     console.error(err);
   }
 }
+
+/** ליד אחד, טרי מהגיליון (קריאה של השורה בלבד) – לרענון אחרי קביעת זום. */
+function actionGetLead_(req, ctx) {
+  const loc = locateForWrite_(ctx.cfg, req.row, req.id);
+  return { lead: publicLead_(loc.lead) };
+}

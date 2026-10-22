@@ -378,3 +378,13 @@ dl.info dd { margin: 0; word-break: break-word; }
 .ltr-text { direction: ltr; unicode-bidi: plaintext; text-align: right; word-break: break-all; }
 
 .pill.cancel, .st-sel.cancel { background: #ffe0c2; color: #9a4000; }
+
+/* דף ההזמנה של גוגל בתוך האפליקציה */
+body.no-scroll { overflow: hidden; }
+.booking-overlay { position: fixed; inset: 0; z-index: 70; background: #fff; display: flex; flex-direction: column; }
+.booking-top { padding: calc(var(--safe-t) + 10px) 12px 8px; border-bottom: 1px solid var(--line); background: var(--brand-soft); }
+.booking-hint { margin: 6px 2px 4px; color: var(--brand-dark); }
+.booking-copy { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.booking-copy .chip { background: #fff; font-size: 13px; }
+.booking-frame { flex: 1; width: 100%; border: 0; }
+.booking-foot { text-align: center; padding: 6px 0 calc(var(--safe-b) + 6px); border-top: 1px solid var(--line); }

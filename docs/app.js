@@ -837,13 +837,51 @@
 
   function openBookingHelper(lead) {
     const items = [['שם', lead.name], ['מייל', lead.email], ['טלפון', lead.phone]].filter((x) => String(x[1] || '').trim());
-    const sh = openSheet(`
-      <div class="row"><b class="grow">קביעת זום – ${esc(lead.name)}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
-      <div class="notice info small">דף ההזמנה של גוגל ממלא אוטומטית את הפרטים שלך. <b>החליפי את הפרטים בדף לפרטי הליד</b> – כך הליד יתעדכן אוטומטית באפליקציה.</div>
-      ${items.map(([k, v], i) => `<div class="copy-row"><span class="muted small">${k}</span><span class="grow ltr-text">${esc(v)}</span><button class="btn small secondary" data-copy="${i}">העתק</button></div>`).join('')}
-      <button class="btn" data-open>📅 פתח את היומן</button>`);
-    sh.el.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = () => copyText(String(items[Number(b.dataset.copy)][1]), b); });
-    sh.el.querySelector('[data-open]').onclick = () => { window.open(state.bookingUrl, '_blank', 'noopener'); sh.close(); };
+    const embed = state.bookingEmbedUrl;
+    const wrap = document.createElement('div');
+    wrap.className = 'booking-overlay';
+    wrap.innerHTML = `
+      <div class="booking-top">
+        <div class="row"><b class="grow">קביעת זום – ${esc(lead.name)}</b><button class="btn small" data-close>סגור ✕</button></div>
+        <div class="small booking-hint">מלאי בדף את <b>פרטי הליד</b> (לא את שלך):</div>
+        <div class="booking-copy">${items.map(([k, v], i) => `<button class="chip" data-copy="${i}" title="העתקה">${k}: <span class="ltr-text">${esc(v)}</span> ⧉</button>`).join('')}</div>
+      </div>
+      ${embed ? `<iframe class="booking-frame" src="${esc(embed)}" title="פגישת אפיון"></iframe>` : '<div class="empty">חסרה כתובת להטמעה</div>'}
+      <div class="booking-foot small"><a href="${esc(state.bookingUrl)}" target="_blank" rel="noopener" data-ext>הדף לא נטען? פתחי בדפדפן</a></div>`;
+    document.body.appendChild(wrap);
+    document.body.classList.add('no-scroll');
+    wrap.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = () => copyText(String(items[Number(b.dataset.copy)][1]), b); });
+    const close = () => {
+      wrap.remove(); document.body.classList.remove('no-scroll');
+      watchBooking(lead);
+    };
+    wrap.querySelector('[data-close]').onclick = close;
+    wrap.querySelector('[data-ext]').addEventListener('click', () => { pendingBooking = { lead, at: Date.now() }; });
+  }
+
+  // ---------- אחרי קביעת זום: בדיקה אוטומטית אם הליד עודכן ----------
+  let pendingBooking = null;   // נפתח דף ההזמנה מחוץ לאפליקציה – נבדוק כשחוזרים
+  let bookingWatch = null;
+  function watchBooking(lead) {
+    if (bookingWatch) clearTimeout(bookingWatch.t);
+    const before = (state.leads || []).find((l) => l.id === lead.id) || lead;
+    const tries = [2000, 6000, 12000, 20000, 35000];   // ההזמנה מתעדכנת בגיליון תוך ~10 שניות
+    let i = 0;
+    toast('בודקת אם הזום נקבע…');
+    const tick = () => {
+      api('getLead', { row: before.row, id: before.id }).then((d) => {
+        const l = d.lead;
+        if (l && (l.zoomDate !== before.zoomDate || l.status !== before.status)) {
+          setLead(l); showLead(l); markDerivedStale();
+          toast(l.zoomDate ? `✅ זום נקבע ל-${fmtIso(l.zoomDate)}` : 'הליד עודכן');
+          bookingWatch = null;
+          return;
+        }
+        if (++i < tries.length) bookingWatch = { t: setTimeout(tick, tries[i] - tries[i - 1]) };
+        else { bookingWatch = null; toast('הזום עוד לא הופיע. אם קבעת – הוא יתעדכן בעוד רגע (או ב"זומים לשיוך").'); }
+      }).catch(() => { bookingWatch = null; });
+    };
+    bookingWatch = { t: setTimeout(tick, tries[0]) };
   }
 
   // ---------- טעינה ברקע של כל המסכים ----------
@@ -1365,7 +1403,7 @@
 
   function applyMe(me) {
     state.role = me.role; state.realRole = me.realRole || me.role;
-    state.email = me.email; state.bookingUrl = me.bookingUrl;
+    state.email = me.email; state.bookingUrl = me.bookingUrl; state.bookingEmbedUrl = me.bookingEmbedUrl || '';
     if (me.undoCount != null) state.undoCount = me.undoCount;
     updateUndoBtn();
     LS.set('lf_role', state.realRole);
@@ -1399,6 +1437,7 @@
     // רענון ברקע כשחוזרים לאפליקציה
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && state.session) {
+        if (pendingBooking && Date.now() - pendingBooking.at < 30 * 60000) { watchBooking(pendingBooking.lead); pendingBooking = null; }
         leadsFetchedAt = 0; refreshAlerts(); prefetchAll(false);
         if (!isEditing() && !cardBusy()) route();
       }

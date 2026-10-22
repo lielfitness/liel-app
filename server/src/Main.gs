@@ -23,6 +23,7 @@ const ACTIONS = {
   home:         { roles: ['admin'],          fn: actionHome_ },
   undo:         { roles: ['admin', 'leads'], fn: actionUndo_ },
   addLead:      { roles: ['admin', 'leads'], fn: actionAddLead_ },
+  getLead:      { roles: ['admin', 'leads'], fn: actionGetLead_ },
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
 };
 
@@ -81,6 +82,7 @@ function actionMe_(req, ctx) {
     role: ctx.role,
     realRole: ctx.realRole,
     bookingUrl: ctx.cfg.bookingUrl || '',
+    bookingEmbedUrl: ctx.cfg.bookingEmbedUrl || '',
     undoCount: undoCount_(ctx.email),
   };
 }
