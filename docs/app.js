@@ -1507,6 +1507,11 @@
       <div class="tiles">
         <div class="card tile"><div class="num" style="font-size:18px">${esc(F.lastFinUpdate || '—')}</div><div class="lbl">עדכון פיננסים אחרון</div></div>
         <div class="card tile"><div class="num" style="font-size:18px">${esc(F.lastMeetingsRun || 'עוד לא רץ מאז העדכון')}</div><div class="lbl">עדכון פגישות אחרון</div></div>
+        ${F.month ? `
+        <div class="card tile"><div class="num">${ils(Math.round(F.month.income))}</div><div class="lbl">הכנסות החודש (כולל מע״מ)</div>
+          <div class="muted small">${ils(Math.round(F.month.incomeNet))} אחרי מע״מ · עד העדכון האחרון</div></div>
+        <div class="card tile"><div class="num">${ils(Math.round(F.month.expenses))}</div><div class="lbl">הוצאות החודש (כולל מע״מ)</div>
+          <div class="muted small">${ils(Math.round(F.month.expensesNet))} אחרי מע״מ · עד העדכון האחרון</div></div>` : ''}
       </div>`}
     `);
     $app.querySelectorAll('[data-filter]').forEach((a) => {
