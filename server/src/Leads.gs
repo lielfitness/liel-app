@@ -325,7 +325,8 @@ function withLock_(fn) {
     ok = true;
     return out;
   } finally {
-    if (ok && CACHE_PATCH_) patchLeadsCache_(CACHE_PATCH_); else invalidateLeads_();
+    if (ok && CACHE_PATCH_ === 'skip') { /* לא השתנה כלום בגיליון */ }
+    else if (ok && CACHE_PATCH_) patchLeadsCache_(CACHE_PATCH_); else invalidateLeads_();
     CACHE_PATCH_ = null;
     if (PHASES_) phase_('cache');
     lock.releaseLock();

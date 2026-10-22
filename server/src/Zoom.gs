@@ -10,6 +10,30 @@ const ZOOM_SEEN_KEY_ = 'ZOOM_SEEN';
 const ZOOM_ALERTS_KEY_ = 'ZOOM_ALERTS';
 const ZOOM_LINKS_KEY_ = 'ZOOM_LINKS';   // מזהה אירוע ביומן → הליד ששויך אליו (לזיהוי ביטולים והזזות)
 
+// ---------- "קביעה ממתינה": לחיצה על "קביעת זום" בכרטיס ליד ----------
+const PENDING_KEY_ = 'PENDING_BOOKINGS';
+const PENDING_MS_ = 10 * 60 * 1000;
+
+function readPending_() {
+  return readJsonProp_(PENDING_KEY_, []).filter(function (p) { return p.at > Date.now() - PENDING_MS_ - 60000; });
+}
+
+function actionPendingBooking_(req, ctx) {
+  const lead = locateForWrite_(ctx.cfg, req.row, req.id).lead;
+  withLock_(function () {
+    const list = readPending_().filter(function (p) { return p.leadId !== lead.id; });
+    list.push({ leadId: lead.id, row: lead.row, name: lead.name, at: Date.now(), by: ctx.email });
+    writeJsonProp_(PENDING_KEY_, list);
+    CACHE_PATCH_ = 'skip';
+  });
+  return { ok: true };
+}
+
+/** קביעות ממתינות שהאירוע נוצר בחלון שלהן (מדקה לפני הלחיצה ועד 10 דקות אחריה). */
+function pendingFor_(pending, createdMs) {
+  return pending.filter(function (p) { return createdMs >= p.at - 60000 && createdMs <= p.at + PENDING_MS_; });
+}
+
 function eventIdOfKey_(key) { return String(key || '').split('|')[0]; }
 
 function linkZoom_(links, evId, lead, startMs, iso) {
@@ -214,6 +238,7 @@ function scanZoomBookings(via) {
     if (!events.length && !cancelled.length) { writeJsonProp_(ZOOM_SEEN_KEY_, seen); writeJsonProp_(ZOOM_LINKS_KEY_, links); return; }
 
     let r = readLeads_(cfg);
+    let pending = readPending_();
     const alerts = readJsonProp_(ZOOM_ALERTS_KEY_, []);
     const appUrl = String(cfg.appUrl || '').replace(/\/?$/, '/');
     const findLead = function (link) {
@@ -294,7 +319,16 @@ function scanZoomBookings(via) {
 
       const info = bookerInfo_(ev, cfg);
       const match = matchLead_(r.leads, info);
+      // אין התאמה ודאית → "קביעה ממתינה": רק אם בדיוק ליד אחד לחצו לו "קביעת זום" בעשר הדקות האלה
+      const created = ev.getDateCreated ? ev.getDateCreated().getTime() : Date.now();
+      const pend = pendingFor_(pending, created);
+      if (!match.lead && !match.ambiguous && pend.length === 1) {
+        const pl = r.leads.filter(function (l) { return l.id === pend[0].leadId; })[0];
+        if (pl) { match.lead = pl; match.how = 'קביעה ממתינה (לחיצה על "קביעת זום" בכרטיס)'; match.viaPending = true; }
+      }
+      if (!match.lead && pend.length > 1) match.multiPending = pend.map(function (p) { return p.name; });
       const lead = match.lead;
+      if (lead) pending = pending.filter(function (p) { return p.leadId !== lead.id; });
 
       if (lead && (!lead.zoomDate || lead.zoomDate === iso)) {
         linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
@@ -304,7 +338,8 @@ function scanZoomBookings(via) {
         SpreadsheetApp.flush();
         const r2 = readLeads_(cfg);
         syncRewards_(r2.sh, r2.leads, [iso.slice(0, 7)], false);
-        sendTelegram_('📅 <b>זום חדש נקבע</b>\n' + esc_(lead.name) + '\n' + fmtWhen_(start),
+        sendTelegram_('📅 <b>זום חדש נקבע</b>\n' + esc_(lead.name) + '\n' + fmtWhen_(start) +
+          (match.viaPending ? '\nℹ️ שויך לפי "קביעת זום" מהכרטיס – בפגישה ביומן לא היה מייל/טלפון של הליד. כדאי לוודא.' : ''),
           [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }]);
         // כמה זמן עבר מהקביעה ביומן עד שהליד עודכן
         const created = ev.getDateCreated ? ev.getDateCreated().getTime() : 0;
@@ -313,6 +348,7 @@ function scanZoomBookings(via) {
       } else {
         const reason = lead ? 'לליד כבר רשום תאריך זום אחר (' + fmtDate_(parseIso_(lead.zoomDate)) + ')'
           : match.ambiguous ? 'נמצאו כמה לידים מתאימים – צריך לבחור ידנית'
+          : match.multiPending ? 'כמה קביעות ממתינות באותו זמן (' + match.multiPending.join(', ') + ') – צריך לבחור ידנית'
           : info.bookedByStaff ? 'הפגישה נקבעה עם הפרטים של שי ולא של הליד – צריך לשייך ידנית'
           : 'לא נמצא ליד עם המייל/הטלפון/השם של המזמין';
         alerts.push({
@@ -330,6 +366,7 @@ function scanZoomBookings(via) {
     writeJsonProp_(ZOOM_SEEN_KEY_, seen);
     writeJsonProp_(ZOOM_LINKS_KEY_, links);
     writeJsonProp_('ZOOM_CANCEL_DONE', done);
+    writeJsonProp_(PENDING_KEY_, pending);
   });
 }
 

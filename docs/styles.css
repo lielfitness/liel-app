@@ -388,3 +388,4 @@ body.no-scroll { overflow: hidden; }
 .booking-copy .chip { background: #fff; font-size: 13px; }
 .booking-frame { flex: 1; width: 100%; border: 0; }
 .booking-foot { text-align: center; padding: 6px 0 calc(var(--safe-b) + 6px); border-top: 1px solid var(--line); }
+.no-email { margin: 6px 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

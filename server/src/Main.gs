@@ -24,6 +24,7 @@ const ACTIONS = {
   undo:         { roles: ['admin', 'leads'], fn: actionUndo_ },
   addLead:      { roles: ['admin', 'leads'], fn: actionAddLead_ },
   getLead:      { roles: ['admin', 'leads'], fn: actionGetLead_ },
+  pendingBooking: { roles: ['admin', 'leads'], fn: actionPendingBooking_ },
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
 };
 

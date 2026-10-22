@@ -844,12 +844,16 @@
       <div class="booking-top">
         <div class="row"><b class="grow">קביעת זום – ${esc(lead.name)}</b><button class="btn small" data-close>סגור ✕</button></div>
         <div class="small booking-hint">מלאי בדף את <b>פרטי הליד</b> (לא את שלך):</div>
+        ${!String(lead.email || '').trim() ? `<div class="notice small no-email">📧 לליד אין מייל – אחרי הקביעה שלחי לו בווטסאפ את המועד ואת קישור ה-Meet.
+          ${waNumber(lead.phone) ? `<a class="btn small green" href="${esc(bookingWaHref(lead))}" target="_blank" rel="noopener">💬 ווטסאפ ל${esc(String(lead.name || '').split(/[\s|]+/)[0])}</a>` : ''}</div>` : ''}
         <div class="booking-copy">${items.map(([k, v], i) => `<button class="chip" data-copy="${i}" title="העתקה">${k}: <span class="ltr-text">${esc(v)}</span> ⧉</button>`).join('')}</div>
       </div>
       ${embed ? `<iframe class="booking-frame" src="${esc(embed)}" title="פגישת אפיון"></iframe>` : '<div class="empty">חסרה כתובת להטמעה</div>'}
       <div class="booking-foot small"><a href="${esc(state.bookingUrl)}" target="_blank" rel="noopener" data-ext>הדף לא נטען? פתחי בדפדפן</a></div>`;
     document.body.appendChild(wrap);
     document.body.classList.add('no-scroll');
+    // "קביעה ממתינה": אם בעשר הדקות הקרובות תיקבע פגישה בלי פרטים של ליד – היא תשויך לליד הזה
+    if (lead.row) api('pendingBooking', { row: lead.row, id: lead.id }).catch(() => {});
     wrap.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = () => copyText(String(items[Number(b.dataset.copy)][1]), b); });
     const close = () => {
       wrap.remove(); document.body.classList.remove('no-scroll');
@@ -857,6 +861,13 @@
     };
     wrap.querySelector('[data-close]').onclick = close;
     wrap.querySelector('[data-ext]').addEventListener('click', () => { pendingBooking = { lead, at: Date.now() }; });
+  }
+
+  function bookingWaHref(lead) {
+    const n = waNumber(lead.phone);
+    const first = String(lead.name || '').split(/[\s|]+/)[0] || '';
+    const text = `היי ${first}, קבענו לך פגישת זום עם ליאל ב-[יום ותאריך] בשעה [שעה] 🙂\nהקישור לפגישה (Google Meet): [קישור]`;
+    return `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
   }
 
   // ---------- אחרי קביעת זום: בדיקה אוטומטית אם הליד עודכן ----------
