@@ -389,3 +389,4 @@ body.no-scroll { overflow: hidden; }
 .booking-frame { flex: 1; width: 100%; border: 0; }
 .booking-foot { text-align: center; padding: 6px 0 calc(var(--safe-b) + 6px); border-top: 1px solid var(--line); }
 .no-email { margin: 6px 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.zoom-box { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: #f6fbf8; display: grid; gap: 8px; }

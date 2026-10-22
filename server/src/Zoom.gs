@@ -22,7 +22,12 @@ function actionPendingBooking_(req, ctx) {
   const lead = locateForWrite_(ctx.cfg, req.row, req.id).lead;
   withLock_(function () {
     const list = readPending_().filter(function (p) { return p.leadId !== lead.id; });
-    list.push({ leadId: lead.id, row: lead.row, name: lead.name, at: Date.now(), by: ctx.email });
+    const entry = { leadId: lead.id, row: lead.row, name: lead.name, at: Date.now(), by: ctx.email };
+    if (req.reschedule) {
+      const old = futureZoomByLead_()[lead.id];
+      if (old) { entry.oldEventId = old.id; entry.oldStart = old.start; entry.oldIso = old.iso; }
+    }
+    list.push(entry);
     writeJsonProp_(PENDING_KEY_, list);
     CACHE_PATCH_ = 'skip';
   });
@@ -265,35 +270,10 @@ function scanZoomBookings(via) {
       delete links[id];
       done[id] = Date.now();
       scanLog_({ cancel: link.name, iso: link.iso, eventFound: !!ev });
-      const lead = findLead(link);
-      const btn = lead ? [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }] : [];
-      if (!lead) {
-        sendTelegram_('❌ <b>זום בוטל – ' + esc_(link.name) + '</b>\n' + fmtWhen_(new Date(link.start)) + '\nהליד לא נמצא בגיליון – לא שיניתי כלום', btn);
-        return;
-      }
-      if (String(lead.zoomResult || '').trim()) {
-        sendTelegram_('❌ <b>זום בוטל – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(link.start)) +
-          '\nכבר יש תוצאת זום ("' + esc_(lead.zoomResult) + '") – לא שיניתי כלום', btn);
-        return;
-      }
-      if (lead.zoomDate && lead.zoomDate !== link.iso) {
-        sendTelegram_('❌ <b>זום בוטל – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(link.start)) +
-          '\nבגיליון רשום תאריך זום אחר (' + fmtDate_(parseIso_(lead.zoomDate)) + ') – לא שיניתי כלום', btn);
-        return;
-      }
-      setDateCell_(r.sh, lead.row, COL_.zoomDate, null);
-      const newStatus = !isFinal_(lead.status) ? 'פגישה בוטלה' : '';   // סטטוס סופי (לא מעוניין וכו') לא נדרס
-      if (newStatus) r.sh.getRange(lead.row, COL_.status).setValue(newStatus);
-      if (String(lead.reward || '').trim() && !isLockedMonth_(link.iso.slice(0, 7))) r.sh.getRange(lead.row, COL_.reward).setValue('');
-      touch_(r.sh, lead.row, r.upCol);
-      SpreadsheetApp.flush();
-      const r2 = readLeads_(cfg);
-      syncRewards_(r2.sh, r2.leads, [link.iso.slice(0, 7)], false);
-      r = readLeads_(cfg);
-      sendTelegram_('❌ <b>זום בוטל – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(link.start)) +
-        '\nתאריך הזום נמחק' + (newStatus ? ' והסטטוס עבר ל"פגישה בוטלה"' : ' (הסטטוס "' + esc_(lead.status) + '" לא שונה)'), btn);
+      r = applyCancel_(cfg, r, link, appUrl, '');
     });
 
+    const pendingAll = pending.slice();
     events.forEach(function (ev) {
       const key = eventKey_(ev);
       const start = ev.getStartTime();
@@ -328,7 +308,31 @@ function scanZoomBookings(via) {
       }
       if (!match.lead && pend.length > 1) match.multiPending = pend.map(function (p) { return p.name; });
       const lead = match.lead;
+      // "שינוי מועד" שנפתח מהאפליקציה לליד הזה (בחלון הזמן)
+      const resched = lead ? pendingFor_(pendingAll, created).filter(function (p) {
+        return p.leadId === lead.id && p.oldEventId && p.oldEventId !== ev.getId();
+      })[0] : null;
       if (lead) pending = pending.filter(function (p) { return p.leadId !== lead.id; });
+
+      if (lead && resched && (!lead.zoomDate || lead.zoomDate === resched.oldIso || lead.zoomDate === iso) && !String(lead.zoomResult || '').trim()) {
+        // הפגישה החדשה נוצרה ושויכה → עכשיו (ורק עכשיו) מוחקים את הישנה
+        linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
+        if (lead.zoomDate !== iso) setDateCell_(r.sh, lead.row, COL_.zoomDate, parseIso_(iso));
+        if (!isFinal_(lead.status) && canonicalStatus_(lead.status) !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
+        touch_(r.sh, lead.row, r.upCol);
+        let delNote = '';
+        try { deleteCalendarEvent_(cfg, resched.oldEventId); } catch (e) { delNote = '\n⚠️ לא הצלחתי למחוק את הפגישה הישנה ביומן – כדאי למחוק ידנית'; }
+        delete links[resched.oldEventId];
+        done[resched.oldEventId] = Date.now();   // שלא ייחשב כ"ביטול"
+        SpreadsheetApp.flush();
+        const r2 = readLeads_(cfg);
+        syncRewards_(r2.sh, r2.leads, [resched.oldIso.slice(0, 7), iso.slice(0, 7)], false);
+        r = readLeads_(cfg);
+        sendTelegram_('🔁 <b>זום הוזז – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(resched.oldStart)) + ' ← ' + fmtWhen_(start) + delNote,
+          [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }]);
+        seen[key] = start.getTime();
+        return;
+      }
 
       if (lead && (!lead.zoomDate || lead.zoomDate === iso)) {
         linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
@@ -368,6 +372,72 @@ function scanZoomBookings(via) {
     writeJsonProp_('ZOOM_CANCEL_DONE', done);
     writeJsonProp_(PENDING_KEY_, pending);
   });
+}
+
+/**
+ * טיפול בפגישה שבוטלה (ביומן או מהאפליקציה): אם אין תוצאת זום – מוחק את R, הסטטוס עובר ל"פגישה בוטלה"
+ * (סטטוס סופי לא נדרס), מנקה S בחודש פתוח, ושולח הודעה. אם יש כבר תוצאה / תאריך אחר – רק הודעה.
+ * @return r מעודכן
+ */
+function applyCancel_(cfg, r, link, appUrl, note) {
+  const lead = r.leads.filter(function (l) { return l.id === link.leadId; })[0] || null;
+  const btn = lead ? [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }] : [];
+  const head = '❌ <b>זום בוטל – ' + esc_(lead ? lead.name : link.name) + '</b>\n' + fmtWhen_(new Date(link.start)) + (note ? '\n' + note : '');
+  if (!lead) { sendTelegram_(head + '\nהליד לא נמצא בגיליון – לא שיניתי כלום', btn); return r; }
+  if (String(lead.zoomResult || '').trim()) {
+    sendTelegram_(head + '\nכבר יש תוצאת זום ("' + esc_(lead.zoomResult) + '") – לא שיניתי כלום', btn); return r;
+  }
+  if (lead.zoomDate && lead.zoomDate !== link.iso) {
+    sendTelegram_(head + '\nבגיליון רשום תאריך זום אחר (' + fmtDate_(parseIso_(lead.zoomDate)) + ') – לא שיניתי כלום', btn); return r;
+  }
+  setDateCell_(r.sh, lead.row, COL_.zoomDate, null);
+  const newStatus = !isFinal_(lead.status) ? 'פגישה בוטלה' : '';   // סטטוס סופי (לא מעוניין וכו') לא נדרס
+  if (newStatus) r.sh.getRange(lead.row, COL_.status).setValue(newStatus);
+  if (String(lead.reward || '').trim() && !isLockedMonth_(link.iso.slice(0, 7))) r.sh.getRange(lead.row, COL_.reward).setValue('');
+  touch_(r.sh, lead.row, r.upCol);
+  SpreadsheetApp.flush();
+  const r2 = readLeads_(cfg);
+  syncRewards_(r2.sh, r2.leads, [link.iso.slice(0, 7)], false);
+  sendTelegram_(head + '\nתאריך הזום נמחק' + (newStatus ? ' והסטטוס עבר ל"פגישה בוטלה"' : ' (הסטטוס "' + esc_(lead.status) + '" לא שונה)'), btn);
+  return readLeads_(cfg);
+}
+
+/** מחיקת פגישה ביומן של ליאל + שליחת ביטול למוזמנים (Calendar API, הרשאת כתיבה). */
+function deleteCalendarEvent_(cfg, icalId) {
+  const calId = zoomCalendar_(cfg).getId();
+  const evId = String(icalId).replace(/@google\.com$/, '');
+  Calendar.Events.remove(calId, evId, { sendUpdates: 'all' });
+}
+
+/** הפגישה העתידית שמשויכת לכל ליד (מתוך הקישורים) – כדי להציג "ביטול פגישה" / "שינוי מועד". */
+function futureZoomByLead_() {
+  const links = readJsonProp_(ZOOM_LINKS_KEY_, {});
+  const out = {};
+  Object.keys(links).forEach(function (id) {
+    const l = links[id];
+    if (l && l.start > Date.now() && (!out[l.leadId] || out[l.leadId].start > l.start)) out[l.leadId] = { id: id, start: l.start, iso: l.iso };
+  });
+  return out;
+}
+
+function actionCancelZoom_(req, ctx) {
+  const cfg = ctx.cfg;
+  const appUrl = String(cfg.appUrl || '').replace(/\/?$/, '/');
+  withLock_(function () {
+    const links = readJsonProp_(ZOOM_LINKS_KEY_, {});
+    const link = links[req.eventId];
+    if (!link || link.leadId !== req.id) throw apiError_('STALE', 'הפגישה כבר לא משויכת לליד הזה – רענני');
+    try { deleteCalendarEvent_(cfg, req.eventId); } catch (e) {
+      throw apiError_('ERROR', 'לא הצלחתי למחוק את הפגישה ביומן: ' + (e.message || e));
+    }
+    delete links[req.eventId];
+    writeJsonProp_(ZOOM_LINKS_KEY_, links);
+    const done = readJsonProp_('ZOOM_CANCEL_DONE', {});
+    done[req.eventId] = Date.now();
+    writeJsonProp_('ZOOM_CANCEL_DONE', done);
+    applyCancel_(cfg, readLeads_(cfg), link, appUrl, 'בוטל מהאפליקציה (' + ((cfg.names && cfg.names[ctx.email]) || USER_NAMES_BY_ROLE_[ctx.realRole] || ctx.email) + ')');
+  });
+  return { lead: rereadLead_(cfg, req.id, req.row) };
 }
 
 /** יומן קצר של הסריקות האחרונות (לאבחון). */
@@ -435,4 +505,11 @@ function actionDismissZoom_(req) {
     writeJsonProp_(ZOOM_ALERTS_KEY_, alerts.filter(function (x) { return x.key !== req.key; }));
     return { ok: true };
   });
+}
+
+/** להרצה ידנית מהעורך פעם אחת: מאשר את הרשאת הכתיבה ליומן ובודק שהיא עובדת (לא משנה כלום). */
+function authorizeCalendarWrite() {
+  const calId = zoomCalendar_(getConfig_()).getId();
+  const res = Calendar.Events.list(calId, { maxResults: 1, timeMin: new Date().toISOString(), singleEvents: true });
+  console.log('✅ הרשאת יומן תקינה (' + calId + '). "ביטול פגישה" ו"שינוי מועד" מהאפליקציה פעילים. ' + ((res.items || []).length ? '' : ''));
 }

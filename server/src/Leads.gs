@@ -206,6 +206,8 @@ function phase_(name) {
 function actionListLeads_(req, ctx) {
   if (req.fresh) invalidateLeads_();
   const c = cachedLeads_(ctx.cfg);
+  const fz = futureZoomByLead_();
+  c.leads.forEach(function (x) { x.zoomEvent = fz[x.id] || null; });
   return {
     leads: c.leads,
     statuses: allowedValues_(STATUSES_, ctx.role),
@@ -692,5 +694,7 @@ function onLeadsEdit(e) {
 /** ליד אחד, טרי מהגיליון (קריאה של השורה בלבד) – לרענון אחרי קביעת זום. */
 function actionGetLead_(req, ctx) {
   const loc = locateForWrite_(ctx.cfg, req.row, req.id);
-  return { lead: publicLead_(loc.lead) };
+  const lead = publicLead_(loc.lead);
+  lead.zoomEvent = futureZoomByLead_()[lead.id] || null;
+  return { lead: lead };
 }

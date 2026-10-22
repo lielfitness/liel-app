@@ -554,6 +554,9 @@
 
   function setLead(lead) {
     const i = state.leads ? state.leads.findIndex((x) => x.id === lead.id) : -1;
+    if (i >= 0 && !('zoomEvent' in lead) && state.leads[i].zoomEvent && state.leads[i].zoomDate === lead.zoomDate) {
+      lead = Object.assign({}, lead, { zoomEvent: state.leads[i].zoomEvent });
+    }
     if (i >= 0) state.leads[i] = lead;
     persistLeads();
   }
@@ -835,14 +838,35 @@
     }
   }
 
-  function openBookingHelper(lead) {
+  // ביטול פגישה מהאפליקציה: מיידי במסך, המחיקה ביומן (וההודעה למוזמנים) ברקע
+  function cancelZoom(lead) {
+    const ze = lead.zoomEvent;
+    if (!ze || !confirm(`לבטל את הזום של ${lead.name} ב-${fmtTs(ze.start)}?\nהפגישה תימחק מהיומן ויישלח ביטול למוזמנים.`)) return;
+    const before = lead;
+    const final = FINAL.includes(sk(lead));
+    const local = Object.assign({}, lead, { zoomDate: '', zoomEvent: null, updatedAt: Date.now() },
+      final ? {} : { status: 'פגישה בוטלה', statusKey: 'פגישה בוטלה' });
+    setLead(local); showLead(local);
+    toast('הפגישה בוטלה ✓ (נמחקת מהיומן ברקע)');
+    api('cancelZoom', { row: lead.row, id: lead.id, eventId: ze.id }).then((d) => {
+      if (d.lead) { setLead(d.lead); showLead(d.lead); }
+      markDerivedStale();
+    }).catch((e) => {
+      setLead(before); showLead(before);
+      if (e.code !== 'AUTH') toast('הביטול לא בוצע, הפגישה נשארה: ' + e.message, true);
+    });
+  }
+
+  function openBookingHelper(lead, opts) {
+    opts = opts || {};
     const items = [['שם', lead.name], ['מייל', lead.email], ['טלפון', lead.phone]].filter((x) => String(x[1] || '').trim());
     const embed = state.bookingEmbedUrl;
     const wrap = document.createElement('div');
     wrap.className = 'booking-overlay';
     wrap.innerHTML = `
       <div class="booking-top">
-        <div class="row"><b class="grow">קביעת זום – ${esc(lead.name)}</b><button class="btn small" data-close>סגור ✕</button></div>
+        <div class="row"><b class="grow">${opts.reschedule ? 'שינוי מועד' : 'קביעת זום'} – ${esc(lead.name)}</b><button class="btn small" data-close>סגור ✕</button></div>
+        ${opts.reschedule ? '<div class="small booking-hint">🔁 בחרי מועד חדש. <b>הפגישה הישנה תימחק רק אחרי שהחדשה תיקבע</b> – אם לא תקבעי, שום דבר לא משתנה.</div>' : ''}
         <div class="small booking-hint">מלאי בדף את <b>פרטי הליד</b> (לא את שלך):</div>
         ${!String(lead.email || '').trim() ? `<div class="notice small no-email">📧 לליד אין מייל – אחרי הקביעה שלחי לו בווטסאפ את המועד ואת קישור ה-Meet.
           ${waNumber(lead.phone) ? `<a class="btn small green" href="${esc(bookingWaHref(lead))}" target="_blank" rel="noopener">💬 ווטסאפ ל${esc(String(lead.name || '').split(/[\s|]+/)[0])}</a>` : ''}</div>` : ''}
@@ -853,7 +877,7 @@
     document.body.appendChild(wrap);
     document.body.classList.add('no-scroll');
     // "קביעה ממתינה": אם בעשר הדקות הקרובות תיקבע פגישה בלי פרטים של ליד – היא תשויך לליד הזה
-    if (lead.row) api('pendingBooking', { row: lead.row, id: lead.id }).catch(() => {});
+    if (lead.row) api('pendingBooking', { row: lead.row, id: lead.id, reschedule: !!opts.reschedule }).catch(() => {});
     wrap.querySelectorAll('[data-copy]').forEach((b) => { b.onclick = () => copyText(String(items[Number(b.dataset.copy)][1]), b); });
     const close = () => {
       wrap.remove(); document.body.classList.remove('no-scroll');
@@ -1048,7 +1072,10 @@
                 <button class="btn ghost" data-act="call-cancel">ביטול</button>
               </div>
             </div>
-            ${state.bookingUrl ? `<button class="btn secondary" style="width:100%;margin-top:10px" data-act="book">🎥 קביעת זום (פגישת אפיון)</button>` : ''}
+            ${lead.zoomEvent && lead.zoomEvent.start > Date.now()
+              ? `<div class="zoom-box"><div class="small">🎥 זום ב-${esc(fmtTs(lead.zoomEvent.start))}</div>
+                   <div class="row"><button class="btn secondary grow" data-act="resched">🔁 שינוי מועד</button><button class="btn danger grow" data-act="cancel-zoom">✕ ביטול פגישה</button></div></div>`
+              : (state.bookingUrl ? `<button class="btn secondary" style="width:100%;margin-top:10px" data-act="book">🎥 קביעת זום (פגישת אפיון)</button>` : '')}
           </div>
 
           <div class="section-title">עדכון</div>
@@ -1106,6 +1133,10 @@
 
     const bookBtn = $app.querySelector('[data-act="book"]');
     if (bookBtn) bookBtn.onclick = () => openBookingHelper(lead);
+    const reBtn = $app.querySelector('[data-act="resched"]');
+    if (reBtn) reBtn.onclick = () => openBookingHelper(lead, { reschedule: true });
+    const cxBtn = $app.querySelector('[data-act="cancel-zoom"]');
+    if (cxBtn) cxBtn.onclick = () => cancelZoom(lead);
 
     // --- טופס ---
     let status = lead.status;
