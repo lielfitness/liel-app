@@ -394,3 +394,6 @@ body.no-scroll { overflow: hidden; }
 .btn.green[disabled] { background: #bfc5cc; border-color: #bfc5cc; }
 .splash { flex-direction: column; gap: 14px; }
 .splash-title { font-size: 22px; font-weight: 800; color: var(--brand); }
+.waiting-row { gap: 6px; }
+.waiting-name { color: inherit; text-decoration: none; }
+.icon-btn.round { border: 1px solid var(--line); border-radius: 50%; width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; background: #fff; }

@@ -20,6 +20,10 @@ function actionHome_(req, ctx) {
         return t >= today && t < inWeek;
       }).map(function (l) { return { id: l.id, row: l.row, name: l.name, date: l.zoomDate }; })
         .sort(function (a, b) { return a.date < b.date ? -1 : 1; }),
+      // "ממתינים – לחזור אליהם אחרי פגישה": P = ממתין, הישן ראשון
+      waiting: leads.filter(function (l) { return String(l.zoomResult || '').trim() === 'ממתין'; })
+        .map(function (l) { return { id: l.id, name: l.name, date: l.zoomDate, notes: l.notes, phone: l.phone }; })
+        .sort(function (a, b) { return (a.date || '9999') < (b.date || '9999') ? -1 : 1; }),
     },
     zoomAlerts: readJsonProp_(ZOOM_ALERTS_KEY_, []).length,
     zoomAuto: {
@@ -40,35 +44,19 @@ function actionHome_(req, ctx) {
 
 function financeSnapshot_(cfg) {
   const ss = SpreadsheetApp.openById(cfg.finSheetId);
-
-  // מאמנים עם ≤2 פגישות שנותרו (תפעול: A שם, B מייל, C חבילה, D נותרו)
-  const ops = ss.getSheetByName('תפעול');
-  const coaches = [];
-  if (ops && ops.getLastRow() >= 2) {
-    ops.getRange(2, 1, ops.getLastRow() - 1, 4).getDisplayValues().forEach(function (r) {
-      const left = String(r[3]).trim();
-      if (r[0] && left !== '' && !isNaN(Number(left)) && Number(left) <= 2) {
-        coaches.push({ name: r[0], package: r[2], left: Number(left) });
-      }
-    });
-  }
-
-  // שורות "לבדיקה" בתנועות (עמודה G)
-  const tx = ss.getSheetByName('תנועות');
-  let toReview = 0;
-  if (tx && tx.getLastRow() >= 2) {
-    tx.getRange(2, 7, tx.getLastRow() - 1, 1).getDisplayValues().forEach(function (r) {
-      if (String(r[0]).trim() === 'לבדיקה') toReview++;
-    });
-  }
-
-  // עדכון פיננסים אחרון: לשונית השנה, K17
   const year = ss.getSheetByName(String(new Date().getFullYear()));
+  // עדכון פיננסים אחרון: לשונית השנה, K17
   const lastUpdate = year ? year.getRange('K17').getDisplayValue() : '';
-
-  return {
-    coachesLow: coaches.sort(function (a, b) { return a.left - b.left; }),
-    toReview: toReview,
-    lastFinUpdate: lastUpdate,
-  };
+  // סיכום החודש הנוכחי מהלשונית השנתית (שורה 2 = ינואר). G הוצאות כולל מע"מ, F אחרי מע"מ, I הכנסות, H אחרי מע"מ
+  let month = null;
+  if (year) {
+    const row = new Date().getMonth() + 2;
+    const v = year.getRange(row, 6, 1, 4).getValues()[0];   // F G H I
+    const num = function (x) { return typeof x === 'number' ? x : 0; };
+    month = { expensesNet: num(v[0]), expenses: num(v[1]), incomeNet: num(v[2]), income: num(v[3]) };
+  }
+  // הורדת פגישות אחרונה: "מעקב ביטולים (מערכת)" I1 (כותב הסקריפט של הפגישות)
+  const track = ss.getSheetByName('מעקב ביטולים (מערכת)');
+  const lastMeetings = track ? String(track.getRange('I1').getDisplayValue() || '').trim() : '';
+  return { lastFinUpdate: lastUpdate, lastMeetingsRun: lastMeetings, month: month };
 }

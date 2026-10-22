@@ -213,6 +213,7 @@ function actionListLeads_(req, ctx) {
     statuses: allowedValues_(STATUSES_, ctx.role),
     zoomResults: allowedValues_(ZOOM_RESULTS_, ctx.role),
     sources: leadSources_(c.leads),
+    waitingFilter: ctx.role === 'admin',   // סינון "ממתינים" – רק לליאל
     hasUpdatedCol: c.hasUpdatedCol,
     hasShaiNotesCol: c.hasShaiNotesCol,
   };

@@ -259,7 +259,7 @@
 
   function applyLeadsData(d) {
     state.leads = d.leads;
-    state.meta = { statuses: d.statuses, zoomResults: d.zoomResults, hasUpdatedCol: d.hasUpdatedCol };
+    state.meta = { statuses: d.statuses, zoomResults: d.zoomResults, hasUpdatedCol: d.hasUpdatedCol, sources: d.sources, waitingFilter: !!d.waitingFilter };
   }
   function persistLeads() {
     if (!state.leads || !state.meta) return;
@@ -343,6 +343,7 @@
   // כפתור הסינון "נסגר" נספר לפי תוצאת הזום (P), לא לפי הסטטוס (N)
   function matchesFilter(l, f) {
     if (!f || f === 'active' || f === 'all') return true;
+    if (f === 'waiting') return String(l.zoomResult || '').trim() === 'ממתין';
     if (!f.startsWith('s:')) return true;
     const st = f.slice(2);
     if (st === 'נסגר') return String(l.zoomResult || '').trim() === 'נסגר';
@@ -423,7 +424,10 @@
     if (state.filter === 'all') state.filter = 'active';
     const counts = {};
     statuses.forEach((st) => { counts[st] = state.leads.filter((l) => matchesFilter(l, 's:' + st)).length; });
+    if (state.filter === 'waiting' && !state.meta.waitingFilter) state.filter = 'active';
+    const waitingN = state.leads.filter((l) => matchesFilter(l, 'waiting')).length;
     const chips = FILTERS.map((f) => ({ k: f.k, t: f.t, n: state.leads.filter(f.f).length }))
+      .concat(state.meta.waitingFilter ? [{ k: 'waiting', t: 'ממתינים', n: waitingN }] : [])
       .concat(statuses.filter((st) => counts[st]).map((st) => ({ k: 's:' + st, t: st, n: counts[st] })));
 
     shell('לידים', `
@@ -1474,9 +1478,18 @@
       <div class="tiles">
         <a class="card tile" href="#/leads" data-filter="s:ליד חדש"><div class="num">${L.newStatus}</div><div class="lbl">בסטטוס "ליד חדש"</div></a>
         <a class="card tile ${L.untreated ? 'alert' : ''}" href="#/untreated"><div class="num">${L.untreated}</div><div class="lbl">לא טופלו יומיים+</div></a>
-        <a class="card tile" href="#/leads" data-filter="active"><div class="num">${L.enteredToday}</div><div class="lbl">נכנסו היום · ${L.enteredWeek} השבוע</div></a>
-        <a class="card tile ${d.zoomAlerts ? 'alert' : ''}" href="#/zooms"><div class="num">${d.zoomAlerts}</div><div class="lbl">זומים לשיוך ידני</div></a>
       </div>
+
+      <div class="section-title">ממתינים – לחזור אליהם אחרי פגישה (${(L.waiting || []).length})</div>
+      ${(L.waiting || []).length ? `<div class="mlist">${L.waiting.map((w) => `
+        <div class="card mrow waiting-row">
+          <div class="grow">
+            <a href="#/lead/${esc(w.id)}" class="waiting-name"><b>${esc(w.name)}</b></a>
+            <div class="muted small">${w.date ? 'זום ' + esc(fmtIso(w.date)) : 'בלי תאריך זום'}${w.notes ? ' · ' + esc(w.notes) : ''}</div>
+          </div>
+          ${telHref(w.phone) ? `<a class="icon-btn round" href="${esc(telHref(w.phone))}" aria-label="חיוג">📞</a>` : ''}
+          ${waNumber(w.phone) ? `<a class="icon-btn round" href="https://wa.me/${esc(waNumber(w.phone))}" target="_blank" rel="noopener" aria-label="ווטסאפ">💬</a>` : ''}
+        </div>`).join('')}</div>` : '<div class="card muted">אין ממתינים כרגע</div>'}
 
       <div class="section-title">זומים ב-7 הימים הקרובים (${L.zoomsWeek.length})</div>
       ${L.zoomsWeek.length ? `<div class="mlist">${L.zoomsWeek.map((z) => `
@@ -1492,13 +1505,9 @@
       <div class="section-title">עסק</div>
       ${d.finError ? `<div class="notice">${esc(d.finError)}</div>` : `
       <div class="tiles">
-        <div class="card tile ${F.toReview ? 'alert' : ''}"><div class="num">${F.toReview}</div><div class="lbl">תנועות "לבדיקה" בפיננסים</div></div>
-        <div class="card tile ${F.coachesLow.length ? 'alert' : ''}"><div class="num">${F.coachesLow.length}</div><div class="lbl">מאמנים עם ≤2 פגישות</div></div>
         <div class="card tile"><div class="num" style="font-size:18px">${esc(F.lastFinUpdate || '—')}</div><div class="lbl">עדכון פיננסים אחרון</div></div>
-        <div class="card tile"><div class="num" style="font-size:18px">שלב 2</div><div class="lbl">ביטולים מאוחרים</div></div>
-      </div>
-      ${F.coachesLow.length ? `<div class="card" style="margin-top:10px">${F.coachesLow.map((c) => `
-        <div class="row" style="padding:6px 0"><span class="grow">${esc(c.name)}</span><span class="pill ${c.left <= 1 ? 'danger' : 'warn'}">נותרו ${c.left} מתוך ${esc(c.package)}</span></div>`).join('')}</div>` : ''}`}
+        <div class="card tile"><div class="num" style="font-size:18px">${esc(F.lastMeetingsRun || 'עוד לא רץ מאז העדכון')}</div><div class="lbl">עדכון פגישות אחרון</div></div>
+      </div>`}
     `);
     $app.querySelectorAll('[data-filter]').forEach((a) => {
       a.addEventListener('click', () => { state.filter = a.dataset.filter; LS.set('lf_filter', state.filter); });
