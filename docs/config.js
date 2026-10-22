@@ -7,4 +7,17 @@ window.APP_CONFIG = {
   // הודעת הווטסאפ המוכנה. {name} = השם הפרטי של הליד, {me} = שם השולח
   waTemplate: 'היי {name}, כאן {me} מ-Liel Fitness 🙂 ראיתי שהשארת פרטים, מתי נוח לך שנדבר?',
   senderNames: { admin: 'ליאל', leads: 'שי' },
+  // הודעת אישור לליד אחרי קביעת זום. {name} שם פרטי, {day} יום בשבוע, {date} DD.MM, {time} HH:mm (שעון ישראל)
+  zoomConfirmTemplate: [
+    'היי {name} זאת שי :)',
+    'אז קבענו ליום {day} {date} בשעה {time}',
+    'לכל שינוי או עדכון בבקשה לעדכן כמה שיותר מראש',
+    'בנוסף יש לך כאן מידע רלוונטי על הליווי וגם מה המאמנים מספרים - שווה לעבור עליו לפני הפגישה ☺️',
+    'https://www.lielfitness.co.il/lp',
+    'ועוד שני קישורים רלוונטים:',
+    'ערוץ ווטסאפ למאמנים ⬇️',
+    'https://whatsapp.com/channel/0029VbDRz5cEawdtrUWQxk0g',
+    'האינסטגרם של ליאל ⬇️',
+    'https://www.instagram.com/liel_fitness',
+  ].join('\n'),
 };

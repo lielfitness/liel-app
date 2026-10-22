@@ -390,3 +390,7 @@ body.no-scroll { overflow: hidden; }
 .booking-foot { text-align: center; padding: 6px 0 calc(var(--safe-b) + 6px); border-top: 1px solid var(--line); }
 .no-email { margin: 6px 0 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .zoom-box { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: #f6fbf8; display: grid; gap: 8px; }
+.wa-preview { white-space: pre-wrap; background: #e7f6dd; border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.5; max-height: 45vh; overflow: auto; direction: rtl; unicode-bidi: plaintext; overflow-wrap: anywhere; }
+.btn.green[disabled] { background: #bfc5cc; border-color: #bfc5cc; }
+.splash { flex-direction: column; gap: 14px; }
+.splash-title { font-size: 22px; font-weight: 800; color: var(--brand); }

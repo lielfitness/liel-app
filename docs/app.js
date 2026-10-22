@@ -162,8 +162,7 @@
     $app.innerHTML = `
       <div class="login">
         <div class="logo-mark">LF</div>
-        <h1>Liel Fitness</h1>
-        <div class="muted">ניהול לידים ועסק</div>
+        <h1>צוות ליאל פיטנס</h1>
         <div id="gbtn"></div>
         ${msg ? `<div class="notice">${esc(msg)}</div>` : ''}
         ${!CFG.clientId ? '<div class="notice">חסר clientId ב-config.js</div>' : ''}
@@ -186,7 +185,7 @@
   }
 
   async function onGoogleCredential(resp) {
-    $app.innerHTML = '<div class="splash"><div class="spinner"></div></div>';
+    $app.innerHTML = '<div class="splash"><div class="logo-mark">LF</div><div class="splash-title">צוות ליאל פיטנס</div></div>';
     try {
       const out = await api('login', { idToken: resp.credential });
       state.session = out.session; state.role = out.role; state.email = out.email;
@@ -248,7 +247,7 @@
     state.viewAs = v;
     if (v) LS.set('lf_viewas', v); else LS.del('lf_viewas');
     state.leads = null; state.month = null; state.alertsCount = 0; leadsFetchedAt = 0; undoStack = null;
-    $app.innerHTML = '<div class="splash"><div class="spinner"></div></div>';
+    $app.innerHTML = '<div class="splash"><div class="logo-mark">LF</div><div class="splash-title">צוות ליאל פיטנס</div></div>';
     location.hash = '';
     await boot();
   }
@@ -866,6 +865,50 @@
     });
   }
 
+  // ---------- אישור זום בווטסאפ ----------
+  const HEB_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+  /** "מאמנת כושר | Daniell Blaish" → "Daniell". אפשר לתקן בחלון לפני השליחה. */
+  function firstName(full) {
+    const parts = String(full || '').split(/[|｜•·–—\-\/]+/).map((x) => x.trim()).filter(Boolean);
+    const generic = /(מאמנ|מאמן|כושר|פילאטיס|סטודיו|fitness|coach|trainer|תזונה|אונליין)/i;
+    const pick = parts.find((x) => !generic.test(x)) || parts[0] || '';
+    const word = pick.replace(/[^\p{L}\p{M}\s'"׳״-]/gu, ' ').trim().split(/\s+/)[0] || '';
+    return word;
+  }
+  /** שעת הפגישה (ms) → יום בשבוע, DD.MM, HH:mm – בשעון ישראל */
+  function zoomParts(ms) {
+    const f = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+    const p = {}; f.formatToParts(new Date(ms)).forEach((x) => { p[x.type] = x.value; });
+    const dayIdx = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday);
+    return { day: HEB_DAYS[dayIdx], date: `${p.day}.${p.month}`, time: `${p.hour === '24' ? '00' : p.hour}:${p.minute}` };
+  }
+  function zoomConfirmText(name, ms) {
+    const z = zoomParts(ms);
+    return String(CFG.zoomConfirmTemplate || '').replace('{name}', name).replace('{day}', z.day).replace('{date}', z.date).replace('{time}', z.time);
+  }
+  function zoomConfirmButton(lead) {
+    const ok = !!waNumber(lead.phone);
+    return `<button class="btn green" data-act="wa-confirm" ${ok ? '' : 'disabled title="לליד אין מספר טלפון"'}>💬 שליחת אישור בווטסאפ</button>${ok ? '' : '<div class="muted small">לליד אין מספר טלפון בגיליון – אי אפשר לשלוח בווטסאפ</div>'}`;
+  }
+  function openZoomConfirm(lead) {
+    const ze = lead.zoomEvent;
+    const n = waNumber(lead.phone);
+    if (!ze || !n) return;
+    const sh = openSheet(`
+      <div class="row"><b class="grow">אישור זום בווטסאפ – ${esc(lead.name)}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="field"><label for="wc-name">שם הליד בהודעה</label><input id="wc-name" value="${esc(firstName(lead.name))}"></div>
+      <div class="wa-preview" id="wc-prev"></div>
+      <a class="btn green" id="wc-send" target="_blank" rel="noopener">💬 פתיחה בווטסאפ</a>`);
+    const inp = sh.el.querySelector('#wc-name'), prev = sh.el.querySelector('#wc-prev'), send = sh.el.querySelector('#wc-send');
+    const draw = () => {
+      const text = zoomConfirmText(inp.value.trim(), ze.start);
+      prev.textContent = text;
+      send.href = `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
+    };
+    inp.oninput = draw; draw();
+    send.addEventListener('click', () => setTimeout(sh.close, 300));
+  }
+
   // ביטול פגישה מהאפליקציה: מיידי במסך, המחיקה ביומן (וההודעה למוזמנים) ברקע
   function cancelZoom(lead) {
     const ze = lead.zoomEvent;
@@ -928,7 +971,16 @@
         const l = d.lead;
         if (l && (l.zoomDate !== before.zoomDate || l.status !== before.status)) {
           setLead(l); showLead(l); markDerivedStale();
-          toast(l.zoomDate ? `✅ זום נקבע ל-${fmtIso(l.zoomDate)}` : 'הליד עודכן');
+          if (l.zoomEvent && l.zoomEvent.start > Date.now()) {
+            const sh = openSheet(`
+              <div class="row"><b class="grow">✅ זום נקבע – ${esc(l.name)}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+              <div>${esc(fmtTs(l.zoomEvent.start))}</div>
+              ${zoomConfirmButton(l)}`);
+            const b = sh.el.querySelector('[data-act="wa-confirm"]');
+            if (b) b.onclick = () => { sh.close(); openZoomConfirm(l); };
+          } else {
+            toast(l.zoomDate ? `✅ זום נקבע ל-${fmtIso(l.zoomDate)}` : 'הליד עודכן');
+          }
           bookingWatch = null;
           return;
         }
@@ -1094,6 +1146,7 @@
             </div>
             ${lead.zoomEvent && lead.zoomEvent.start > Date.now()
               ? `<div class="zoom-box"><div class="small">🎥 זום ב-${esc(fmtTs(lead.zoomEvent.start))}</div>
+                   ${zoomConfirmButton(lead)}
                    <div class="row"><button class="btn secondary grow" data-act="resched">🔁 שינוי מועד</button><button class="btn danger grow" data-act="cancel-zoom">✕ ביטול פגישה</button></div></div>`
               : (state.bookingUrl ? `<button class="btn secondary" style="width:100%;margin-top:10px" data-act="book">🎥 קביעת זום (פגישת אפיון)</button>` : '')}
           </div>
@@ -1158,6 +1211,8 @@
     if (reBtn) reBtn.onclick = () => openBookingHelper(lead, { reschedule: true });
     const cxBtn = $app.querySelector('[data-act="cancel-zoom"]');
     if (cxBtn) cxBtn.onclick = () => cancelZoom(lead);
+    const wcBtn = $app.querySelector('[data-act="wa-confirm"]');
+    if (wcBtn) wcBtn.onclick = () => openZoomConfirm(lead);
     const delBtn = $app.querySelector('[data-act="delete-lead"]');
     if (delBtn) delBtn.onclick = () => deleteLead(lead);
 
