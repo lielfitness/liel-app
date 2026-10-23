@@ -82,9 +82,9 @@ function reinstallTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger('scanZoomBookings').timeBased().everyMinutes(10).create();
   ScriptApp.newTrigger('onLeadsEdit').forSpreadsheet(cfg.leadsSheetId).onEdit().create();
-  ScriptApp.newTrigger('watchNewLeads').timeBased().everyMinutes(1).create();
+  ScriptApp.newTrigger('watchNewLeads').timeBased().everyMinutes(Number(PropertiesService.getScriptProperties().getProperty('WATCH_MINUTES') || 1)).create();
   PropertiesService.getScriptProperties().deleteProperty('CAL_TRIGGER');
   const st = ensureCalendarTrigger_(true);
-  console.log('✅ הטריגרים הותקנו מחדש: סריקת זומים כל 10 דק׳, עריכה בגיליון, שינוי ביומן (' + st + '), בדיקת לידים חדשים כל דקה');
+  console.log('✅ הטריגרים הותקנו מחדש: סריקת זומים כל 10 דק׳, עריכה בגיליון, שינוי ביומן (' + st + '), בדיקת לידים חדשים');
   console.log(hasCalendarWrite_() ? '✅ יש הרשאת כתיבה ליומן' : '❌ אין הרשאת כתיבה ליומן');
 }

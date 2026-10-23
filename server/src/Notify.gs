@@ -323,10 +323,11 @@ function watchNewLeads() {
     return !seen[keys[i]] && !/^ידני/.test(String(l.ad || '')) && (!l.entry || l.entry >= since);
   });
   writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys });
-  if (fresh.length > 5) {
-    notify_('lead_new', { name: fresh.length + ' לידים חדשים', link: '#/leads' });
+  const todo = fresh.filter(function (l) { return claimLeadNotice_(watchKey_(l)); });
+  if (todo.length > 5) {
+    notify_('lead_new', { name: todo.length + ' לידים חדשים', link: '#/leads' });
   } else {
-    fresh.forEach(function (l) { notify_('lead_new', { name: l.name || l.phone, link: '#/lead/' + l.id }); });
+    todo.forEach(function (l) { notify_('lead_new', { name: l.name || l.phone, link: '#/lead/' + l.id }); });
   }
   if (fresh.length) invalidateLeads_();
   watchStats_(t0, true);
@@ -363,21 +364,100 @@ function notifyStatus_() {
     trigger: hasTrigger,
     last: s ? s.last : null,
     runs: s ? s.runs : 0,
+    minutes: Number(PropertiesService.getScriptProperties().getProperty('WATCH_MINUTES') || 1),
     avgMs: s && s.runs ? Math.round(s.ms / s.runs) : 0,
     push: !!PropertiesService.getScriptProperties().getProperty('FCM_SERVICE_ACCOUNT'),
   };
 }
 
-// ---------- נקודת התראות לסקריפטים אחרים (בהמשך) ----------
-/** בקשה בלי התחברות, עם מפתח של הסקריפט השולח. כרגע: סוג "system" בלבד, לליאל. */
+/** מבטיח שעל אותו ליד תצא התראה אחת בלבד (Make והבדיקה כל דקה יכולים לזהות את אותו ליד). */
+function claimLeadNotice_(key) {
+  const lock = LockService.getScriptLock();
+  const got = lock.tryLock(10000);
+  try {
+    const cache = CacheService.getScriptCache();
+    if (cache.get('lnk:' + key)) return false;
+    cache.put('lnk:' + key, '1', 6 * 3600);
+    return true;
+  } finally { if (got) lock.releaseLock(); }
+}
+
+// ---------- נקודת התראות לסקריפטים אחרים (Make וכו') ----------
+/**
+ * בקשה בלי התחברות, עם מפתח של השולח (NOTIFY_KEYS).
+ *   ליד חדש: { action:"notify", key, type:"lead_new", name, phone, email }
+ *     → מוצא את הליד בגיליון (לפי טלפון/מייל) כדי שלחיצה תפתח את הכרטיס שלו. התראה אחת בלבד לליד.
+ *   אחר:     { action:"notify", key, title, text, link } → לליאל בלבד
+ */
 function externalNotify_(req) {
   const keys = readJsonProp_('NOTIFY_KEYS', {});
   const src = Object.keys(keys).filter(function (k) { return keys[k] && keys[k] === req.key; })[0];
   if (!src) throw apiError_('FORBIDDEN', 'מפתח לא תקין');
-  const type = req.type === 'lead_new' ? 'lead_new' : 'system';
-  const n = notify_(type, { name: String(req.name || req.title || src).slice(0, 120), text: String(req.text || '').slice(0, 200), link: String(req.link || '').slice(0, 200) });
+  if (req.type === 'lead_new') {
+    const name = String(req.name || '').trim().slice(0, 120);
+    const pk = phoneKey_(req.phone), em = String(req.email || '').trim().toLowerCase();
+    let lead = null;
+    try {
+      invalidateLeads_();
+      const all = readLeads_(getConfig_()).leads;
+      for (let i = all.length - 1; i >= Math.max(0, all.length - 50) && !lead; i--) {
+        const l = all[i];
+        if ((pk && phoneKey_(l.phone) === pk) || (em && String(l.email || '').trim().toLowerCase() === em)) lead = l;
+      }
+    } catch (e) { console.warn('notify: ' + e); }
+    const key = lead ? watchKey_(lead) : 'ext:' + (pk || em || normName_(name));
+    if (!claimLeadNotice_(key)) return { ok: true, notified: 0, duplicate: true };
+    const n = notify_('lead_new', { name: (lead && lead.name) || name || req.phone || 'ליד', link: lead ? '#/lead/' + lead.id : '#/leads' });
+    return { ok: true, notified: n, found: !!lead };
+  }
+  const n = notify_('system', { name: String(req.title || req.name || src).slice(0, 120), text: String(req.text || '').slice(0, 200), link: String(req.link || '').slice(0, 200) });
   return { ok: true, notified: n };
 }
+
+// ---------- להרצה ידנית מהעורך ----------
+/** יוצר מפתח לשולח חיצוני (ברירת מחדל: make) ומדפיס אותו בלוג – להעתקה ל-Make. מפתח קודם לאותו שולח מוחלף. */
+function createNotifyKey(source) {
+  source = String(source || 'make');
+  const keys = readJsonProp_('NOTIFY_KEYS', {});
+  const key = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+  keys[source] = key;
+  writeJsonProp_('NOTIFY_KEYS', keys);
+  console.log('🔑 המפתח של "' + source + '" (להעתיק ל-Make, לא לשלוח לאף אחד):\n' + key);
+}
+
+/** בודק שההגדרה של Firebase תקינה (בלי לשלוח התראה לאף אחד). */
+function checkPushSetup() {
+  const raw = PropertiesService.getScriptProperties().getProperty('FCM_SERVICE_ACCOUNT');
+  if (!raw) { console.log('❌ חסר FCM_SERVICE_ACCOUNT ב-Script Properties'); return; }
+  let sa;
+  try { sa = JSON.parse(raw); } catch (e) { console.log('❌ FCM_SERVICE_ACCOUNT לא נקרא כ-JSON – כנראה הודבק חלקית. הדביקו שוב את כל הקובץ.'); return; }
+  console.log('פרויקט: ' + sa.project_id + ' · חשבון: ' + String(sa.client_email || '').replace(/^(.{6}).*(@.*)$/, '$1…$2'));
+  CacheService.getScriptCache().remove('fcm_at1');
+  let auth;
+  try { auth = fcmAuth_(); } catch (e) { console.log('❌ ' + e.message); return; }
+  // שליחה "על יבש" למכשיר מומצא: אם ההרשאה תקינה גוגל עונה "מזהה מכשיר לא תקין" (400)
+  const res = UrlFetchApp.fetch('https://fcm.googleapis.com/v1/projects/' + auth.project + '/messages:send', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + auth.token },
+    payload: JSON.stringify({ validate_only: true, message: { token: 'bad-token-check', data: { t: 'x' } } }),
+  });
+  const code = res.getResponseCode();
+  if (code === 400 || code === 200) console.log('✅ Firebase מוגדר נכון – אפשר להפעיל התראות בטלפון');
+  else if (code === 403) console.log('❌ אין הרשאה (403). ב-Firebase: Project settings ← Cloud Messaging – ודאו ש-"Firebase Cloud Messaging API (V1)" במצב Enabled.\n' + res.getContentText().slice(0, 300));
+  else console.log('❌ Firebase החזיר ' + code + ':\n' + res.getContentText().slice(0, 300));
+  const devs = sysRows_('devices').rows.filter(function (r) { return r[1]; });
+  console.log('טלפונים רשומים: ' + devs.length);
+}
+
+/** משנה את תדירות הבדיקה של לידים חדשים (1/5/10/15/30 דק׳) – למשל אחרי שההתראה מ-Make עובדת. */
+function setLeadWatchMinutes(n) {
+  n = [1, 5, 10, 15, 30].indexOf(Number(n)) >= 0 ? Number(n) : 15;
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'watchNewLeads') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('watchNewLeads').timeBased().everyMinutes(n).create();
+  PropertiesService.getScriptProperties().setProperty('WATCH_MINUTES', String(n));
+  console.log('✅ בדיקת לידים חדשים: כל ' + n + ' דק׳ (גיבוי ל-Make)');
+}
+function setLeadWatch15() { setLeadWatchMinutes(15); }
 
 // ---------- הפעלה ראשונה (מהעורך) ----------
 /** יוצר את גיליון המערכת ואת טריגר הבדיקה כל דקה (רק בפרויקט הזה). לא נוגע בטריגרים אחרים. */

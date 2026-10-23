@@ -1680,7 +1680,7 @@
         ${d.zoomAuto.last ? `<br>אחרון: ${esc(d.zoomAuto.last.name)} – עודכן ${d.zoomAuto.last.seconds != null ? `תוך ${d.zoomAuto.last.seconds < 120 ? d.zoomAuto.last.seconds + ' שניות' : Math.round(d.zoomAuto.last.seconds / 60) + ' דקות'}` : ''} מהקביעה (${esc(d.zoomAuto.last.via)}, התאמה לפי ${esc(d.zoomAuto.last.how || '')})` : ''}
       </div>` : ''}
       ${d.notify ? `<div class="card small" style="margin-top:10px">
-        <b>התראות:</b> ${d.notify.trigger ? `בדיקת לידים חדשים כל דקה ✅${d.notify.last ? ` · אחרונה ${esc(fmtTs(d.notify.last))}` : ''}${d.notify.runs ? ` · היום ${d.notify.runs} בדיקות, ממוצע ${(d.notify.avgMs / 1000).toFixed(1)} שנ׳ (≈${Math.round(d.notify.avgMs * 1440 / 60000)} דק׳ ביום מתוך 90 המותרות)` : ''}` : '❌ בדיקת לידים חדשים לא פעילה – צריך להריץ setupNotifications בעורך הסקריפט'}
+        <b>התראות:</b> ${d.notify.trigger ? `בדיקת לידים חדשים ${(d.notify.minutes || 1) > 1 ? `כל ${d.notify.minutes} דק׳ (גיבוי ל-Make)` : 'כל דקה'} ✅${d.notify.last ? ` · אחרונה ${esc(fmtTs(d.notify.last))}` : ''}${d.notify.runs ? ` · היום ${d.notify.runs} בדיקות, ממוצע ${(d.notify.avgMs / 1000).toFixed(1)} שנ׳ (≈${Math.round(d.notify.avgMs * 1440 / (d.notify.minutes || 1) / 60000)} דק׳ ביום מתוך 90 המותרות)` : ''}` : '❌ בדיקת לידים חדשים לא פעילה – צריך להריץ setupNotifications בעורך הסקריפט'}
         <br>${d.notify.push ? 'Push לטלפון: מוגדר ✅' : 'Push לטלפון: עוד לא הוגדר (Firebase)'}
       </div>` : ''}
 

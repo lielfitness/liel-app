@@ -8,8 +8,16 @@ window.APP_CONFIG = {
   waTemplate: 'היי {name}, כאן {me} מ-Liel Fitness 🙂 ראיתי שהשארת פרטים, מתי נוח לך שנדבר?',
   senderNames: { admin: 'ליאל', leads: 'שי' },
   // התראות Push (Firebase). לא סודות – מותר בריפו הציבורי. ריק = רק מרכז ההתראות באפליקציה.
-  firebase: null,   // { apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId }
-  vapidKey: '',     // Cloud Messaging ← Web Push certificates ← Key pair
+  firebase: {
+    apiKey: 'AIzaSyDQvRYDFMr4_EEA5J8oYG4yIHVXc6_ZZzg',
+    authDomain: 'liel-app.firebaseapp.com',
+    projectId: 'liel-app',
+    storageBucket: 'liel-app.firebasestorage.app',
+    messagingSenderId: '673299519677',
+    appId: '1:673299519677:web:8805a45f7e0800ebf8ffd4',
+  },
+  // Cloud Messaging ← Web Push certificates (מפתח ציבורי)
+  vapidKey: 'BMmLwP3VmcUgBmniNJQZn57QbyIlmxg36VUUM2PmPA7jyp3K7rVCMeJRFcqG-dN1NjKPPMlsyyy8B_b87Ej-MDY',
   // הודעת אישור לליד אחרי קביעת זום. {name} שם פרטי, {day} יום בשבוע, {date} DD.MM, {time} HH:mm (שעון ישראל)
   zoomConfirmTemplate: [
     'היי {name} זאת שי :)',
