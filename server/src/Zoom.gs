@@ -525,10 +525,37 @@ function actionDismissZoom_(req) {
 }
 
 /** להרצה ידנית מהעורך פעם אחת: מאשר את הרשאת הכתיבה ליומן ובודק שהיא עובדת (לא משנה כלום). */
+/**
+ * להרצה ידנית מהעורך: מבקש את כל ההרשאות שבקובץ ההגדרות (כולל כתיבה ליומן).
+ * אם חסרה הרשאה – גוגל פותח חלון אישור. בסוף בודק בפועל אם אפשר למחוק פגישות.
+ */
 function authorizeCalendarWrite() {
-  const calId = zoomCalendar_(getConfig_()).getId();
-  const res = Calendar.Events.list(calId, { maxResults: 1, timeMin: new Date().toISOString(), singleEvents: true });
-  console.log('✅ הרשאת יומן תקינה (' + calId + '). "ביטול פגישה" ו"שינוי מועד" מהאפליקציה פעילים. ' + ((res.items || []).length ? '' : ''));
+  // אם חסרה הרשאה – זה עוצר כאן ומקפיץ את חלון האישור של גוגל (לא תופסים את השגיאה בכוונה)
+  if (typeof ScriptApp.requireAllScopes === 'function') ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
+  const info = ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL);
+  if (info.getAuthorizationStatus() === ScriptApp.AuthorizationStatus.REQUIRED) {
+    console.log('❌ חסרות הרשאות. פתח את הקישור הזה בדפדפן, בחר את החשבון שלך, סמן את כל התיבות ולחץ Allow:\n' + info.getAuthorizationUrl());
+  }
+  console.log('הרשאות שניתנו: ' + (grantedScopes_() || '(לא ידוע)'));
+  CacheService.getScriptCache().remove('cal_write_v1');
+  const r = calendarWriteProbe_();
+  console.log(r.ok ? '✅ יש הרשאת כתיבה ליומן – "ביטול פגישה" ו"שינוי מועד" מהאפליקציה יעבדו.' : '❌ אין הרשאת כתיבה ליומן: ' + r.error);
+}
+
+/**
+ * בדיקה אמיתית בלי לשנות כלום: ניסיון למחוק פגישה שלא קיימת.
+ * "לא נמצא" (404/410) = יש הרשאה. "אין הרשאה" (403/insufficient) = אין.
+ */
+function calendarWriteProbe_() {
+  try {
+    const calId = zoomCalendar_(getConfig_()).getId();
+    Calendar.Events.remove(calId, 'lfprobe0000000000000000000', { sendUpdates: 'none' });
+    return { ok: true };
+  } catch (e) {
+    const m = String(e.message || e);
+    if (/not\s*found|404|410|deleted|לא נמצא/i.test(m)) return { ok: true };
+    return { ok: false, error: m };
+  }
 }
 
 /** קישור פגישה שמצביע על מזהה ליד ישן (למשל אחרי שנוסף מייל) → מתקנים לפי שורה + שם. */
@@ -556,5 +583,10 @@ function grantedScopes_() {
 }
 
 function hasCalendarWrite_() {
-  return (' ' + grantedScopes_() + ' ').indexOf(' https://www.googleapis.com/auth/calendar ') >= 0;
+  const cache = CacheService.getScriptCache();
+  const c = cache.get('cal_write_v1');
+  if (c) return c === '1';
+  const ok = calendarWriteProbe_().ok;
+  cache.put('cal_write_v1', ok ? '1' : '0', ok ? 3600 : 120);
+  return ok;
 }
