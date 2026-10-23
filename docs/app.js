@@ -23,6 +23,7 @@
     search: '',
     month: null,
     undoCount: 0,
+    redoCount: 0,
   };
 
   const $app = document.getElementById('app');
@@ -102,17 +103,27 @@
     const text = String(CFG.waTemplate || '').replace('{name}', first).replace('{me}', me);
     return `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
   }
+  // צבע לכל סטטוס – לפי הרשימה הנפתחת בגיליון (רקע, טקסט)
+  const STATUS_COLORS = {
+    'ליד חדש': ['#d0e4f5', '#0b4a80'],
+    'ניסיון שיחה': ['#ffe5a0', '#473821'],
+    'WA נשלח': ['#fff3cd', '#7a5a00'],
+    'שיחה בוצעה': ['#d4edda', '#155724'],
+    'זום נקבע': ['#11734b', '#d4edbc'],
+    'פגישה בוטלה': ['#ffcc99', '#993f00'],
+    'נסגר': ['#b2dfdb', '#004d40'],
+    'Ghosting': ['#3d3d3d', '#e5e5e5'],
+    'לא מעוניין': ['#b10202', '#ffcfc9'],
+    'עתידי': ['#e6cff2', '#5a3286'],
+    'לא רלוונטי': ['#ffcfc9', '#b10202'],
+  };
+  function statusStyle(key) {
+    const c = STATUS_COLORS[key];
+    return c ? `background:${c[0]};color:${c[1]};border-color:${c[0]}` : '';
+  }
   function statusPill(s, key) {
     if (!s) return '<span class="pill warn">ללא סטטוס</span>';
-    const raw = s; s = key || s;
-    let cls = '';
-    if (s === 'Ghosting') cls = 'ghost';
-    else if (s === 'נסגר') cls = 'hot';
-    else if (FINAL.includes(s)) cls = 'final';
-    else if (s === 'זום נקבע') cls = 'hot';
-    else if (s === 'ליד חדש') cls = 'warn';
-    else if (s === 'פגישה בוטלה') cls = 'cancel';
-    return `<span class="pill ${cls}">${esc(raw)}</span>`;
+    return `<span class="pill" style="${statusStyle(key || String(s).trim())}">${esc(s)}</span>`;
   }
   function isAdmin() { return state.role === 'admin'; }
   /** הסטטוס המנורמל מהשרת (בלי רווחים מיותרים / כתיב שונה) */
@@ -212,8 +223,11 @@
     return state.leads ? state.leads.filter((l) => l.untreated).length : 0;
   }
 
+  let lastShellHash = '';
   function shell(title, content, opts) {
     opts = opts || {};
+    const keepY = lastShellHash === location.hash ? window.scrollY : null;
+    lastShellHash = location.hash;
     const cur = '#/' + (location.hash.replace(/^#\/?/, '').split('/')[0] || '');
     const nav = navItems();
     const link = (n) => `<a href="${n.h}" class="${cur === n.h ? 'active' : ''}"><span class="ico">${n.ico}</span><span>${esc(n.t)}</span>${n.badge ? `<span class="badge">${n.badge}</span>` : ''}</a>`;
@@ -223,24 +237,40 @@
         <h1>${esc(title)}</h1>
         <nav class="topnav">${nav.map(link).join('')}</nav>
         <span class="spacer"></span>
-        ${state.alertsCount ? `<a class="icon-btn" href="#/zooms" title="זומים לשיוך" style="text-decoration:none">📅<span class="badge">${state.alertsCount}</span></a>` : ''}
+        <a class="icon-btn" data-alerts href="#/zooms" title="זומים לשיוך" style="text-decoration:none" ${state.alertsCount ? '' : 'hidden'}>📅<span class="badge">${state.alertsCount}</span></a>
         ${state.realRole === 'admin' && !state.viewAs ? `<button class="icon-btn" data-act="viewas-on" title="תצוגה כמו שי" style="font-size:14px">👁 כמו שי</button>` : ''}
         <button class="icon-btn undo-btn" data-act="undo" aria-label="בטל פעולה אחרונה" title="בטל (פעולה אחרונה)" ${state.undoCount ? '' : 'disabled'}>↶</button>
+        <button class="icon-btn undo-btn" data-act="redo" aria-label="בצע שוב" title="בצע שוב (מחזיר פעולה שבוטלה)" ${state.redoCount ? '' : 'disabled'}>↷</button>
         <button class="icon-btn" data-act="refresh" aria-label="רענון" title="רענון">🔄</button>
         <button class="icon-btn" data-act="logout" aria-label="יציאה" title="יציאה (${esc(state.email)})" style="font-size:14px">יציאה</button>
       </header>
       ${state.viewAs ? `<div class="viewas-bar"><span>👁 תצוגה כמו שי – כך היא רואה את האפליקציה. שמירות נכתבות באמת לגיליון.</span><button class="btn small secondary" data-act="viewas-off">חזרה לתצוגה שלי</button></div>` : ''}
       <main>${content}</main>
       <nav class="bottomnav">${nav.map(link).join('')}</nav>`;
-    $app.querySelector('[data-act="refresh"]').onclick = () => { leadsFetchedAt = 0; state.forceFresh = true; route(); refreshAlerts(); };
+    $app.querySelector('[data-act="refresh"]').onclick = () => { state.forceFresh = true; softRefresh(); refreshAlerts(); toast('מרענן…'); };
     $app.querySelector('[data-act="logout"]').onclick = () => { if (confirm('לצאת מהאפליקציה?')) logout(); };
     $app.querySelector('[data-act="undo"]').onclick = undoLast;
+    $app.querySelector('[data-act="redo"]').onclick = redoLast;
     const vOn = $app.querySelector('[data-act="viewas-on"]');
     if (vOn) vOn.onclick = () => setViewAs('leads');
     const vOff = $app.querySelector('[data-act="viewas-off"]');
     if (vOff) vOff.onclick = () => setViewAs('');
     const back = $app.querySelector('[data-act="back"]');
     if (back) back.onclick = () => (history.length > 1 ? history.back() : (location.hash = '#/leads'));
+    if (keepY != null) window.scrollTo(0, keepY);
+  }
+
+  /** מספרים בכותרת ובתפריט – מתעדכנים במקום, בלי לצייר את המסך מחדש */
+  function updateBadges() {
+    const a = $app.querySelector('[data-alerts]');
+    if (a) { a.hidden = !state.alertsCount; a.querySelector('.badge').textContent = state.alertsCount; }
+    const n = untreatedCount();
+    $app.querySelectorAll('a[href="#/untreated"]').forEach((el) => {
+      let b = el.querySelector('.badge');
+      if (!n) { if (b) b.remove(); return; }
+      if (!b) { b = document.createElement('span'); b.className = 'badge'; el.appendChild(b); }
+      b.textContent = n;
+    });
   }
 
   async function setViewAs(v) {
@@ -263,7 +293,8 @@
   }
   function persistLeads() {
     if (!state.leads || !state.meta) return;
-    store.set('leads', Object.assign({ leads: state.leads }, state.meta));
+    store.set('leads', Object.assign({ leads: state.leads.filter((l) => !l._pending) }, state.meta));
+    updateBadges();
   }
 
   let leadsFetch = null, leadsFetchedAt = 0;
@@ -276,8 +307,10 @@
       leadsFetchedAt = Date.now();
       // לידים עם שמירה שעוד בדרך – נשארים בגרסה המקומית
       const local = {};
-      (state.leads || []).forEach((l) => { if (pendingByLead[l.id]) local[l.id] = l; });
-      d.leads = d.leads.map((l) => local[l.id] || l);
+      (state.leads || []).forEach((l) => { if (isPending(l.id)) local[l.id] = l; });
+      const pk = (x) => String(x || '').replace(/\D/g, '').slice(-9);
+      const temps = (state.leads || []).filter((t) => t._pending && !d.leads.some((x) => pk(x.phone) === pk(t.phone) && x.entry === t.entry));
+      d.leads = temps.concat(d.leads.map((l) => local[l.id] || l));
       const before = JSON.stringify(state.leads);
       applyLeadsData(d);
       persistLeads();
@@ -332,7 +365,7 @@
     try {
       const d = await api('zoomAlerts');
       const n = d.alerts.length;
-      if (n !== state.alertsCount) { state.alertsCount = n; if (!isEditing() && !cardBusy()) route(); }
+      if (n !== state.alertsCount) { state.alertsCount = n; updateBadges(); }
     } catch (e) { /* לא קריטי */ }
   }
 
@@ -410,52 +443,78 @@
     if (!state.leads && !store.get('leads')) loading('לידים');
     try { await ensureLeads(); } catch (e) { return errorView('לידים', e); }
     renderLeadsView();
-    revalidateLeads(() => {
-      if (isEditing()) {   // באמצע הקלדה: רק מעדכנים שורות קיימות
-        state.leads.forEach((l) => { if (rowEl(l.id)) patchRow(l.id, l); });
-      } else {
-        const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y);
-      }
-    });
+    revalidateLeads(updateLeadsView);
   }
 
-  function renderLeadsView() {
+  // שורות שנערכו במסך הזה נשארות גלויות גם אם כבר לא מתאימות לסינון (עד שמחליפים סינון/חיפוש)
+  let stickyIds = new Set();
+  function leadsListNow() {
+    return state.leads.filter((l) => stickyIds.has(l.id) || (matchesFilter(l, state.filter) && matchSearch(l, state.search))).sort(sortNewest);
+  }
+  function chipsHtml() {
     const statuses = state.meta.statuses;
-    if (state.filter === 'all') state.filter = 'active';
     const counts = {};
     statuses.forEach((st) => { counts[st] = state.leads.filter((l) => matchesFilter(l, 's:' + st)).length; });
-    if (state.filter === 'waiting' && !state.meta.waitingFilter) state.filter = 'active';
     const waitingN = state.leads.filter((l) => matchesFilter(l, 'waiting')).length;
     const chips = FILTERS.map((f) => ({ k: f.k, t: f.t, n: state.leads.filter(f.f).length }))
       .concat(state.meta.waitingFilter ? [{ k: 'waiting', t: 'ממתינים', n: waitingN }] : [])
       .concat(statuses.filter((st) => counts[st]).map((st) => ({ k: 's:' + st, t: st, n: counts[st] })));
+    return chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span></button>`).join('');
+  }
+  function rowFromHtml(l) {
+    const t = document.createElement('div'); t.innerHTML = gridRowHtml(l).trim(); return t.firstChild;
+  }
+  /** מסנכרן את השורות במסך מול הרשימה: מעדכן/מוסיף/מסיר רק מה שהשתנה. שורה שמקלידים בה לא זזה ולא נמחקת. */
+  function drawResults() {
+    const res = document.getElementById('results');
+    if (!res) return;
+    const list = leadsListNow();
+    const grid = res.querySelector('.grid');
+    if (!grid || !list.length) { res.innerHTML = gridHtml(list); return; }
+    const map = {};
+    grid.querySelectorAll('.g-row[data-id]').forEach((el) => { map[el.dataset.id] = el; });
+    let prev = grid.querySelector('.g-head');
+    list.forEach((l) => {
+      let el = map[l.id];
+      if (el) { delete map[l.id]; patchRow(l.id, l); } else el = rowFromHtml(l);
+      if (prev.nextSibling !== el) prev.after(el);
+      prev = el;
+    });
+    Object.values(map).forEach((el) => { if (!el.contains(document.activeElement)) el.remove(); });
+  }
+  function updateLeadsView() {
+    if (location.hash !== '#/leads' || !document.getElementById('results') || !state.leads) return;
+    const c = document.getElementById('chips');
+    if (c) c.innerHTML = chipsHtml();
+    drawResults();
+  }
+
+  function renderLeadsView() {
+    if (state.filter === 'all') state.filter = 'active';
+    if (state.filter === 'waiting' && !state.meta.waitingFilter) state.filter = 'active';
+    stickyIds = new Set();
 
     shell('לידים', `
       <div class="row search-row">
         <input class="search grow" type="search" placeholder="חיפוש לפי שם, טלפון או מייל" value="${esc(state.search)}" id="q" autocomplete="off">
         <button class="btn add-lead" data-act="add-lead">＋ ליד</button>
       </div>
-      <div class="chips">${chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span></button>`).join('')}</div>
+      <div class="chips" id="chips">${chipsHtml()}</div>
       <div id="results"></div>`);
 
-    const draw = () => {
-      const f = state.filter;
-      let list = state.leads.filter((l) => matchesFilter(l, f));
-      list = list.filter((l) => matchSearch(l, state.search)).sort(sortNewest);
-      document.getElementById('results').innerHTML = gridHtml(list);
-    };
     bindGrid(document.getElementById('results'));
-    draw();
+    drawResults();
     $app.querySelector('[data-act="add-lead"]').onclick = openAddLead;
     const q = document.getElementById('q');
-    q.oninput = () => { state.search = q.value.trim(); draw(); };
-    $app.querySelectorAll('.chip[data-f]').forEach((b) => {
-      b.onclick = () => {
-        state.filter = b.dataset.f; LS.set('lf_filter', state.filter);
-        $app.querySelectorAll('.chip[data-f]').forEach((x) => x.classList.toggle('on', x === b));
-        draw();
-      };
-    });
+    q.oninput = () => { state.search = q.value.trim(); stickyIds = new Set(); drawResults(); };
+    document.getElementById('chips').onclick = (ev) => {
+      const b = ev.target.closest('.chip[data-f]');
+      if (!b) return;
+      state.filter = b.dataset.f; LS.set('lf_filter', state.filter);
+      $app.querySelectorAll('.chip[data-f]').forEach((x) => x.classList.toggle('on', x === b));
+      stickyIds = new Set();
+      drawResults();
+    };
   }
 
   // ---------- רשימה עם עריכה ישירה (כמו שיטס) ----------
@@ -481,7 +540,7 @@
     const key = sk(l);
     const list = state.meta.statuses.includes(key) || !key ? state.meta.statuses : [l.status].concat(state.meta.statuses);
     const cur = state.meta.statuses.includes(key) ? key : l.status;
-    return `<select class="st-sel ${key === 'Ghosting' ? 'ghost' : key === 'פגישה בוטלה' ? 'cancel' : ''}" data-status aria-label="סטטוס">
+    return `<select class="st-sel" style="${statusStyle(key)}" data-status aria-label="סטטוס">
       ${key ? '' : '<option value="" selected>— בחרי —</option>'}
       ${list.map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('')}
     </select>`;
@@ -519,6 +578,12 @@
   const pendingByLead = {};   // id → מספר שמירות שעוד בדרך
   const queueByLead = {};     // id → שרשרת שמירות (לפי הסדר, אחת אחרי השנייה)
   const seqByLead = {};
+  const aliasOf = {};         // tmp-… → המזהה האמיתי, אחרי שליד שנוסף ידנית נשמר בגיליון
+  function realId(id) { return aliasOf[id] || id; }
+  function findLead(id) { id = realId(id); return (state.leads || []).find((l) => l.id === id) || null; }
+  function isPending(id) {
+    return !!pendingByLead[id] || Object.keys(aliasOf).some((t) => aliasOf[t] === id && pendingByLead[t]);
+  }
 
   function p2(n) { return String(n).padStart(2, '0'); }
   function todayText() { const d = new Date(); return `${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear()}`; }
@@ -570,6 +635,7 @@
    */
   function optimistic(lead, action, params, hooks) {
     hooks = hooks || {};
+    lead = findLead(lead.id) || lead;   // תמיד על הגרסה העדכנית שבזיכרון
     const before = lead;
     const local = applyLocal(lead, action, params);
     setLead(local);
@@ -578,15 +644,19 @@
     const seq = (seqByLead[id] = (seqByLead[id] || 0) + 1);
     pendingByLead[id] = (pendingByLead[id] || 0) + 1;
     const undoEntry = { leadId: id, before: before };
-    pushUndoLocal(undoEntry);
-    state.undoCount++; updateUndoBtn();
-    const run = () => api(action, Object.assign({ row: lead.row, id: id }, params));
+    pushUndoLocal(undoEntry); clearRedoLocal();
+    state.undoCount++; state.redoCount = 0; updateUndoBtn();
+    const run = () => {
+      const cur = findLead(id) || lead;
+      if (String(cur.id).startsWith('tmp-')) return Promise.reject(new Error('הליד עוד לא נשמר בגיליון'));
+      return api(action, Object.assign({}, params, { row: cur.row, id: cur.id }));
+    };
     const p = (queueByLead[id] || Promise.resolve()).catch(() => {}).then(run);
     queueByLead[id] = p;
     p.then((d) => {
       markDerivedStale();
-      if (d.undoCount != null) { state.undoCount = d.undoCount; updateUndoBtn(); }
-      if (seq === seqByLead[id] && d.lead) { setLead(d.lead); hooks.onChange && hooks.onChange(d.lead, 'server'); }
+      if (d.undoCount != null) { state.undoCount = d.undoCount; state.redoCount = d.redoCount || 0; updateUndoBtn(); }
+      if (seq === seqByLead[realId(id)] && d.lead) { setLead(d.lead); hooks.onChange && hooks.onChange(d.lead, 'server'); }
       hooks.onOk && hooks.onOk(d);
       if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
       if (d.reward && d.reward.warning) toast('⚠️ ' + d.reward.warning, true);
@@ -594,7 +664,7 @@
       if (e.code === 'AUTH') return;
       state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
       dropUndoLocal(undoEntry);
-      if (seq === seqByLead[id]) { setLead(before); hooks.onChange && hooks.onChange(before, 'revert'); }
+      if (seq === seqByLead[realId(id)]) { const b = findLead(id) ? withId(before, findLead(id)) : before; setLead(b); hooks.onChange && hooks.onChange(b, 'revert'); }
       hooks.onFail && hooks.onFail(e);
       toast('השינוי לא נשמר בגיליון והוחזר למצב הקודם: ' + e.message, true);
     }).finally(() => {
@@ -611,57 +681,116 @@
   function saveUndoStack() { store.set('undo', getUndoStack().slice(-15)); }
   function pushUndoLocal(entry) { const st = getUndoStack(); st.push(entry); while (st.length > 15) st.shift(); saveUndoStack(); }
   function dropUndoLocal(entry) { const st = getUndoStack(); const i = st.indexOf(entry); if (i >= 0) { st.splice(i, 1); saveUndoStack(); } }
+  // ↷: מה שבוטל – כדי שה"בצע שוב" יופיע במסך מיד
+  let redoStack = null;
+  function getRedoStack() { if (!redoStack) redoStack = store.get('redo') || []; return redoStack; }
+  function saveRedoStack() { store.set('redo', getRedoStack().slice(-15)); }
+  function pushRedoLocal(entry) { const st = getRedoStack(); st.push(entry); while (st.length > 15) st.shift(); saveRedoStack(); }
+  function dropRedoLocal(entry) { const st = getRedoStack(); const i = st.indexOf(entry); if (i >= 0) { st.splice(i, 1); saveRedoStack(); } }
+  function clearRedoLocal() { redoStack = []; saveRedoStack(); }
+  /** גרסה שמורה של ליד, עם המזהה והשורה של הליד כפי שהוא עכשיו */
+  function withId(saved, cur) { return Object.assign({}, saved, { id: cur.id, row: cur.row, _pending: cur._pending }); }
 
+  /** מציג ליד שהשתנה – רק במקום שבו הוא מופיע במסך */
   function showLead(lead) {
     if (rowEl(lead.id)) patchRow(lead.id, lead);
     else if (onLeadCard(lead.id)) { if (!cardBusy()) renderLead(lead); }
-    else if (!isEditing()) route();
+    else if (location.hash === '#/untreated' && !isEditing()) renderUntreated();
   }
 
   function updateUndoBtn() {
     const b = $app.querySelector('[data-act="undo"]');
     if (b) b.disabled = !state.undoCount;
+    const r = $app.querySelector('[data-act="redo"]');
+    if (r) r.disabled = !state.redoCount;
+  }
+  function syncUndoCounts(d) {
+    if (d && d.undoCount != null) state.undoCount = d.undoCount;
+    if (d && d.redoCount != null) state.redoCount = d.redoCount;
+    updateUndoBtn();
+  }
+  function refetchUndoCounts() { api('undoCount').then(syncUndoCounts).catch(() => {}); }
+
+  /** רענון ברקע של המסך הנוכחי – מעדכן רק מה שהשתנה */
+  function onLeadsChanged() {
+    updateBadges();
+    const parts = location.hash.replace(/^#\/?/, '').split('/');
+    if (parts[0] === 'leads') updateLeadsView();
+    else if (parts[0] === 'lead' && parts[1]) { const l = findLead(decodeURIComponent(parts[1])); if (l && !cardBusy()) renderLead(l); }
+    else if (parts[0] === 'untreated' && !isEditing()) renderUntreated();
+  }
+  function softRefresh() {
+    const page = location.hash.replace(/^#\/?/, '').split('/')[0];
+    if (!['leads', 'lead', 'untreated'].includes(page) && !isEditing()) route();   // מסכים אחרים: מוצגים מהזיכרון ומתעדכנים
+    leadsFetchedAt = 0;
+    refreshLeads(true).then((ch) => { if (ch) onLeadsChanged(); }).catch(() => {});
   }
   let undoChain = Promise.resolve();
-  function undoLast() {
-    if (!state.undoCount) return;
-    // מיידי: מחזירים את הליד במסך למצב שלפני הפעולה
-    const entry = getUndoStack().pop() || null;
-    saveUndoStack();
-    let current = null, reinserted = false;
-    if (entry && entry.kind === 'delete' && state.leads && !state.leads.find((l) => l.id === entry.leadId)) {
+  /**
+   * ↶ ו-↷: המסך משתנה מיד (מהמחסנית המקומית), הגיליון ברקע – לפי הסדר, אחרי שכל השמירות שבדרך הסתיימו.
+   * אם הגיליון לא מאשר – המסך חוזר למה שהיה.
+   */
+  function undoRedo(isUndo) {
+    if (!(isUndo ? state.undoCount : state.redoCount)) return;
+    const entry = (isUndo ? getUndoStack() : getRedoStack()).pop() || null;
+    isUndo ? saveUndoStack() : saveRedoStack();
+    let current = null, reinserted = false, removed = null, removedAt = -1, back = null;
+    if (entry && entry.kind === 'delete' && state.leads && !findLead(entry.leadId)) {
+      // ↶ מחיקה → הליד חוזר
       state.leads.splice(Math.max(0, entry.at || 0), 0, entry.before); persistLeads(); reinserted = true;
-      if (location.hash === '#/leads' && !isEditing()) renderLeadsView();
+      back = { kind: 'redelete', leadId: entry.leadId, before: entry.before, at: entry.at };
+      updateLeadsView();
+    } else if (entry && entry.kind === 'redelete' && state.leads) {
+      // ↷ מחיקה → הליד יורד שוב
+      removedAt = state.leads.findIndex((l) => l.id === entry.leadId);
+      if (removedAt >= 0) {
+        removed = state.leads[removedAt]; state.leads.splice(removedAt, 1); persistLeads();
+        back = { kind: 'delete', leadId: removed.id, before: removed, at: removedAt };
+        if (onLeadCard(removed.id)) location.hash = '#/leads'; else updateLeadsView();
+      }
     } else if (entry && state.leads) {
-      current = state.leads.find((l) => l.id === entry.leadId) || null;
-      if (current) { setLead(entry.before); showLead(entry.before); }
+      current = findLead(entry.leadId);
+      if (current) {
+        const b = withId(entry.before, current);
+        setLead(b); showLead(b);
+        back = { leadId: current.id, before: current };
+      }
     }
-    state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
-    toast(entry ? '↶ בוטל' : 'מבטל…');
-    // ברקע: הביטול בגיליון (לפי הסדר, אחרי שכל השמירות שבדרך הסתיימו)
+    if (back) (isUndo ? pushRedoLocal : pushUndoLocal)(back);
+    if (isUndo) { state.undoCount = Math.max(0, state.undoCount - 1); state.redoCount++; }
+    else { state.redoCount = Math.max(0, state.redoCount - 1); state.undoCount++; }
+    updateUndoBtn();
+    toast(isUndo ? '↶ בוטל' : '↷ בוצע שוב');
+    const revert = () => {
+      if (current) { setLead(current); showLead(current); }
+      if (reinserted) { state.leads = state.leads.filter((l) => l.id !== entry.leadId); persistLeads(); updateLeadsView(); }
+      if (removed) { state.leads.splice(Math.max(0, removedAt), 0, removed); persistLeads(); updateLeadsView(); }
+      if (back) (isUndo ? dropRedoLocal : dropUndoLocal)(back);
+      if (entry) (isUndo ? pushUndoLocal : pushRedoLocal)(entry);
+    };
     undoChain = undoChain.then(async () => {
       await Promise.allSettled(Object.values(queueByLead));
       try {
-        const d = await api('undo');
-        if (d.undoCount != null) state.undoCount = d.undoCount;
+        const d = await api(isUndo ? 'undo' : 'redo');
+        syncUndoCounts(d);
         if (d.done) {
           if (d.lead) { setLead(d.lead); showLead(d.lead); }
           toast(d.message + (d.warning ? ' · ⚠️ ' + d.warning : ''), !!d.warning);
+          markDerivedStale();
         } else {
-          // הגיליון לא אישר (למשל מישהו שינה מאז) → המסך חוזר למה שהיה
-          if (current) { setLead(current); showLead(current); }
-          if (reinserted) { state.leads = state.leads.filter((l) => l.id !== entry.leadId); persistLeads(); if (location.hash === '#/leads') renderLeadsView(); }
+          revert();
           toast(d.message, true);
-          leadsFetchedAt = 0; refreshLeads(true).then((ch) => { if (ch && !isEditing() && !cardBusy()) route(); }).catch(() => {});
+          softRefresh();
         }
       } catch (e) {
-        if (current) { setLead(current); showLead(current); }
-        if (e.code !== 'AUTH') toast('הביטול נכשל, המסך הוחזר: ' + e.message, true);
-        api('undoCount').then((c) => { state.undoCount = c.undoCount; updateUndoBtn(); }).catch(() => {});
+        revert();
+        if (e.code !== 'AUTH') toast((isUndo ? 'הביטול' : 'הביצוע מחדש') + ' נכשל, המסך הוחזר: ' + e.message, true);
+        refetchUndoCounts();
       }
-      updateUndoBtn();
     });
   }
+  function undoLast() { undoRedo(true); }
+  function redoLast() { undoRedo(false); }
 
   function rowEl(id) { return $app.querySelector(`.g-row[data-id="${CSS.escape(id)}"]`); }
 
@@ -681,8 +810,15 @@
     if (!el || !lead) return;
     el.dataset.id = lead.id;
     el.classList.toggle('untreated', !!lead.untreated);
+    el.classList.toggle('pending', !!lead._pending);
+    const nm = el.querySelector('.g-name a');
+    nm.textContent = lead.name || '(ללא שם)'; nm.setAttribute('href', '#/lead/' + lead.id);
+    const ph = el.querySelector('.g-phone a');
+    ph.textContent = lead.phone || ''; ph.setAttribute('href', telHref(lead.phone));
+    el.querySelector('.g-entry').textContent = fmtIso(lead.entry) || lead.entryRaw || '';
     el.querySelector('.g-att').innerHTML = attemptsHtml(lead);
-    el.querySelector('.g-status').innerHTML = statusSelect(lead);
+    const sel = el.querySelector('select[data-status]');
+    if (!sel || document.activeElement !== sel) el.querySelector('.g-status').innerHTML = statusSelect(lead);
     el.querySelector('.g-zoom').textContent = lead.zoomDate ? '🎥 ' + fmtIso(lead.zoomDate) : '';
     el.querySelectorAll('textarea[data-field]').forEach((t) => {
       if (document.activeElement !== t) t.value = lead[t.dataset.field] || '';
@@ -690,6 +826,7 @@
   }
 
   function rowSave(lead, action, params, okMsg) {
+    stickyIds.add(lead.id);
     return optimistic(lead, action, params, {
       onChange: (l, why) => { patchRow(l.id, l); if (why === 'local') markRow(l.id, 'busy', 'שומר…'); },
       onOk: () => markRow(lead.id, 'ok', okMsg || 'נשמר ✓'),
@@ -700,7 +837,7 @@
   function bindGrid(root) {
     const leadOf = (el) => {
       const row = el.closest('.g-row[data-id]');
-      return row && state.leads.find((l) => l.id === row.dataset.id);
+      return row && findLead(row.dataset.id);
     };
 
     root.addEventListener('click', async (ev) => {
@@ -812,26 +949,53 @@
     };
     state.leads = [temp].concat(state.leads || []);
     persistLeads();
-    if (location.hash === '#/leads') { const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y); }
+    stickyIds.add(tmpId);
+    updateLeadsView();
+    markRow(tmpId, 'busy', 'שומר…');
     toast('נוסף ✓ (נשמר לגיליון ברקע)');
-    api('addLead', Object.assign({}, f, { force: !!force })).then((d) => {
+    const dropTemp = () => {
+      state.leads = state.leads.filter((l) => l.id !== tmpId); persistLeads();
+      updateLeadsView();
+      if (onLeadCard(tmpId)) location.hash = '#/leads';
+    };
+    // פעולות על הליד בזמן שהוא נשמר מחכות בתור לסיום ההוספה, ואז נשלחות עם השורה האמיתית
+    const addP = api('addLead', Object.assign({}, f, { force: !!force })).then((d) => {
       if (d.duplicate) {
         // השרת מצא כפילות שלא הייתה ברשימה שבזיכרון
-        state.leads = state.leads.filter((l) => l.id !== tmpId); persistLeads();
-        if (location.hash === '#/leads') renderLeadsView();
+        dropTemp();
         if (confirm(`הטלפון כבר קיים אצל: ${d.duplicate.map((x) => x.name).join(', ')}. להוסיף בכל זאת?`)) addLeadOptimistic(f, true);
         return;
       }
+      if (!d.lead) return;
       const i = state.leads.findIndex((l) => l.id === tmpId);
-      if (i >= 0 && d.lead) state.leads[i] = d.lead; else if (d.lead) state.leads.unshift(d.lead);
+      const cur = i >= 0 ? state.leads[i] : null;
+      // אם כבר נערך בזמן השמירה – שומרים את מה שבמסך, עם המזהה והשורה האמיתיים
+      const real = cur && isPending(tmpId)
+        ? Object.assign({}, cur, { id: d.lead.id, row: d.lead.row, entry: d.lead.entry, entryRaw: d.lead.entryRaw })
+        : Object.assign({}, d.lead);
+      delete real._pending;
+      aliasOf[tmpId] = real.id;
+      if (queueByLead[tmpId]) queueByLead[real.id] = queueByLead[tmpId];
+      if (seqByLead[tmpId]) seqByLead[real.id] = Math.max(seqByLead[real.id] || 0, seqByLead[tmpId]);
+      const dup = state.leads.findIndex((l) => l.id === real.id);
+      if (dup >= 0 && dup !== i) state.leads.splice(dup, 1);
+      const j = state.leads.findIndex((l) => l.id === tmpId);
+      if (j >= 0) state.leads[j] = real; else state.leads.unshift(real);
       persistLeads();
-      if (location.hash === '#/leads' && !isEditing()) { const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y); }
+      if (stickyIds.has(tmpId)) stickyIds.add(real.id);
+      if (rowEl(tmpId)) { patchRow(tmpId, real); markRow(real.id, 'ok', 'נשמר ✓'); }
+      if (onLeadCard(tmpId)) {
+        history.replaceState(null, '', '#/lead/' + real.id); lastShellHash = location.hash;
+        if (!cardBusy()) renderLead(real);
+      }
       markDerivedStale();
     }).catch((e) => {
-      state.leads = state.leads.filter((l) => l.id !== tmpId); persistLeads();
-      if (location.hash === '#/leads') renderLeadsView();
+      dropTemp();
       if (e.code !== 'AUTH') toast('הליד לא נוסף לגיליון: ' + e.message, true);
+      throw e;
     });
+    queueByLead[tmpId] = addP;
+    addP.catch(() => {});
   }
 
   // ---------- קביעת זום: פרטי הליד להעתקה, ואז היומן ----------
@@ -854,17 +1018,17 @@
     const idx = state.leads.findIndex((l) => l.id === lead.id);
     state.leads = state.leads.filter((l) => l.id !== lead.id); persistLeads();
     const entry = { kind: 'delete', leadId: lead.id, before: lead, at: idx };
-    pushUndoLocal(entry);
-    state.undoCount++;
+    pushUndoLocal(entry); clearRedoLocal();
+    state.undoCount++; state.redoCount = 0;
     location.hash = '#/leads';
     toast('נמחק ✓ (↶ מחזיר)');
     api('deleteLead', { row: lead.row, id: lead.id, name: lead.name, phone: lead.phone, force: true }).then((d) => {
-      if (d.undoCount != null) { state.undoCount = d.undoCount; updateUndoBtn(); }
-      leadsFetchedAt = 0; refreshLeads(true).catch(() => {}); markDerivedStale();
+      syncUndoCounts(d);
+      markDerivedStale();
     }).catch((e) => {
-      dropUndoLocal(entry); state.undoCount = Math.max(0, state.undoCount - 1);
+      dropUndoLocal(entry); state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
       state.leads.splice(Math.max(0, idx), 0, lead); persistLeads();
-      if (location.hash === '#/leads') renderLeadsView();
+      updateLeadsView();
       if (e.code !== 'AUTH') toast('הליד לא נמחק: ' + e.message, true);
     });
   }
@@ -1085,7 +1249,8 @@
   async function viewLead(id) {
     if (!state.leads && !store.get('leads')) loading('כרטיס ליד');
     try { await ensureLeads(); } catch (e) { return errorView('כרטיס ליד', e); }
-    let lead = state.leads.find((l) => l.id === id);
+    if (aliasOf[id]) { history.replaceState(null, '', '#/lead/' + aliasOf[id]); id = aliasOf[id]; }
+    let lead = findLead(id);
     if (!lead) {
       loading('כרטיס ליד');
       try { await ensureLeads(true); } catch (e) { return errorView('כרטיס ליד', e); }
@@ -1094,7 +1259,7 @@
     if (!lead) return shell('כרטיס ליד', '<div class="empty">הליד לא נמצא. אולי הפרטים שלו שונו בגיליון.</div>', { back: true });
     renderLead(lead);
     revalidateLeads(() => {
-      const fresh = state.leads.find((l) => l.id === id);
+      const fresh = findLead(id);
       if (fresh && !cardBusy()) renderLead(fresh);
     });
   }
@@ -1111,7 +1276,12 @@
     return `<dt>${esc(label)}</dt><dd>${ltr ? `<span class="ltr">${esc(val)}</span>` : esc(val)}</dd>`;
   }
 
+  let lastCardKey = '';
   function renderLead(lead) {
+    // אותו ליד בדיוק כבר מוצג – לא מציירים מחדש (בלי קפיצה ובלי לאבד מה שפתוח)
+    const key = location.hash + '|' + JSON.stringify(lead);
+    if (key === lastCardKey && lastShellHash === location.hash && $app.querySelector('#form')) return;
+    lastCardKey = key;
     const m = state.meta;
     const tel = telHref(lead.phone), wa = waHref(lead);
     const opt = (list, cur) => ['<option value=""></option>'].concat((cur && !list.includes(cur) ? [cur] : []).concat(list)
@@ -1159,7 +1329,7 @@
           <div class="card form" id="form">
             <div class="field">
               <label>סטטוס</label>
-              <div class="status-grid">${statusList.map((s) => `<button type="button" class="chip ${s === sk(lead) ? 'on' : ''}" data-status"${esc(s)}">${esc(s)}</button>`).join('')}</div>
+              <div class="status-grid">${statusList.map((s) => `<button type="button" class="chip ${s === sk(lead) ? 'on' : ''}" data-status="${esc(s)}" style="${s === sk(lead) ? statusStyle(s) : ''}">${esc(s)}</button>`).join('')}</div>
             </div>
             <div class="field"><label for="f-callResult">תוצאת שיחה</label><input id="f-callResult" value="${esc(lead.callResult)}" placeholder="למשל: לא ענה / ביקש לחזור מחר"></div>
             <div class="field"><label for="f-shaiNotes">הערות של שי</label><textarea id="f-shaiNotes" class="short" placeholder="למשל: להתקשר ביום ראשון / ביקשה הודעה בווטסאפ">${esc(lead.shaiNotes)}</textarea></div>
@@ -1177,7 +1347,7 @@
         </div>
 
         <div>
-          ${state.realRole === 'admin' && !state.viewAs ? '<button class="btn danger small" data-act="delete-lead" style="margin-top:14px">🗑 מחיקת ליד</button>' : ''}
+          ${state.realRole === 'admin' && !state.viewAs && !lead._pending ? '<button class="btn danger small" data-act="delete-lead" style="margin-top:14px">🗑 מחיקת ליד</button>' : ''}
           <div class="section-title">פרטים</div>
           <div class="card">
             <dl class="info">
@@ -1188,8 +1358,8 @@
               ${infoRow('גיל', lead.age)}
               ${infoRow('הסמכה', lead.cert)}
               ${infoRow('הקושי הגדול', lead.difficulty)}
-              ${infoRow('מה רוצה לשפר', lead.improve)}
-              ${infoRow('מה ישתנה', lead.change)}
+              ${infoRow('מה ניסית', lead.improve)}
+              ${infoRow('למה עכשיו', lead.change)}
               ${infoRow('אינסטגרם', lead.insta)}
             </dl>
           </div>
@@ -1241,7 +1411,10 @@
     $app.querySelectorAll('[data-status]').forEach((b) => {
       b.onclick = () => {
         status = b.dataset.status === status ? lead.status : b.dataset.status;
-        $app.querySelectorAll('[data-status]').forEach((x) => x.classList.toggle('on', x.dataset.status === status));
+        $app.querySelectorAll('[data-status]').forEach((x) => {
+          x.classList.toggle('on', x.dataset.status === status);
+          x.setAttribute('style', x.dataset.status === status ? statusStyle(status) : '');
+        });
         dirty();
       };
     });
@@ -1499,6 +1672,7 @@
 
       ${d.zoomAuto ? `<div class="card small" style="margin-top:10px">
         <b>עדכון אוטומטי של זומים:</b> ${d.zoomAuto.trigger === 'ok' ? '⚡ מיידי (טריגר שינוי ביומן) + גיבוי כל 10 דק׳' : esc(d.zoomAuto.trigger)}
+        ${d.zoomAuto.calendarWrite === false ? '<br><span style="color:#b10202">❌ אין הרשאת כתיבה ליומן – ביטול/שינוי מועד מהאפליקציה לא יעבדו. צריך להריץ reinstallTriggers בעורך הסקריפט.</span>' : d.zoomAuto.calendarWrite ? '<br>✅ הרשאת כתיבה ליומן (ביטול/שינוי מועד מהאפליקציה)' : ''}
         ${d.zoomAuto.last ? `<br>אחרון: ${esc(d.zoomAuto.last.name)} – עודכן ${d.zoomAuto.last.seconds != null ? `תוך ${d.zoomAuto.last.seconds < 120 ? d.zoomAuto.last.seconds + ' שניות' : Math.round(d.zoomAuto.last.seconds / 60) + ' דקות'}` : ''} מהקביעה (${esc(d.zoomAuto.last.via)}, התאמה לפי ${esc(d.zoomAuto.last.how || '')})` : ''}
       </div>` : ''}
 
@@ -1539,6 +1713,7 @@
     state.role = me.role; state.realRole = me.realRole || me.role;
     state.email = me.email; state.bookingUrl = me.bookingUrl; state.bookingEmbedUrl = me.bookingEmbedUrl || '';
     if (me.undoCount != null) state.undoCount = me.undoCount;
+    if (me.redoCount != null) state.redoCount = me.redoCount;
     updateUndoBtn();
     LS.set('lf_role', state.realRole);
     if (state.viewAs && state.realRole !== 'admin') { state.viewAs = ''; LS.del('lf_viewas'); }
@@ -1572,9 +1747,16 @@
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && state.session) {
         if (pendingBooking && Date.now() - pendingBooking.at < 30 * 60000) { watchBooking(pendingBooking.lead); pendingBooking = null; }
-        leadsFetchedAt = 0; refreshAlerts(); prefetchAll(false);
-        if (!isEditing() && !cardBusy()) route();
+        refreshAlerts(); softRefresh();
+        setTimeout(() => prefetchAll(false), 1500);
       }
+    });
+    // Ctrl+Z / Ctrl+Y (כשלא מקלידים בשדה)
+    document.addEventListener('keydown', (e) => {
+      if (!(e.ctrlKey || e.metaKey) || isEditing()) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoLast(); }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redoLast(); }
     });
   }
 

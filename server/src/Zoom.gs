@@ -46,6 +46,9 @@ function fillLeadEmail_(r, lead, info) {
   const em = (info.emails || [])[0];
   if (!em) return '';
   r.sh.getRange(lead.row, COL_.email).setValue(em);
+  // המזהה של ליד כולל את המייל – מעדכנים, כדי שהקישור לפגישה ישויך למזהה הנכון
+  lead.email = em;
+  lead.id = leadId_(lead.entryRaw, lead.phone, em, lead.name);
   return em;
 }
 
@@ -300,7 +303,7 @@ function scanZoomBookings(via) {
           const r2 = readLeads_(cfg);
           syncRewards_(r2.sh, r2.leads, [prevLink.iso.slice(0, 7), iso.slice(0, 7)], false);
           linkZoom_(links, ev.getId(), pl, start.getTime(), iso);
-          sendTelegram_('🔁 <b>זום הוזז – ' + esc_(pl.name) + '</b>\n' + fmtWhen_(new Date(prevLink.start)) + ' ← ' + fmtWhen_(start),
+          sendTelegramLiel_('🔁 <b>זום הוזז – ' + esc_(pl.name) + '</b>\n' + fmtWhen_(new Date(prevLink.start)) + ' ← ' + fmtWhen_(start),
             [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + pl.id }]);
           seen[key] = start.getTime();
           return;
@@ -326,8 +329,8 @@ function scanZoomBookings(via) {
 
       if (lead && resched && (!lead.zoomDate || lead.zoomDate === resched.oldIso || lead.zoomDate === iso) && !String(lead.zoomResult || '').trim()) {
         // הפגישה החדשה נוצרה ושויכה → עכשיו (ורק עכשיו) מוחקים את הישנה
-        linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
         const addedEmailR = fillLeadEmail_(r, lead, info);
+        linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
         if (lead.zoomDate !== iso) setDateCell_(r.sh, lead.row, COL_.zoomDate, parseIso_(iso));
         if (!isFinal_(lead.status) && canonicalStatus_(lead.status) !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
         touch_(r.sh, lead.row, r.upCol);
@@ -339,7 +342,7 @@ function scanZoomBookings(via) {
         const r2 = readLeads_(cfg);
         syncRewards_(r2.sh, r2.leads, [resched.oldIso.slice(0, 7), iso.slice(0, 7)], false);
         r = readLeads_(cfg);
-        sendTelegram_('🔁 <b>זום הוזז – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(resched.oldStart)) + ' ← ' + fmtWhen_(start) + delNote +
+        sendTelegramLiel_('🔁 <b>זום הוזז – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(resched.oldStart)) + ' ← ' + fmtWhen_(start) + delNote +
           (addedEmailR ? '\n📧 נוסף מייל לליד: ' + esc_(addedEmailR) : ''),
           [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }]);
         seen[key] = start.getTime();
@@ -347,15 +350,15 @@ function scanZoomBookings(via) {
       }
 
       if (lead && (!lead.zoomDate || lead.zoomDate === iso)) {
-        linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
         const addedEmail = fillLeadEmail_(r, lead, info);
+        linkZoom_(links, ev.getId(), lead, start.getTime(), iso);
         if (!lead.zoomDate) setDateCell_(r.sh, lead.row, COL_.zoomDate, parseIso_(iso));
         if (!isFinal_(lead.status) && canonicalStatus_(lead.status) !== 'זום נקבע') r.sh.getRange(lead.row, COL_.status).setValue('זום נקבע');
         touch_(r.sh, lead.row, r.upCol);
         SpreadsheetApp.flush();
         const r2 = readLeads_(cfg);
         syncRewards_(r2.sh, r2.leads, [iso.slice(0, 7)], false);
-        sendTelegram_('📅 <b>זום חדש נקבע</b>\n' + esc_(lead.name) + '\n' + fmtWhen_(start) +
+        sendTelegramLiel_('📅 <b>זום חדש נקבע</b>\n' + esc_(lead.name) + '\n' + fmtWhen_(start) +
           (match.viaPending ? '\nℹ️ שויך לפי "קביעת זום" מהכרטיס – בפגישה ביומן לא היה מייל/טלפון של הליד. כדאי לוודא.' : '') +
           (addedEmail ? '\n📧 נוסף מייל לליד: ' + esc_(addedEmail) : ''),
           [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }]);
@@ -374,7 +377,7 @@ function scanZoomBookings(via) {
           emails: info.emails, phones: info.phones, reason: reason,
           leadId: lead ? lead.id : '', leadRow: lead ? lead.row : 0, createdAt: Date.now(),
         });
-        sendTelegram_('📅 <b>זום חדש נקבע – צריך שיוך ידני</b>\n' + esc_(info.name || ev.getTitle()) + '\n' + fmtWhen_(start) + '\n' + esc_(reason),
+        sendTelegramLiel_('📅 <b>זום חדש נקבע – צריך שיוך ידני</b>\n' + esc_(info.name || ev.getTitle()) + '\n' + fmtWhen_(start) + '\n' + esc_(reason),
           [{ text: 'פתח באפליקציה', url: appUrl + '#/zooms' }]);
       }
       seen[key] = start.getTime();
@@ -397,12 +400,12 @@ function applyCancel_(cfg, r, link, appUrl, note) {
   const lead = r.leads.filter(function (l) { return l.id === link.leadId; })[0] || null;
   const btn = lead ? [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }] : [];
   const head = '❌ <b>זום בוטל – ' + esc_(lead ? lead.name : link.name) + '</b>\n' + fmtWhen_(new Date(link.start)) + (note ? '\n' + note : '');
-  if (!lead) { sendTelegram_(head + '\nהליד לא נמצא בגיליון – לא שיניתי כלום', btn); return r; }
+  if (!lead) { sendTelegramLiel_(head + '\nהליד לא נמצא בגיליון – לא שיניתי כלום', btn); return r; }
   if (String(lead.zoomResult || '').trim()) {
-    sendTelegram_(head + '\nכבר יש תוצאת זום ("' + esc_(lead.zoomResult) + '") – לא שיניתי כלום', btn); return r;
+    sendTelegramLiel_(head + '\nכבר יש תוצאת זום ("' + esc_(lead.zoomResult) + '") – לא שיניתי כלום', btn); return r;
   }
   if (lead.zoomDate && lead.zoomDate !== link.iso) {
-    sendTelegram_(head + '\nבגיליון רשום תאריך זום אחר (' + fmtDate_(parseIso_(lead.zoomDate)) + ') – לא שיניתי כלום', btn); return r;
+    sendTelegramLiel_(head + '\nבגיליון רשום תאריך זום אחר (' + fmtDate_(parseIso_(lead.zoomDate)) + ') – לא שיניתי כלום', btn); return r;
   }
   setDateCell_(r.sh, lead.row, COL_.zoomDate, null);
   const newStatus = !isFinal_(lead.status) ? 'פגישה בוטלה' : '';   // סטטוס סופי (לא מעוניין וכו') לא נדרס
@@ -412,7 +415,7 @@ function applyCancel_(cfg, r, link, appUrl, note) {
   SpreadsheetApp.flush();
   const r2 = readLeads_(cfg);
   syncRewards_(r2.sh, r2.leads, [link.iso.slice(0, 7)], false);
-  sendTelegram_(head + '\nתאריך הזום נמחק' + (newStatus ? ' והסטטוס עבר ל"פגישה בוטלה"' : ' (הסטטוס "' + esc_(lead.status) + '" לא שונה)'), btn);
+  sendTelegramLiel_(head + '\nתאריך הזום נמחק' + (newStatus ? ' והסטטוס עבר ל"פגישה בוטלה"' : ' (הסטטוס "' + esc_(lead.status) + '" לא שונה)'), btn);
   return readLeads_(cfg);
 }
 
@@ -526,4 +529,32 @@ function authorizeCalendarWrite() {
   const calId = zoomCalendar_(getConfig_()).getId();
   const res = Calendar.Events.list(calId, { maxResults: 1, timeMin: new Date().toISOString(), singleEvents: true });
   console.log('✅ הרשאת יומן תקינה (' + calId + '). "ביטול פגישה" ו"שינוי מועד" מהאפליקציה פעילים. ' + ((res.items || []).length ? '' : ''));
+}
+
+/** קישור פגישה שמצביע על מזהה ליד ישן (למשל אחרי שנוסף מייל) → מתקנים לפי שורה + שם. */
+function repairZoomLinks_(leads) {
+  const links = readJsonProp_(ZOOM_LINKS_KEY_, {});
+  const ids = {};
+  leads.forEach(function (l) { ids[l.id] = 1; });
+  let changed = false;
+  Object.keys(links).forEach(function (k) {
+    const lk = links[k];
+    if (!lk || ids[lk.leadId]) return;
+    const m = leads.filter(function (l) { return l.row === lk.row && normName_(l.name) === normName_(lk.name); })[0] ||
+      (function () { const a = leads.filter(function (l) { return normName_(l.name) === normName_(lk.name); }); return a.length === 1 ? a[0] : null; })();
+    if (m) { lk.leadId = m.id; lk.row = m.row; changed = true; }
+  });
+  if (changed) writeJsonProp_(ZOOM_LINKS_KEY_, links);
+}
+
+/** אילו הרשאות יש בפועל לקוד שרץ עכשיו (בדיקה של הרשאת כתיבה ליומן מתוך ה-Web App). */
+function grantedScopes_() {
+  try {
+    const res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + ScriptApp.getOAuthToken(), { muteHttpExceptions: true });
+    return String(JSON.parse(res.getContentText()).scope || '');
+  } catch (e) { return ''; }
+}
+
+function hasCalendarWrite_() {
+  return (' ' + grantedScopes_() + ' ').indexOf(' https://www.googleapis.com/auth/calendar ') >= 0;
 }

@@ -29,6 +29,7 @@ function actionHome_(req, ctx) {
     zoomAuto: {
       trigger: PropertiesService.getScriptProperties().getProperty('CAL_TRIGGER') || 'עוד לא הותקן (יותקן בסריקה הבאה, תוך 10 דק׳)',
       last: readJsonProp_('ZOOM_LAST', null),
+      calendarWrite: hasCalendarWrite_(),
     },
     fin: null,
     finError: '',

@@ -11,23 +11,23 @@ const FIELD_LABELS_ = {
   zoomDate: 'תאריך זום', zoomResult: 'תוצאת זום', callResult: 'תוצאת שיחה',
 };
 
-function undoIndexKey_(email) { return 'UI:' + email; }
-function undoEntryKey_(email, id) { return 'U:' + email + ':' + id; }
+// שתי מחסניות לכל משתמש: U = לביטול (↶), R = לביצוע שוב (↷)
+function stackIndexKey_(st, email) { return st + 'I:' + email; }
+function stackEntryKey_(st, email, id) { return st + ':' + email + ':' + id; }
+function undoIndexKey_(email) { return stackIndexKey_('U', email); }
+function undoEntryKey_(email, id) { return stackEntryKey_('U', email, id); }
 
-function undoIndex_(email) {
-  return readJsonProp_(undoIndexKey_(email), []);
-}
-
-function undoCount_(email) {
-  return email ? undoIndex_(email).length : 0;
-}
+function stackIndex_(st, email) { return readJsonProp_(stackIndexKey_(st, email), []); }
+function undoIndex_(email) { return stackIndex_('U', email); }
+function undoCount_(email) { return email ? stackIndex_('U', email).length : 0; }
+function redoCount_(email) { return email ? stackIndex_('R', email).length : 0; }
 
 function describeFields_(fields) {
   const names = Object.keys(fields).map(function (k) { return FIELD_LABELS_[k] || k; });
   return names.length <= 2 ? names.join(' ו') : names.slice(0, -1).join(', ') + ' ו' + names[names.length - 1];
 }
 
-/** שומר פעולה לביטול (בלי "עודכן לאחרונה"). */
+/** פעולה חדשה של המשתמש: נשמרת לביטול, ומחסנית "בצע שוב" מתרוקנת (כמו בכל אפליקציה). */
 function recordUndo_(email, loc, desc, extra) {
   if (!email || !loc.undo) return;
   loc.undoCount = null;
@@ -35,7 +35,6 @@ function recordUndo_(email, loc, desc, extra) {
     .filter(function (c) { return c.ad != null && c.bd !== c.ad; });
   if (!changes.length && !(extra && extra.ghost)) return;
   const entry = {
-    id: Utilities.getUuid().slice(0, 8), ts: Date.now(),
     leadId: loc.lead.id, row: loc.lead.row, name: loc.lead.name, desc: desc,
     changes: changes, zoomMonths: extra && extra.zoomMonths || null, ghost: extra && extra.ghost || null,
   };
@@ -43,31 +42,42 @@ function recordUndo_(email, loc, desc, extra) {
 }
 
 function pushUndoEntry_(email, entry, loc) {
-  entry.id = entry.id || Utilities.getUuid().slice(0, 8);
-  entry.ts = entry.ts || Date.now();
-  const json = JSON.stringify(entry);
-  if (json.length > 8500) return;   // שינוי ארוך במיוחד – לא נשמר לביטול
-  const props = PropertiesService.getScriptProperties();
-  const idx = undoIndex_(email);
-  idx.push(entry.id);
-  while (idx.length > UNDO_MAX_) props.deleteProperty(undoEntryKey_(email, idx.shift()));
-  const upd = {};
-  upd[undoEntryKey_(email, entry.id)] = json;
-  upd[undoIndexKey_(email)] = JSON.stringify(idx);
-  props.setProperties(upd);   // כתיבה אחת
-  if (loc) loc.undoCount = idx.length;
+  pushStack_('U', email, entry, loc);
+  clearStack_('R', email);
 }
 
-let UNDO_LEFT_ = null;
-function popUndo_(email) {
-  const idx = undoIndex_(email);
+function pushStack_(st, email, entry, loc) {
+  entry.id = Utilities.getUuid().slice(0, 8);
+  entry.ts = Date.now();
+  const json = JSON.stringify(entry);
+  if (json.length > 8500) return;   // שינוי ארוך במיוחד – לא נשמר
+  const props = PropertiesService.getScriptProperties();
+  const idx = stackIndex_(st, email);
+  idx.push(entry.id);
+  while (idx.length > UNDO_MAX_) props.deleteProperty(stackEntryKey_(st, email, idx.shift()));
+  const upd = {};
+  upd[stackEntryKey_(st, email, entry.id)] = json;
+  upd[stackIndexKey_(st, email)] = JSON.stringify(idx);
+  props.setProperties(upd);
+  if (loc && st === 'U') loc.undoCount = idx.length;
+}
+
+function clearStack_(st, email) {
+  const idx = stackIndex_(st, email);
+  if (!idx.length) return;
+  const props = PropertiesService.getScriptProperties();
+  idx.forEach(function (id) { props.deleteProperty(stackEntryKey_(st, email, id)); });
+  props.deleteProperty(stackIndexKey_(st, email));
+}
+
+function popStack_(st, email) {
+  const idx = stackIndex_(st, email);
   const id = idx.pop();
-  UNDO_LEFT_ = idx.length;
   if (!id) return null;
   const props = PropertiesService.getScriptProperties();
-  const raw = props.getProperty(undoEntryKey_(email, id));
-  props.deleteProperty(undoEntryKey_(email, id));
-  writeJsonProp_(undoIndexKey_(email), idx);
+  const raw = props.getProperty(stackEntryKey_(st, email, id));
+  props.deleteProperty(stackEntryKey_(st, email, id));
+  writeJsonProp_(stackIndexKey_(st, email), idx);
   try { return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
 }
 
@@ -76,20 +86,40 @@ function deserializeCell_(v) {
 }
 
 function actionUndoCount_(req, ctx) {
-  return { undoCount: undoCount_(ctx.email) };
+  return { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) };
 }
 
-function actionUndo_(req, ctx) {
+function actionUndo_(req, ctx) { return undoRedo_(req, ctx, 'U', 'R', 'בוטל'); }
+function actionRedo_(req, ctx) { return undoRedo_(req, ctx, 'R', 'U', 'בוצע שוב'); }
+
+/** מוציא פעולה ממחסנית אחת, מחזיר את הגיליון למצב שבה, ושומר את ההפך במחסנית השנייה. */
+function undoRedo_(req, ctx, from, to, verb) {
   let out = null, loc = null;
   phase_('start');
   withLock_(function () {
-    const e = popUndo_(ctx.email);
-    if (!e) { out = { done: false, message: 'אין מה לבטל' }; return; }
-    if (e.kind === 'delete') { out = restoreDeleted_(ctx, e); return; }
+    const e = popStack_(from, ctx.email);
+    if (!e) { out = { done: false, message: verb === 'בוטל' ? 'אין מה לבטל' : 'אין מה לבצע שוב' }; return; }
+
+    if (e.kind === 'delete') {          // ↶ מחיקת ליד → מחזיר את הליד
+      out = restoreDeleted_(ctx, e);
+      if (out.done) pushStack_(to, ctx.email, { kind: 'redelete', leadId: out.leadId, row: out.restoredRow, name: e.name, phone: e.phone, desc: 'מחיקת ליד' });
+      if (out.done && verb !== 'בוטל') out.message = out.message.replace(/^בוטל:/, verb + ':');
+      return;
+    }
+    if (e.kind === 'redelete') {        // ↷ מחיקת ליד שבוטלה → מוחק שוב
+      try {
+        const d = deleteLeadCore_(ctx, e.row, e.leadId, e.name, e.phone, true);
+        pushStack_(to, ctx.email, d.entry);
+        out = { done: true, message: verb + ': מחיקת ' + e.name, deletedId: e.leadId };
+      } catch (err) {
+        out = { done: false, message: 'אי אפשר ל' + (verb === 'בוטל' ? 'בטל' : 'בצע שוב') + ': ' + (err.message || err) };
+      }
+      return;
+    }
 
     phase_('pop');
     try { loc = locateForWrite_(ctx.cfg, e.row, e.leadId); } catch (err) {
-      out = { done: false, message: 'אי אפשר לבטל: הליד ' + e.name + ' לא נמצא בגיליון (אולי נמחק).' };
+      out = { done: false, message: 'אי אפשר ל' + (verb === 'בוטל' ? 'בטל' : 'בצע שוב') + ': הליד ' + e.name + ' לא נמצא בגיליון (אולי נמחק).' };
       return;
     }
     phase_(loc.fast ? 'read row (api)' : 'read row');
@@ -97,21 +127,33 @@ function actionUndo_(req, ctx) {
     const width = Math.max(LAST_BASE_COL_, loc.ex.updated, loc.ex.shaiNotes);
     const cur = loc.lead._raw ? loc.lead._raw.d : loc.sh.getRange(row, 1, 1, width).getDisplayValues()[0];
 
-    // מישהו שינה את אותו שדה אחרי הפעולה? לא דורסים.
+    // מישהו שינה את אותו שדה בינתיים? לא דורסים.
     const conflict = e.changes.filter(function (c) { return String(cur[c.col - 1] || '').trim() !== String(c.ad || '').trim(); });
     if (conflict.length) {
       loc = null;
-      out = { done: false, message: 'אי אפשר לבטל: ' + e.desc + ' של ' + e.name + ' שונה מאז (על ידי מישהו אחר או ישירות בגיליון). לא שיניתי כלום.' };
+      out = { done: false, message: 'אי אפשר ל' + (verb === 'בוטל' ? 'בטל' : 'בצע שוב') + ': ' + e.desc + ' של ' + e.name +
+        ' שונה מאז (על ידי מישהו אחר או ישירות בגיליון). לא שיניתי כלום.' };
       return;
     }
 
-    let ssh = null;   // לפעולות ישנות שנשמרו בפורמט הקודם
+    // ההפך (למחסנית השנייה): המצב המדויק של התאים לפני השינוי הזה
+    const inverse = { leadId: loc.lead.id, row: row, name: e.name, desc: e.desc, zoomMonths: e.zoomMonths || null, changes: [] };
+    const snapNow = loc.fast ? null : rowSnapshot_(loc);
+    e.changes.forEach(function (c) {
+      if (loc.fast) {
+        const fc = loc.cells[c.col - 1] || {};
+        inverse.changes.push({ col: c.col, uv: fc.userEnteredValue || null, nf: (fc.userEnteredFormat && fc.userEnteredFormat.numberFormat) || null, bd: c.ad, ad: c.bd });
+      } else {
+        inverse.changes.push({ col: c.col, bv: serializeCell_(snapNow.v[c.col - 1]), bf: snapNow.f[c.col - 1] || '', bd: c.ad, ad: c.bd });
+      }
+    });
+
+    let ssh = null;
     e.changes.forEach(function (c) {
       const isNew = ('uv' in c) || ('nf' in c);
       if (loc.fast && isNew) {
         loc.pending[c.col] = fastRestoreCell_(c.uv, c.nf);
       } else if (isNew) {
-        // מסלול רגיל עם רשומה חדשה: משחזרים לפי התצוגה הקודמת
         const r = loc.sh.getRange(row, c.col);
         if (!c.bd) r.clearContent(); else r.setValue(c.bd);
       } else {
@@ -127,23 +169,29 @@ function actionUndo_(req, ctx) {
     commitFast_(loc);
     phase_('write');
 
+    // גוסטינג: ↶ מסיר את השורה שנוספה; ↷ מעתיק שוב
     let extra = '';
-    if (e.ghost) extra = removeGhostRow_(ctx.cfg, e.ghost);
+    if (e.ghost) { extra = removeGhostRow_(ctx.cfg, e.ghost); inverse.ghostRecopy = true; }
+    if (e.ghostRecopy) {
+      SpreadsheetApp.flush();
+      const after = leadAfterWrite_(ctx.cfg, loc);
+      const g = after ? copyToGhosting_(ctx.cfg, after) : null;
+      if (g && g.copied) { inverse.ghost = g; extra = 'הועתק שוב לגוסטינג'; }
+    }
 
     let warning = '';
-    if (!e.zoomMonths && !e.ghost) {
-      loc.out = leadAfterWrite_(ctx.cfg, loc);
-      if (loc.out) CACHE_PATCH_ = loc.out;
-    }
+    loc.out = leadAfterWrite_(ctx.cfg, loc);
+    if (!e.zoomMonths && !e.ghost && !e.ghostRecopy && loc.out) CACHE_PATCH_ = loc.out;
     if (e.zoomMonths) {
       SpreadsheetApp.flush();
       const r2 = readLeads_(ctx.cfg);
       const res = syncRewards_(r2.sh, r2.leads, e.zoomMonths, false);
       warning = lockedWarning_(res.locked);
-      loc.lead._raw = null;
+      loc.out = rereadLead_(ctx.cfg, loc.lead.id, row);
     }
+    pushStack_(to, ctx.email, inverse);
 
-    let message = 'בוטל: ' + e.desc + ' של ' + e.name;
+    let message = verb + ': ' + e.desc + ' של ' + e.name;
     if (e.changes.length === 1 && FIELD_LABELS_[keyOfCol_(e.changes[0].col)]) {
       message += ' חזר ל"' + (e.changes[0].bd || 'ריק') + '"';
     }
@@ -152,7 +200,8 @@ function actionUndo_(req, ctx) {
   });
   if (out.done && loc) out.lead = loc.out || leadAfterWrite_(ctx.cfg, loc);
   if (out.done && out.restoredRow) out.lead = rereadLead_(ctx.cfg, out.leadId, out.restoredRow);
-  out.undoCount = UNDO_LEFT_ != null ? UNDO_LEFT_ : undoCount_(ctx.email);
+  out.undoCount = undoCount_(ctx.email);
+  out.redoCount = redoCount_(ctx.email);
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;

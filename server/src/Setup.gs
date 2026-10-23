@@ -75,3 +75,15 @@ function benchmarkSpeed() {
     'שמירה – אחרי (2 קריאות של שורה בלבד): ' + rowRead,
   ].join('\n'));
 }
+
+/** להרצה ידנית מהעורך: מוחק ומתקין מחדש את הטריגרים של הפרויקט הזה (אחרי שינוי הרשאות). */
+function reinstallTriggers() {
+  const cfg = getConfig_();
+  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('scanZoomBookings').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('onLeadsEdit').forSpreadsheet(cfg.leadsSheetId).onEdit().create();
+  PropertiesService.getScriptProperties().deleteProperty('CAL_TRIGGER');
+  const st = ensureCalendarTrigger_(true);
+  console.log('✅ הטריגרים הותקנו מחדש: סריקת זומים כל 10 דק׳, עריכה בגיליון, שינוי ביומן (' + st + ')');
+  console.log(hasCalendarWrite_() ? '✅ יש הרשאת כתיבה ליומן' : '❌ אין הרשאת כתיבה ליומן');
+}

@@ -1,6 +1,6 @@
 // Service worker מינימלי: רשת קודם (כדי שעדכונים יופיעו מיד), מטמון רק כגיבוי לקבצי האתר.
 // לא נוגע בקריאות ל-API (POST) ולא בגוגל.
-const CACHE = 'lf-shell-v22';
+const CACHE = 'lf-shell-v23';
 
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => {

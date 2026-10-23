@@ -22,39 +22,42 @@ function userName_(ctx) {
 function actionDeleteLead_(req, ctx) {
   let out = null;
   withLock_(function () {
-    const loc = locateLead_(ctx.cfg, req.row, req.id);
-    const lead = loc.lead;
-    if (normName_(lead.name) !== normName_(req.name) || phoneKey_(lead.phone) !== phoneKey_(req.phone)) {
-      throw apiError_('STALE', 'השם או הטלפון בשורה לא תואמים – רענן את הרשימה ונסה שוב. לא מחקתי כלום.');
-    }
-    const fz = futureZoomByLead_()[lead.id];
-    if (fz && !req.force) { out = { needsConfirm: true, zoomStart: fz.start }; return; }
-
-    const sh = loc.sh;
-    const width = sh.getLastColumn();
-    const arch = deletedSheet_(ctx.cfg);
-    const target = Math.max(arch.getLastRow() + 1, 2);
-    if (arch.getMaxColumns() < width + DELETED_META_) arch.insertColumnsAfter(arch.getMaxColumns(), width + DELETED_META_ - arch.getMaxColumns());
-    if (arch.getMaxRows() < target) arch.insertRowsAfter(arch.getMaxRows(), 50);
-
-    // 1) העתקה מלאה (ערכים + פורמטים) לארכיון
-    sh.getRange(lead.row, 1, 1, width).copyTo(arch.getRange(target, DELETED_META_ + 1, 1, width));
-    arch.getRange(target, 1, 1, DELETED_META_).setNumberFormat('@').setValues([[nowStamp_(), userName_(ctx), 'נמחק']]);
-    SpreadsheetApp.flush();
-    // 2) וידוא שההעתקה הצליחה – ורק אז מחיקה
-    const chk = arch.getRange(target, DELETED_META_ + 1, 1, COL_.phone).getDisplayValues()[0];
-    if (normName_(chk[COL_.name - 1]) !== normName_(lead.name) || phoneKey_(chk[COL_.phone - 1]) !== phoneKey_(lead.phone)) {
-      throw apiError_('ERROR', 'ההעתקה ללשונית "' + DELETED_TAB_ + '" לא הצליחה – לא מחקתי כלום');
-    }
-    sh.deleteRow(lead.row);
-
-    pushUndoEntry_(ctx.email, {
-      kind: 'delete', leadId: lead.id, row: lead.row, name: lead.name, phone: lead.phone,
-      archRow: target, width: width, desc: 'מחיקת ליד', changes: [],
-    });
-    out = { deleted: true, undoCount: undoCount_(ctx.email) };
+    const d = deleteLeadCore_(ctx, req.row, req.id, req.name, req.phone, req.force);
+    if (d.needsConfirm) { out = d; return; }
+    pushUndoEntry_(ctx.email, d.entry);
+    out = { deleted: true, undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) };
   });
   return out;
+}
+
+/** הליבה של המחיקה (בתוך נעילה): העתקה לארכיון, וידוא, מחיקה. מחזיר רשומה לביטול. */
+function deleteLeadCore_(ctx, row, id, name, phone, force) {
+  const loc = locateLead_(ctx.cfg, row, id);
+  const lead = loc.lead;
+  if (normName_(lead.name) !== normName_(name) || phoneKey_(lead.phone) !== phoneKey_(phone)) {
+    throw apiError_('STALE', 'השם או הטלפון בשורה לא תואמים – רענן את הרשימה ונסה שוב. לא מחקתי כלום.');
+  }
+  const fz = futureZoomByLead_()[lead.id];
+  if (fz && !force) return { needsConfirm: true, zoomStart: fz.start };
+
+  const sh = loc.sh;
+  const width = sh.getLastColumn();
+  const arch = deletedSheet_(ctx.cfg);
+  const target = Math.max(arch.getLastRow() + 1, 2);
+  if (arch.getMaxColumns() < width + DELETED_META_) arch.insertColumnsAfter(arch.getMaxColumns(), width + DELETED_META_ - arch.getMaxColumns());
+  if (arch.getMaxRows() < target) arch.insertRowsAfter(arch.getMaxRows(), 50);
+
+  // 1) העתקה מלאה (ערכים + פורמטים) לארכיון
+  sh.getRange(lead.row, 1, 1, width).copyTo(arch.getRange(target, DELETED_META_ + 1, 1, width));
+  arch.getRange(target, 1, 1, DELETED_META_).setNumberFormat('@').setValues([[nowStamp_(), userName_(ctx), 'נמחק']]);
+  SpreadsheetApp.flush();
+  // 2) וידוא שההעתקה הצליחה – ורק אז מחיקה
+  const chk = arch.getRange(target, DELETED_META_ + 1, 1, COL_.phone).getDisplayValues()[0];
+  if (normName_(chk[COL_.name - 1]) !== normName_(lead.name) || phoneKey_(chk[COL_.phone - 1]) !== phoneKey_(lead.phone)) {
+    throw apiError_('ERROR', 'ההעתקה ללשונית "' + DELETED_TAB_ + '" לא הצליחה – לא מחקתי כלום');
+  }
+  sh.deleteRow(lead.row);
+  return { entry: { kind: 'delete', leadId: lead.id, row: lead.row, name: lead.name, phone: lead.phone, archRow: target, width: width, desc: 'מחיקת ליד', changes: [] } };
 }
 
 /** ↶ למחיקת ליד: מחזיר את השורה מהארכיון לסוף "לידים פעילים". */

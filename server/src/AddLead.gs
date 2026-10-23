@@ -75,6 +75,12 @@ function actionAddLead_(req, ctx) {
     const built = buildLead_(rowNum, disp, disp, null, upCol, 0);
     lead = built ? publicLead_(built) : null;
   });
+  try {
+    const appUrl = String(ctx.cfg.appUrl || '').replace(/\/?$/, '/');
+    sendTelegramLeads_('🆕 <b>ליד חדש</b> (נוסף ידנית ע״י ' + esc_(who) + ')\n' + esc_(name) + '\n' + esc_(phone) +
+      (email ? '\n' + esc_(email) : '') + (source ? '\nמקור: ' + esc_(source) : ''),
+      lead ? [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }] : []);
+  } catch (e) { console.warn('telegram: ' + e); }
   return { lead: lead };
 }
 

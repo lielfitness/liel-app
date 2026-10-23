@@ -206,6 +206,7 @@ function phase_(name) {
 function actionListLeads_(req, ctx) {
   if (req.fresh) invalidateLeads_();
   const c = cachedLeads_(ctx.cfg);
+  repairZoomLinks_(c.leads);
   const fz = futureZoomByLead_();
   c.leads.forEach(function (x) { x.zoomEvent = fz[x.id] || null; });
   return {
@@ -463,7 +464,7 @@ function actionUpdateLead_(req, ctx) {
     result.out = leadAfterWrite_(ctx.cfg, loc);
     if (!zoomMonths && result.out) CACHE_PATCH_ = result.out;   // רק הליד הזה השתנה
   });
-  const out = { lead: result.out, ghost: ghost, reward: reward, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email) };
+  const out = { lead: result.out, ghost: ghost, reward: reward, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email), redoCount: 0 };
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;
@@ -552,7 +553,7 @@ function actionMarkAttempt_(req, ctx) {
     result.out = leadAfterWrite_(ctx.cfg, loc);
     if (result.out) CACHE_PATCH_ = result.out;
   });
-  const out = { lead: result.out, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email) };
+  const out = { lead: result.out, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email), redoCount: 0 };
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;
