@@ -264,7 +264,7 @@ function actionFinance_(req, ctx) {
     month: monthLists_(tx),
     summary: { text: text, at: sum.getRange('B1').getDisplayValue(),
       debts: parts['🔴'] ? { title: parts['🔴'].title, items: debts } : null,
-      anomalies: parts['⚠️'] || null,
+      anomalies: parts['⚠️'] ? { title: parts['⚠️'].title, items: anomalyItems_(parts['⚠️'].body) } : null,
       invoices: parts['🧾'] || null },
   };
 }
@@ -521,4 +521,24 @@ function onlineEnsure_() {
 /** נעילה לפעולות בגיליון הפיננסים – בלי לאפס את הזיכרון של רשימת הלידים */
 function finLock_(fn) {
   return withLock_(function () { const r = fn(); CACHE_PATCH_ = 'skip'; return r; });
+}
+
+// ---------- ⚠️ חריגים: "נקה" לכל פריט (נשמר במערכת של האפליקציה) ----------
+function anomalyKey_(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
+function anomalyItems_(body) {
+  const cleared = {};
+  sysRows_('anomClear').rows.forEach(function (r) { if (r[0]) cleared[r[0]] = 1; });
+  return String(body || '').split('\n').map(function (t) { return t.trim(); }).filter(Boolean)
+    .map(function (t) { const k = anomalyKey_(t); return { text: t, key: k, cleared: !!cleared[k] }; });
+}
+function actionAnomClear_(req, ctx) {
+  const key = anomalyKey_(req.key);
+  if (!key) throw apiError_('BAD_REQUEST', 'פריט לא תקין');
+  const d = sysRows_('anomClear');
+  if (req.undo) {
+    for (let i = d.rows.length - 1; i >= 0; i--) if (d.rows[i][0] === key) d.sh.deleteRow(i + 2);
+  } else if (!d.rows.some(function (r) { return r[0] === key; })) {
+    d.sh.appendRow([key, Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]);
+  }
+  return { ok: true };
 }

@@ -28,6 +28,7 @@ const SYS_TABS_ = {
   devices:  { name: 'מכשירים', head: ['משתמש', 'token', 'מכשיר', 'נוסף', 'עודכן'] },
   settings: { name: 'הגדרות',  head: ['משתמש', 'הגדרות (JSON)'] },
   lateClear: { name: 'ביטולים שנוקו', head: ['מזהה פגישה', 'נוקה בתאריך', 'מאמן', 'תאריך הפגישה'] },
+  anomClear: { name: 'חריגים שנוקו', head: ['פריט', 'נוקה בתאריך'] },
 };
 const NOTIF_KEEP_DAYS_ = 60;
 const NOTIF_LIST_MAX_ = 60;

@@ -1972,6 +1972,8 @@
     const debts = d.summary && d.summary.debts;
     const debtItems = debts ? (debts.items || []).filter((it) => !it.key || !it.cleared) : [];
     const added = finAdded();
+    const anom = d.summary && d.summary.anomalies && d.summary.anomalies.items ? d.summary.anomalies : null;
+    const anomItems = anom ? anom.items.filter((it) => !it.cleared) : [];
     shell('פיננסים', `
       <div class="tiles">
         ${mo.map((m, i) => `<div class="card tile fin-month">
@@ -2008,7 +2010,10 @@
           : it.key ? `<div class="debt-row" data-debt="${esc(it.key)}"><span class="grow"><b>${esc(it.name)}</b> · ${money(it.amount)} · ${esc(it.date)}${it.extra ? `<div class="muted small">${esc(it.extra)}</div>` : ''}</span><button class="btn small ghost" data-clear>נקה</button></div>`
           : `<div class="small">${esc(it.text)}</div>`).join('')}
       </div>` : ''}
-      ${d.summary && d.summary.anomalies ? `<div class="section-title">⚠️ ${esc(d.summary.anomalies.title)}</div><div class="card">${pre(d.summary.anomalies.body)}</div>` : ''}
+      ${anom ? `<div class="section-title">⚠️ ${esc(anom.title)}</div><div class="card debts">
+        ${Object.keys(anomUndo).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(anomUndo[k].text)}</span><button class="btn small ghost" data-unanom="${esc(k)}">↶ ביטול</button></div>`).join('')}
+        ${anomItems.length ? anomItems.map((it) => `<div class="debt-row" data-anom="${esc(it.key)}"><span class="grow small">${esc(it.text)}</span><button class="btn small ghost" data-clear>נקה</button></div>`).join('') : (Object.keys(anomUndo).length ? '' : '<div class="muted small">אין חריגים</div>')}
+      </div>` : ''}
       ${d.summary && d.summary.invoices ? `<div class="section-title">🧾 ${esc(d.summary.invoices.title)}</div><div class="card">${pre(d.summary.invoices.body)}</div>` : ''}
       <div class="section-title">החודש</div>
       ${monthDetails('הכנסות החודש', ml.income, sumOf(ml.income), mo[0] ? mo[0].income : null, true)}
@@ -2026,6 +2031,8 @@
       b.onclick = () => clearDebt(debtItems.find((x) => x.key === b.closest('[data-debt]').dataset.debt));
     });
     $app.querySelectorAll('[data-undebt]').forEach((b) => { b.onclick = () => unclearDebt(b.dataset.undebt); });
+    $app.querySelectorAll('[data-anom] [data-clear]').forEach((b) => { b.onclick = () => clearAnom(anomItems.find((x) => x.key === b.closest('[data-anom]').dataset.anom), true); });
+    $app.querySelectorAll('[data-unanom]').forEach((b) => { b.onclick = () => clearAnom(anomUndo[b.dataset.unanom], false); });
     $app.querySelectorAll('[data-unadd]').forEach((b) => { b.onclick = () => undoManualTx(b.dataset.unadd); });
   }
 
@@ -2047,6 +2054,15 @@
       .catch((e) => { decided[r.id] = dc; redrawStage2(); toast('הביטול לא בוצע: ' + e.message, true); });
   }
 
+  const anomUndo = {};   // key → חריג שנוקה (להצגת ↶)
+  function clearAnom(it, clear) {
+    if (!it) return;
+    const set = (v) => patchStore('finance', (dd) => { const x = dd.summary && dd.summary.anomalies && (dd.summary.anomalies.items || []).find((y) => y.key === it.key); if (x) x.cleared = v; });
+    if (clear) anomUndo[it.key] = it; else delete anomUndo[it.key];
+    set(clear); redrawStage2();
+    api('anomClear', { key: it.key, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – לא יוצג שוב' : '↶ חזר לרשימה'))
+      .catch((e) => { if (clear) delete anomUndo[it.key]; else anomUndo[it.key] = it; set(!clear); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
+  }
   function setDebtCleared(key, val) {
     patchStore('finance', (dd) => { const it = dd.summary && dd.summary.debts && dd.summary.debts.items.find((x) => x.key === key); if (it) it.cleared = val; });
   }

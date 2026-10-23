@@ -48,6 +48,7 @@ const ACTIONS = {
   finRemoveManual:{ roles: ['admin'], fn: actionFinRemoveManual_ },
   debtClear:      { roles: ['admin'], fn: actionDebtClear_ },
   lateClear:      { roles: ['admin'], fn: actionLateClear_ },
+  anomClear:      { roles: ['admin'], fn: actionAnomClear_ },
   online:         { roles: ['admin'], fn: actionOnline_ },
 };
 
