@@ -81,6 +81,8 @@ function actionAddLead_(req, ctx) {
       (email ? '\n' + esc_(email) : '') + (source ? '\nמקור: ' + esc_(source) : ''),
       lead ? [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }] : []);
   } catch (e) { console.warn('telegram: ' + e); }
+  // התראה באפליקציה – לכל מי שמקבל לידים, חוץ ממי שהוסיף
+  notify_('lead_new', { name: name, link: lead ? '#/lead/' + lead.id : '#/leads' }, { exclude: ctx.email });
   return { lead: lead };
 }
 

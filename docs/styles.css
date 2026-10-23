@@ -398,3 +398,18 @@ body.no-scroll { overflow: hidden; }
 .waiting-row { gap: 6px; }
 .waiting-name { color: inherit; text-decoration: none; }
 .icon-btn.round { border: 1px solid var(--line); border-radius: 50%; width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; background: #fff; }
+
+/* התראות */
+.icon-btn .badge[hidden] { display: none; }
+.notif { text-decoration: none; color: inherit; }
+.notif.unread { border-inline-start: 4px solid var(--brand); background: #f3f8fd; }
+.notif .grow div { font-size: 14px; margin-top: 2px; }
+.push-card { display: flex; flex-direction: column; gap: 6px; }
+.push-card .steps { margin: 6px 0; padding-inline-start: 20px; line-height: 1.7; }
+.toggle-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 15px; }
+.toggle-row input { width: 20px; height: 20px; }
+/* טלפון צר: כל הכפתורים בשורה אחת בלי גלילה */
+@media (max-width: 420px) {
+  .topbar { gap: 2px; padding-inline: 8px; }
+  .topbar .icon-btn { min-width: 34px; padding: 6px 4px; }
+}

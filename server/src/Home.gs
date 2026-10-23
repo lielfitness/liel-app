@@ -31,6 +31,7 @@ function actionHome_(req, ctx) {
       last: readJsonProp_('ZOOM_LAST', null),
       calendarWrite: hasCalendarWrite_(),
     },
+    notify: notifyStatus_(),
     fin: null,
     finError: '',
   };

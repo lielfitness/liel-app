@@ -29,6 +29,12 @@ const ACTIONS = {
   cancelZoom:   { roles: ['admin', 'leads'], fn: actionCancelZoom_ },
   deleteLead:   { roles: ['admin'],          fn: actionDeleteLead_ },
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
+  notifications:  { roles: ['admin', 'leads'], fn: actionNotifications_ },
+  notifRead:      { roles: ['admin', 'leads'], fn: actionNotifRead_ },
+  notifSettings:  { roles: ['admin', 'leads'], fn: actionNotifSettings_ },
+  pushRegister:   { roles: ['admin', 'leads'], fn: actionPushRegister_ },
+  pushUnregister: { roles: ['admin', 'leads'], fn: actionPushUnregister_ },
+  pushTest:       { roles: ['admin', 'leads'], fn: actionPushTest_ },
 };
 
 function doGet() {
@@ -59,6 +65,9 @@ function handle_(req) {
     if (!role) throw apiError_('FORBIDDEN', 'למשתמש ' + email + ' אין הרשאה לאפליקציה');
     return { ok: true, session: makeSession_(email), email: email, role: role };
   }
+
+  // התראה מסקריפט אחר (בלי התחברות, עם מפתח משלו)
+  if (req.action === 'notify') return { ok: true, data: externalNotify_(req) };
 
   const email = checkSession_(req.session);
   const realRole = roleOf_(email, cfg);

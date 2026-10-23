@@ -24,6 +24,7 @@
     month: null,
     undoCount: 0,
     redoCount: 0,
+    unread: 0,
   };
 
   const $app = document.getElementById('app');
@@ -237,6 +238,7 @@
         <h1>${esc(title)}</h1>
         <nav class="topnav">${nav.map(link).join('')}</nav>
         <span class="spacer"></span>
+        <a class="icon-btn bell" data-bell href="#/notifs" title="התראות" aria-label="התראות" style="text-decoration:none">🔔<span class="badge" ${state.unread ? '' : 'hidden'}>${state.unread}</span></a>
         <a class="icon-btn" data-alerts href="#/zooms" title="זומים לשיוך" style="text-decoration:none" ${state.alertsCount ? '' : 'hidden'}>📅<span class="badge">${state.alertsCount}</span></a>
         ${state.realRole === 'admin' && !state.viewAs ? `<button class="icon-btn" data-act="viewas-on" title="תצוגה כמו שי" style="font-size:14px">👁 כמו שי</button>` : ''}
         <button class="icon-btn undo-btn" data-act="undo" aria-label="בטל פעולה אחרונה" title="בטל (פעולה אחרונה)" ${state.undoCount ? '' : 'disabled'}>↶</button>
@@ -264,6 +266,8 @@
   function updateBadges() {
     const a = $app.querySelector('[data-alerts]');
     if (a) { a.hidden = !state.alertsCount; a.querySelector('.badge').textContent = state.alertsCount; }
+    const bb = $app.querySelector('[data-bell] .badge');
+    if (bb) { bb.hidden = !state.unread; bb.textContent = state.unread > 99 ? '99+' : state.unread; }
     const n = untreatedCount();
     $app.querySelectorAll('a[href="#/untreated"]').forEach((el) => {
       let b = el.querySelector('.badge');
@@ -1675,6 +1679,10 @@
         ${d.zoomAuto.calendarWrite === false ? '<br><span style="color:#b10202">❌ אין הרשאת כתיבה ליומן – ביטול/שינוי מועד מהאפליקציה לא יעבדו. צריך להריץ reinstallTriggers בעורך הסקריפט.</span>' : d.zoomAuto.calendarWrite ? '<br>✅ הרשאת כתיבה ליומן (ביטול/שינוי מועד מהאפליקציה)' : ''}
         ${d.zoomAuto.last ? `<br>אחרון: ${esc(d.zoomAuto.last.name)} – עודכן ${d.zoomAuto.last.seconds != null ? `תוך ${d.zoomAuto.last.seconds < 120 ? d.zoomAuto.last.seconds + ' שניות' : Math.round(d.zoomAuto.last.seconds / 60) + ' דקות'}` : ''} מהקביעה (${esc(d.zoomAuto.last.via)}, התאמה לפי ${esc(d.zoomAuto.last.how || '')})` : ''}
       </div>` : ''}
+      ${d.notify ? `<div class="card small" style="margin-top:10px">
+        <b>התראות:</b> ${d.notify.trigger ? `בדיקת לידים חדשים כל דקה ✅${d.notify.last ? ` · אחרונה ${esc(fmtTs(d.notify.last))}` : ''}${d.notify.runs ? ` · היום ${d.notify.runs} בדיקות, ממוצע ${(d.notify.avgMs / 1000).toFixed(1)} שנ׳ (≈${Math.round(d.notify.avgMs * 1440 / 60000)} דק׳ ביום מתוך 90 המותרות)` : ''}` : '❌ בדיקת לידים חדשים לא פעילה – צריך להריץ setupNotifications בעורך הסקריפט'}
+        <br>${d.notify.push ? 'Push לטלפון: מוגדר ✅' : 'Push לטלפון: עוד לא הוגדר (Firebase)'}
+      </div>` : ''}
 
       <div class="section-title">עסק</div>
       ${d.finError ? `<div class="notice">${esc(d.finError)}</div>` : `
@@ -1693,6 +1701,194 @@
     });
   }
 
+  // ---------- מרכז התראות ----------
+  function applyNotifs(d) {
+    state.unread = d.unread || 0;
+    updateBadges();
+  }
+  let notifsFetch = null;
+  function refreshNotifs() {
+    if (notifsFetch || !state.session) return notifsFetch;
+    notifsFetch = api('notifications').then((d) => {
+      const before = JSON.stringify(store.get('notifs'));
+      store.set('notifs', d); applyNotifs(d);
+      if (location.hash === '#/notifs' && before !== JSON.stringify(d) && !isEditing()) renderNotifs(d);
+    }).catch(() => {}).finally(() => { notifsFetch = null; });
+    return notifsFetch;
+  }
+  function markNotifsRead(ids, all) {
+    const d = store.get('notifs');
+    if (d) {
+      d.items.forEach((n) => { if (all || ids.includes(n.id)) n.read = true; });
+      d.unread = d.items.filter((n) => !n.read).length;
+      store.set('notifs', d); applyNotifs(d);
+    }
+    api('notifRead', all ? { all: true } : { ids }).catch(() => {});
+  }
+  function relTime(ms) {
+    const m = Math.round((Date.now() - ms) / 60000);
+    if (m < 1) return 'עכשיו';
+    if (m < 60) return `לפני ${m} דק׳`;
+    if (m < 24 * 60) return `לפני ${Math.round(m / 60)} שע׳`;
+    return fmtTs(ms);
+  }
+
+  function viewNotifs() {
+    return swr('notifs', 'notifications', {}, 'התראות', (d) => { applyNotifs(d); renderNotifs(d); });
+  }
+
+  function renderNotifs(d) {
+    const items = d.items || [];
+    shell('התראות', `
+      ${pushCardHtml(d)}
+      <div class="row" style="margin:14px 0 6px">
+        <div class="section-title grow" style="margin:0">התראות אחרונות</div>
+        ${d.unread ? '<button class="btn small secondary" data-act="read-all">סימון הכל כנקרא</button>' : ''}
+      </div>
+      ${items.length ? `<div class="mlist">${items.map((n) => `
+        <a class="card mrow notif ${n.read ? '' : 'unread'}" href="${esc(n.link || '#/notifs')}" data-nid="${esc(n.id)}">
+          <div class="grow"><b>${esc(n.title)}</b><div>${esc(n.body)}</div></div>
+          <span class="muted small">${esc(relTime(n.at))}</span>
+        </a>`).join('')}</div>` : '<div class="empty">אין התראות עדיין</div>'}
+      <div class="section-title">אילו התראות לקבל</div>
+      <div class="card">
+        ${(d.types || []).map((t) => `<label class="toggle-row"><input type="checkbox" data-type="${esc(t.k)}" ${d.settings[t.k] ? 'checked' : ''}> ${esc(t.icon)} ${esc(t.label)}</label>`).join('')}
+        <div class="muted small">מה שמכובה – לא יופיע כאן ולא יגיע לטלפון.</div>
+      </div>`);
+    $app.querySelectorAll('[data-nid]').forEach((a) => {
+      a.addEventListener('click', () => { const n = items.find((x) => x.id === a.dataset.nid); if (n && !n.read) markNotifsRead([n.id]); });
+    });
+    const ra = $app.querySelector('[data-act="read-all"]');
+    if (ra) ra.onclick = () => { markNotifsRead([], true); renderNotifs(store.get('notifs')); };
+    $app.querySelectorAll('[data-type]').forEach((c) => {
+      c.onchange = () => {
+        const cur = store.get('notifs');
+        if (cur) { cur.settings[c.dataset.type] = c.checked; store.set('notifs', cur); }
+        api('notifSettings', { settings: { [c.dataset.type]: c.checked } })
+          .then(() => toast('נשמר ✓'))
+          .catch((e) => { c.checked = !c.checked; toast('לא נשמר: ' + e.message, true); });
+      };
+    });
+    bindPushCard(d);
+  }
+
+  // ---------- Push לטלפון (Firebase Cloud Messaging) ----------
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isStandalone = () => !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
+  const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const firebaseReady = () => !!(CFG.firebase && CFG.firebase.projectId && CFG.vapidKey);
+
+  function pushState() {
+    if (!firebaseReady()) return 'not-configured';
+    if (isIOS && !isStandalone()) return 'ios-home';
+    if (!pushSupported()) return 'unsupported';
+    if (Notification.permission === 'denied') return 'denied';
+    if (Notification.permission === 'granted' && LS.get('lf_push_token')) return 'on';
+    return 'off';
+  }
+
+  function pushCardHtml(d) {
+    const st = pushState();
+    const iosHelp = `<ol class="small steps">
+        <li>פתחו את האפליקציה ב-<b>Safari</b> (לא בכרום ולא מתוך וואטסאפ).</li>
+        <li>לחצו על כפתור השיתוף <b>⬆️</b> בתחתית המסך.</li>
+        <li>גללו ובחרו <b>"הוספה למסך הבית"</b> ← <b>"הוספה"</b>.</li>
+        <li>סגרו את Safari, פתחו את האפליקציה <b>מהאייקון במסך הבית</b>, וחזרו למסך הזה.</li>
+      </ol><div class="muted small">באייפון אפל מאפשרת התראות לאתר רק כשהוא מותקן במסך הבית (iOS 16.4 ומעלה).</div>`;
+    const body = {
+      'not-configured': `<div class="muted small">ההתראות לטלפון עוד לא הוגדרו (Firebase). בינתיים ההתראות מופיעות כאן, בפעמון 🔔.</div>`,
+      'ios-home': `<div>כדי לקבל התראות באייפון צריך קודם להוסיף את האפליקציה למסך הבית:</div>${iosHelp}`,
+      unsupported: `<div class="muted small">הדפדפן הזה לא תומך בהתראות. ההתראות יופיעו כאן, בפעמון 🔔.</div>`,
+      denied: `<div>ההתראות חסומות בטלפון הזה.</div><div class="muted small">${isIOS ? 'כדי לפתוח: הגדרות האייפון ← התראות ← "צוות ליאל פיטנס" ← לאפשר התראות.' : 'כדי לפתוח: לחצו על סמל המנעול ליד הכתובת ← התראות ← לאפשר, ורעננו.'}</div>`,
+      on: `<div>✅ התראות פעילות בטלפון הזה</div>
+        <div class="row" style="margin-top:8px"><button class="btn small secondary" data-act="push-test">שליחת התראת בדיקה</button><button class="btn small ghost" data-act="push-off">כיבוי בטלפון הזה</button></div>`,
+      off: `<div class="muted small">קבלו התראה לטלפון גם כשהאפליקציה סגורה.</div>
+        <button class="btn" data-act="push-on" style="margin-top:8px">🔔 הפעלת התראות בטלפון הזה</button>
+        ${isIOS ? '' : '<div class="muted small" style="margin-top:6px">באייפון: צריך קודם להוסיף את האפליקציה למסך הבית מ-Safari.</div>'}`,
+    }[st];
+    return `<div class="card push-card"><b>התראות לטלפון</b>${body}</div>`;
+  }
+
+  function bindPushCard() {
+    const on = $app.querySelector('[data-act="push-on"]');
+    if (on) on.onclick = () => enablePush(on);
+    const t = $app.querySelector('[data-act="push-test"]');
+    if (t) t.onclick = () => {
+      t.disabled = true;
+      api('pushTest').then((r) => toast(r.sent ? 'נשלחה התראת בדיקה ✓' : (r.message || 'לא נשלח'), !r.sent))
+        .catch((e) => toast(e.message, true)).finally(() => { t.disabled = false; });
+    };
+    const off = $app.querySelector('[data-act="push-off"]');
+    if (off) off.onclick = () => {
+      const token = LS.get('lf_push_token');
+      LS.del('lf_push_token');
+      if (token) api('pushUnregister', { token }).catch(() => {});
+      toast('ההתראות לטלפון הזה כובו');
+      renderNotifs(store.get('notifs') || { items: [], types: [], settings: {} });
+    };
+  }
+
+  function loadScript(src) {
+    return new Promise((res, rej) => {
+      if (document.querySelector(`script[src="${src}"]`)) return res();
+      const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('טעינה נכשלה'));
+      document.head.appendChild(s);
+    });
+  }
+  const FB_VER = '10.12.2';
+  async function fcmToken() {
+    await loadScript(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-app-compat.js`);
+    await loadScript(`https://www.gstatic.com/firebasejs/${FB_VER}/firebase-messaging-compat.js`);
+    if (!window.firebase.apps.length) window.firebase.initializeApp(CFG.firebase);
+    const reg = await navigator.serviceWorker.ready;
+    return window.firebase.messaging().getToken({ vapidKey: CFG.vapidKey, serviceWorkerRegistration: reg });
+  }
+  function deviceName() {
+    const ua = navigator.userAgent;
+    return (isIOS ? 'iPhone' : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'דפדפן') + (isStandalone() ? ' (מסך הבית)' : '');
+  }
+
+  async function enablePush(btn) {
+    if (state.viewAs) return toast('חזרו לתצוגה שלכם כדי להפעיל התראות', true);
+    btn.disabled = true; btn.textContent = 'מפעיל…';
+    try {
+      // חייב להיות ישר מהלחיצה (באייפון אחרת החלון לא נפתח)
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') { toast('לא אושרו התראות', true); renderNotifs(store.get('notifs')); return; }
+      const token = await fcmToken();
+      if (!token) throw new Error('לא התקבל מזהה מכשיר');
+      await api('pushRegister', { token, device: deviceName(), oldToken: LS.get('lf_push_token') || '' });
+      LS.set('lf_push_token', token); LS.set('lf_push_checked', String(Date.now()));
+      toast('✅ ההתראות הופעלו');
+      api('pushTest').catch(() => {});
+    } catch (e) {
+      toast('לא הצלחתי להפעיל התראות: ' + e.message, true);
+    }
+    const d = store.get('notifs');
+    if (location.hash === '#/notifs') renderNotifs(d || { items: [], types: [], settings: {} });
+  }
+
+  /** פעם ביום: מוודא שהמזהה של הטלפון עדיין בתוקף (גוגל מחליפה אותו מדי פעם) */
+  function refreshPushToken() {
+    if (pushState() !== 'on' || state.viewAs) return;
+    if (Date.now() - Number(LS.get('lf_push_checked') || 0) < 864e5) return;
+    fcmToken().then((token) => {
+      LS.set('lf_push_checked', String(Date.now()));
+      if (token && token !== LS.get('lf_push_token')) {
+        return api('pushRegister', { token, device: deviceName(), oldToken: LS.get('lf_push_token') || '' }).then(() => LS.set('lf_push_token', token));
+      }
+    }).catch(() => {});
+  }
+
+  // לחיצה על התראה: ה-service worker מבקש לפתוח מסך / ההתראות התעדכנו
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      const m = e.data || {};
+      if (m.type === 'notif') refreshNotifs();
+      if (m.type === 'open') { if (m.id) markNotifsRead([m.id]); if (m.link) location.hash = m.link.replace(/^.*#/, '#'); }
+    });
+  }
+
   // ---------- נתב ----------
   function route() {
     navSeq++;
@@ -1706,6 +1902,7 @@
     if (page === 'ghosting') return viewGhosting();
     if (page === 'month') return viewMonth();
     if (page === 'zooms') return viewZooms();
+    if (page === 'notifs') return viewNotifs();
     location.replace(isAdmin() ? '#/home' : '#/leads');
   }
 
@@ -1740,14 +1937,20 @@
     }
     window.onhashchange = route;
     if (!location.hash || location.hash === '#/' ) location.replace(isAdmin() ? '#/home' : '#/leads');
+    const openedFrom = new URLSearchParams(location.search).get('n');
+    if (openedFrom) history.replaceState(null, '', location.pathname + location.hash);
     route();
     refreshAlerts();
+    const nc = store.get('notifs'); if (nc) applyNotifs(nc);
+    refreshNotifs().then(() => { if (openedFrom && openedFrom !== 'test') markNotifsRead([openedFrom]); });
+    setInterval(() => { if (document.visibilityState === 'visible') refreshNotifs(); }, 60000);
+    setTimeout(refreshPushToken, 5000);
     setTimeout(() => prefetchAll(false), 400);
     // רענון ברקע כשחוזרים לאפליקציה
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && state.session) {
         if (pendingBooking && Date.now() - pendingBooking.at < 30 * 60000) { watchBooking(pendingBooking.lead); pendingBooking = null; }
-        refreshAlerts(); softRefresh();
+        refreshAlerts(); refreshNotifs(); softRefresh();
         setTimeout(() => prefetchAll(false), 1500);
       }
     });

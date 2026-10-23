@@ -7,6 +7,9 @@ window.APP_CONFIG = {
   // הודעת הווטסאפ המוכנה. {name} = השם הפרטי של הליד, {me} = שם השולח
   waTemplate: 'היי {name}, כאן {me} מ-Liel Fitness 🙂 ראיתי שהשארת פרטים, מתי נוח לך שנדבר?',
   senderNames: { admin: 'ליאל', leads: 'שי' },
+  // התראות Push (Firebase). לא סודות – מותר בריפו הציבורי. ריק = רק מרכז ההתראות באפליקציה.
+  firebase: null,   // { apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId }
+  vapidKey: '',     // Cloud Messaging ← Web Push certificates ← Key pair
   // הודעת אישור לליד אחרי קביעת זום. {name} שם פרטי, {day} יום בשבוע, {date} DD.MM, {time} HH:mm (שעון ישראל)
   zoomConfirmTemplate: [
     'היי {name} זאת שי :)',
