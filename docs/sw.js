@@ -1,6 +1,6 @@
 // Service worker: רשת קודם (כדי שעדכונים יופיעו מיד), מטמון רק כגיבוי לקבצי האתר.
 // לא נוגע בקריאות ל-API (POST) ולא בגוגל. מציג גם התראות Push (Firebase שולח, אנחנו מציגים).
-const CACHE = 'lf-shell-v26';
+const CACHE = 'lf-shell-v27';
 
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => {
@@ -32,7 +32,7 @@ self.addEventListener('push', (e) => {
     self.registration.showNotification(title, {
       body: d.body || n.body || '',
       icon: 'icons/icon-192.png',
-      badge: 'icons/icon-192.png',
+      badge: 'icons/badge-96.png',
       tag: d.id || undefined,
       data: { id: d.id || '', link: d.link || '' },
       dir: 'rtl', lang: 'he',

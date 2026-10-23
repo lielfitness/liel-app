@@ -221,10 +221,7 @@ dl.info dd { margin: 0; word-break: break-word; }
   min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
   padding: 24px; text-align: center; background: #fff;
 }
-.logo-mark {
-  width: 84px; height: 84px; border-radius: 22px; background: var(--brand); color: #fff;
-  display: flex; align-items: center; justify-content: center; font-size: 34px; font-weight: 800; letter-spacing: 1px;
-}
+.logo-mark { width: 96px; height: 96px; display: block; filter: drop-shadow(0 6px 14px rgba(0, 47, 92, .25)); }
 .login h1 { margin: 0; font-size: 26px; }
 .splash { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #fff; }
 

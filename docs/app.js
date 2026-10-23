@@ -173,7 +173,7 @@
   function renderLogin(msg) {
     $app.innerHTML = `
       <div class="login">
-        <div class="logo-mark">LF</div>
+        <img class="logo-mark" src="icons/icon.svg" alt="Liel Fitness" width="96" height="96">
         <h1>צוות ליאל פיטנס</h1>
         <div id="gbtn"></div>
         ${msg ? `<div class="notice">${esc(msg)}</div>` : ''}
@@ -197,7 +197,7 @@
   }
 
   async function onGoogleCredential(resp) {
-    $app.innerHTML = '<div class="splash"><div class="logo-mark">LF</div><div class="splash-title">צוות ליאל פיטנס</div></div>';
+    $app.innerHTML = '<div class="splash"><img class="logo-mark" src="icons/icon.svg" alt="Liel Fitness" width="96" height="96"><div class="splash-title">צוות ליאל פיטנס</div></div>';
     try {
       const out = await api('login', { idToken: resp.credential });
       state.session = out.session; state.role = out.role; state.email = out.email;
@@ -281,7 +281,7 @@
     state.viewAs = v;
     if (v) LS.set('lf_viewas', v); else LS.del('lf_viewas');
     state.leads = null; state.month = null; state.alertsCount = 0; leadsFetchedAt = 0; undoStack = null;
-    $app.innerHTML = '<div class="splash"><div class="logo-mark">LF</div><div class="splash-title">צוות ליאל פיטנס</div></div>';
+    $app.innerHTML = '<div class="splash"><img class="logo-mark" src="icons/icon.svg" alt="Liel Fitness" width="96" height="96"><div class="splash-title">צוות ליאל פיטנס</div></div>';
     location.hash = '';
     await boot();
   }
