@@ -45,7 +45,9 @@ function doPost(e) {
   const t0 = Date.now();
   let out;
   try {
-    const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    // Make שולח כטופס (key=value) – בטוח לשמות עם גרשיים; האפליקציה שולחת JSON
+    const req = (e && e.parameter && e.parameter.action === 'notify') ? Object.assign({}, e.parameter)
+      : JSON.parse((e && e.postData && e.postData.contents) || '{}');
     out = handle_(req);
   } catch (err) {
     out = { ok: false, code: err.code || 'ERROR', error: String(err.message || err) };
