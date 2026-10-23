@@ -35,6 +35,7 @@ const ACTIONS = {
   pushRegister:   { roles: ['admin', 'leads'], fn: actionPushRegister_ },
   pushUnregister: { roles: ['admin', 'leads'], fn: actionPushUnregister_ },
   pushTest:       { roles: ['admin', 'leads'], fn: actionPushTest_ },
+  notifyTest:     { roles: ['admin'], fn: actionNotifyTest_ },
   // שלב 2 – ליאל בלבד
   coaches:        { roles: ['admin'], fn: actionCoaches_ },
   coach:          { roles: ['admin'], fn: actionCoach_ },

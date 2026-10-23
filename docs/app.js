@@ -2291,7 +2291,15 @@
       <div class="card">
         ${(d.types || []).map((t) => `<label class="toggle-row"><input type="checkbox" data-type="${esc(t.k)}" ${d.settings[t.k] ? 'checked' : ''}> ${esc(t.icon)} ${esc(t.label)}</label>`).join('')}
         <div class="muted small">מה שמכובה – לא יופיע בפעמון ולא יגיע לטלפון.</div>
-      </div>`, { back: true });
+        ${isAdmin() && !state.viewAs ? '<div class="muted small" style="margin-top:6px">💳 📊 🏁 בשעות 23:00–07:00 נשמרים בפעמון ונשלחים לטלפון ב-07:00 (מאוחד). ⚠️ ביטול מאוחר – תמיד מיד.</div>' : ''}
+      </div>
+      ${isAdmin() && !state.viewAs ? '<button class="btn secondary" data-act="notify-test" style="margin-top:12px;width:100%">🧪 שליחת התראות בדיקה (4 הסוגים)</button>' : ''}`, { back: true });
+    const nt = $app.querySelector('[data-act="notify-test"]');
+    if (nt) nt.onclick = () => {
+      nt.disabled = true;
+      api('notifyTest').then((r) => { toast('✅ ' + r.message); refreshNotifs(); })
+        .catch((e) => toast(e.message, true)).finally(() => { nt.disabled = false; });
+    };
     $app.querySelectorAll('[data-type]').forEach((c) => {
       c.onchange = () => {
         const cur = store.get('notifs');
@@ -2441,9 +2449,12 @@
     if (page === 'notifs') return viewNotifs();
     if (page === 'status') return viewStatus();
     if (isAdmin()) {
-      if (page === 'coaches') return viewCoaches();
+      if (page === 'coaches') { if (parts[1] === 'low' || parts[1] === 'done') coachFilter = parts[1]; return viewCoaches(); }
       if (page === 'coach' && parts[1]) return viewCoach(decodeURIComponent(parts[1]));
-      if (page === 'finance') return viewFinance();
+      if (page === 'finance') {
+        if (parts[1] === 'debts') { finView = 'cur'; const go = () => { const el = $app.querySelector('.debts'); if (el) el.scrollIntoView({ block: 'start' }); }; const r = viewFinance(); setTimeout(go, 60); return r; }
+        return viewFinance();
+      }
       if (page === 'more') return viewMore();
       if (page === 'settings') return viewSettings();
     }

@@ -21,6 +21,10 @@ const NOTIF_TYPES_ = {
   zoom_booked:    { label: 'זום נקבע', icon: '📅', roles: ['admin'] },
   zoom_cancelled: { label: 'זום בוטל', icon: '❌', roles: ['admin'] },
   zoom_moved:     { label: 'זום הוזז', icon: '🔁', roles: ['admin'] },
+  late_cancel:    { label: 'ביטול מאוחר',             icon: '⚠️', roles: ['admin'] },
+  debt_new:       { label: 'חיוב נכשל / הוראת קבע',   icon: '💳', roles: ['admin'], quiet: true },
+  coach_ending:   { label: 'ליווי מסתיים',            icon: '🏁', roles: ['admin'], quiet: true },
+  fin_summary:    { label: 'הסיכום הפיננסי השבועי',   icon: '📊', roles: ['admin'], quiet: true },
   system:         { label: 'מערכת',    icon: 'ℹ️', roles: ['admin'] },   // לסקריפטים האחרים (בהמשך)
 };
 const SYS_TABS_ = {
@@ -29,6 +33,7 @@ const SYS_TABS_ = {
   settings: { name: 'הגדרות',  head: ['משתמש', 'הגדרות (JSON)'] },
   lateClear: { name: 'ביטולים שנוקו', head: ['מזהה פגישה', 'נוקה בתאריך', 'מאמן', 'תאריך הפגישה'] },
   anomClear: { name: 'חריגים שנוקו', head: ['פריט', 'נוקה בתאריך'] },
+  sent:      { name: 'התראות שנשלחו', head: ['מזהה', 'נשלח בתאריך'] },
 };
 const NOTIF_KEEP_DAYS_ = 60;
 const NOTIF_LIST_MAX_ = 60;
@@ -118,17 +123,54 @@ function notify_(type, p, opts) {
     const nm = shortName_(p.name);
     const title = p.title || (t.icon + ' ' + t.label + (nm ? ' – ' + nm : '') + (p.when ? ' · ' + whenText_(p.when) : ''));
     const body = p.text ? String(p.text) : '';
+    // שעות שקט (23:00–07:00) לסוגים שמסומנים quiet: נשמר בפעמון עכשיו, ה-Push יוצא ב-07:00 (מאוחד)
+    const hold = t.quiet && !opts.noQuiet && isQuietHour_(now);
     users.forEach(function (e) {
       const id = Utilities.getUuid().replace(/-/g, '').slice(0, 12);
       sh.appendRow([id, String(now.getTime()), Utilities.formatDate(now, TZ_, 'dd/MM/yyyy HH:mm'), e, type, title, body, p.link || '', '']);
       dropNotifCache_(e);
-      try { pushToUser_(e, { id: id, type: type, title: title, body: body, link: p.link || '' }); } catch (err) { console.warn('push: ' + err); }
+      const n = { id: id, type: type, title: title, body: body, link: p.link || '' };
+      if (hold) { queueQuiet_(e, n); return; }
+      try { pushToUser_(e, n); } catch (err) { console.warn('push: ' + err); }
     });
     return users.length;
   } catch (e) {
     console.warn('notify_ ' + type + ': ' + (e.message || e));
     return 0;
   }
+}
+
+function isQuietHour_(d) {
+  const h = Number(Utilities.formatDate(d || new Date(), TZ_, 'H'));
+  return h >= 23 || h < 7;
+}
+function queueQuiet_(email, n) {
+  const q = readJsonProp_('QUIET_QUEUE', []);
+  q.push({ e: email, n: n });
+  writeJsonProp_('QUIET_QUEUE', q.slice(-40));
+}
+/** ב-07:00 (מתוך הבדיקה של כל דקה): שולח את מה שהצטבר בלילה – אחת לכל משתמש, מאוחד אם יש כמה */
+function flushQuiet_() {
+  if (isQuietHour_()) return;
+  const q = readJsonProp_('QUIET_QUEUE', []);
+  if (!q.length) return;
+  writeJsonProp_('QUIET_QUEUE', []);
+  const by = {};
+  q.forEach(function (x) { (by[x.e] = by[x.e] || []).push(x.n); });
+  Object.keys(by).forEach(function (e) {
+    const list = by[e];
+    const n = list.length === 1 ? list[0] : { id: 'night', type: 'system', title: '🌙 ' + list.length + ' התראות מהלילה',
+      body: list.map(function (x) { return x.title; }).join(' · ').slice(0, 300), link: '#/notifs' };
+    try { pushToUser_(e, n); } catch (err) { console.warn('push: ' + err); }
+  });
+}
+
+/** מזהה התראה שכבר נשלחה – כדי לא לשלוח אותה שוב */
+function alreadySent_(key) {
+  return sysRows_('sent').rows.some(function (r) { return r[0] === key; });
+}
+function markSent_(key) {
+  sysTab_('sent').appendRow([key, Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]);
 }
 
 function dropNotifCache_(email) {
@@ -301,8 +343,59 @@ function watchKey_(l) {
 
 function watchNewLeads() {
   const t0 = Date.now();
-  try { return watchNewLeadsCore_(t0); } finally { trackRun_('watch', t0); }
+  try {
+    try { flushQuiet_(); } catch (e) { console.warn('quiet: ' + e); }
+    try { dailyCoachCheck_(); } catch (e) { console.warn('coaches: ' + e); }
+    return watchNewLeadsCore_(t0);
+  } finally { trackRun_('watch', t0); }
 }
+
+/** פעם ביום מ-09:00: מאמן שנשארה לו פגישה אחרונה / שהליווי שלו הסתיים מאז הבדיקה הקודמת */
+function dailyCoachCheck_() {
+  const props = PropertiesService.getScriptProperties();
+  const now = new Date();
+  const day = Utilities.formatDate(now, TZ_, 'yyyy-MM-dd');
+  if (Number(Utilities.formatDate(now, TZ_, 'H')) < 9 || props.getProperty('COACH_CHECK_DAY') === day) return;
+  props.setProperty('COACH_CHECK_DAY', day);
+  const coaches = coachesData_(true).coaches;
+  const prev = readJsonProp_('COACH_STATE', null);
+  const state = {};
+  coaches.forEach(function (c) { if (c.left != null) state[c.name] = c.left <= 0 ? 'done' : c.left === 1 ? 'last' : 'ok'; });
+  writeJsonProp_('COACH_STATE', state);
+  if (!prev) return;   // הפעם הראשונה: רק רושמים מצב
+  const last = [], done = [];
+  Object.keys(state).forEach(function (n) {
+    if (state[n] === prev[n]) return;
+    if (state[n] === 'last') last.push(n);
+    if (state[n] === 'done') done.push(n);
+  });
+  sendCoachEnding_(last, done);
+}
+function sendCoachEnding_(last, done, opts) {
+  const all = last.map(function (n) { return { n: n, t: 'נשארה פגישה אחרונה', f: 'low' }; })
+    .concat(done.map(function (n) { return { n: n, t: 'הליווי הסתיים', f: 'done' }; }));
+  if (!all.length) return 0;
+  if (all.length === 1) {
+    return notify_('coach_ending', { title: '🏁 ' + all[0].n + ' – ' + all[0].t, link: '#/coaches/' + all[0].f }, opts);
+  }
+  return notify_('coach_ending', { title: '🏁 ' + all.length + ' מאמנים: ' + all.map(function (x) { return x.n; }).join(', '),
+    text: all.map(function (x) { return x.n + ' – ' + x.t; }).join(' · '), link: '#/coaches/' + (done.length && !last.length ? 'done' : 'low') }, opts);
+}
+
+/** "שליחת התראות בדיקה" (ליאל): 4 התראות עם נתוני דמה, רק אליו, בלי שעות שקט */
+function actionNotifyTest_(req, ctx) {
+  const o = { only: ctx.email, noQuiet: true };
+  const n = [
+    notify_('late_cancel', { title: '⚠️ ביטול מאוחר – מאמנת לדוגמה (בדיקה)', text: '28/10 11:00 · בוטל כ-3 שעות לפני · לא חויב (אפשר לחייב ביומן)', link: '#/coaches' }, o),
+    notify_('debt_new', { title: '💳 חיוב נכשל – ללא שם (בדיקה)', text: '₪1,000 · 24/10 · סירוב מחברת האשראי', link: '#/finance/debts' }, o),
+    sendCoachEnding_(['מאמן לדוגמה (בדיקה)'], [], o),
+    notify_('fin_summary', { title: '📊 הסיכום השבועי מוכן (בדיקה)', text: 'אוקטובר: הכנסות ₪59,700 | הוצאות ₪8,615 | נטו ₪25,341 · 2 לבדיקה, 1 חייבים', link: '#/finance' }, o),
+  ];
+  return { sent: n.reduce(function (a, b) { return a + (b || 0); }, 0), message: 'נשלחו 4 התראות בדיקה (אם הסוג דלוק בהגדרות)' };
+}
+
+/** להרצה פעם אחת מהעורך: מפתח לסקריפט של גיליון הפיננסים (להדביק שם ב-Script Properties בשם APP_NOTIFY_KEY) */
+function createFinanceNotifyKey() { createNotifyKey('finance'); }
 
 function watchNewLeadsCore_(t0) {
   const cfg = getConfig_();
@@ -419,6 +512,19 @@ function externalNotify_(req) {
   const keys = readJsonProp_('NOTIFY_KEYS', {});
   const src = Object.keys(keys).filter(function (k) { return keys[k] && keys[k] === req.key; })[0];
   if (!src) throw apiError_('FORBIDDEN', 'מפתח לא תקין');
+  if (['late_cancel', 'debt_new', 'fin_summary'].indexOf(req.type) >= 0) {
+    const dedup = String(req.dedup || '').slice(0, 200);
+    let n = 0;
+    const lock = LockService.getScriptLock();
+    const got = lock.tryLock(15000);
+    try {
+      if (dedup && alreadySent_(dedup)) return { ok: true, notified: 0, duplicate: true };
+      if (dedup) markSent_(dedup);
+    } finally { if (got) lock.releaseLock(); }
+    if (req.seed) return { ok: true, notified: 0, seeded: true };   // הפעלה ראשונה: רק רושמים, בלי לשלוח
+    n = notify_(req.type, { title: String(req.title || '').slice(0, 120), text: String(req.text || '').slice(0, 300), link: String(req.link || '').slice(0, 200) });
+    return { ok: true, notified: n };
+  }
   if (req.type === 'lead_new') {
     const name = String(req.name || '').trim().slice(0, 120);
     const pk = phoneKey_(req.phone), em = String(req.email || '').trim().toLowerCase();
@@ -448,7 +554,7 @@ function createNotifyKey(source) {
   const key = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
   keys[source] = key;
   writeJsonProp_('NOTIFY_KEYS', keys);
-  console.log('🔑 המפתח של "' + source + '" (להעתיק ל-Make, לא לשלוח לאף אחד):\n' + key);
+  console.log('🔑 המפתח של "' + source + '" (להעתיק לשולח – Make או סקריפט הפיננסים – לא לשלוח לאף אחד):\n' + key);
 }
 
 /** בודק שההגדרה של Firebase תקינה (בלי לשלוח התראה לאף אחד). */
