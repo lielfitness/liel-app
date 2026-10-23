@@ -413,3 +413,27 @@ body.no-scroll { overflow: hidden; }
 
 .health-warn { background: #fdecea; color: #b10202; border: 1px solid #f5c2c0; border-radius: 10px; padding: 8px 12px; margin: 6px 0; font-size: 14px; font-weight: 600; }
 .topbar h1 { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+
+/* שלב 2 */
+.coach-row { text-decoration: none; color: inherit; }
+.left-pill { font-weight: 800; font-size: 17px; white-space: nowrap; }
+.coach-row.low .left-pill, .left-big.low .num { color: #b10202; }
+.coach-row.done { background: #fdecea; border-color: #f5c2c0; }
+.coach-row.done .left-pill, .left-big.done .num { color: #b10202; }
+.left-big { text-align: center; min-width: 90px; }
+.left-big .num { font-size: 32px; font-weight: 800; color: var(--brand); line-height: 1.1; }
+.left-big .lbl { font-size: 12px; color: var(--muted, #667); }
+.late-open { border-inline-start: 4px solid #b10202; }
+.renew-row { align-items: center; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+table.ba { width: 100%; border-collapse: collapse; margin: 6px 0; }
+table.ba th, table.ba td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: center; }
+table.ba td:first-child { text-align: start; }
+.fin-month .fin-line { font-size: 14px; margin-top: 4px; }
+.fin-month .lbl { margin-bottom: 4px; }
+.decided { opacity: .65; }
+.pre { white-space: pre-wrap; font-size: 14px; line-height: 1.6; }
+details.card summary { cursor: pointer; font-weight: 700; }
+details.card .pre { margin-top: 10px; }
+.tx-row { display: flex; flex-direction: column; gap: 8px; }
+.tx-top, .tx-bottom { display: flex; align-items: center; gap: 8px; }
+.tx-bottom .btn.small { min-height: 36px; padding: 6px 12px; }

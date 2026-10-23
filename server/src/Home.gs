@@ -27,6 +27,7 @@ function actionHome_(req, ctx) {
     },
     zoomAlerts: readJsonProp_(ZOOM_ALERTS_KEY_, []).length,
     health: healthCheck_(),
+    stage2: finHomeCounts_(),
     fin: null,
     finError: '',
   };

@@ -213,11 +213,19 @@
   // ---------- מסגרת וניווט ----------
   function navItems() {
     const items = [];
-    if (isAdmin()) items.push({ h: '#/home', ico: '🏠', t: 'בית' });
+    if (isAdmin()) {
+      items.push({ h: '#/home', ico: '🏠', t: 'בית' });
+      items.push({ h: '#/leads', ico: '👥', t: 'לידים' });
+      items.push({ h: '#/untreated', ico: '⏰', t: 'לא טופלו', badge: untreatedCount() });
+      items.push({ h: '#/coaches', ico: '🏋️', t: 'מאמנים' });
+      items.push({ h: '#/finance', ico: '📊', t: 'פיננסים' });
+      items.push({ h: '#/more', ico: '☰', t: 'עוד' });
+      return items;
+    }
     items.push({ h: '#/leads', ico: '👥', t: 'לידים' });
     items.push({ h: '#/untreated', ico: '⏰', t: 'לא טופלו', badge: untreatedCount() });
     items.push({ h: '#/ghosting', ico: '👻', t: 'גוסטינג' });
-    items.push({ h: '#/month', ico: '💰', t: isAdmin() ? 'שכר שי' : 'החודש שלי' });
+    items.push({ h: '#/month', ico: '💰', t: 'החודש שלי' });
     return items;
   }
   function untreatedCount() {
@@ -1189,6 +1197,7 @@
       jobs.push(prefetchOne('zooms', 'zoomAlerts'));
     }
     if (isAdmin()) jobs.push(prefetchOne('home', 'home'));
+    if (isAdmin() && !state.viewAs) { jobs.push(prefetchOne('coaches', 'coaches')); jobs.push(prefetchOne('finance', 'finance')); }
     jobs.push(prefetchOne('month:' + monthKeyNow(0), 'month', { month: monthKeyNow(0) }));
     if (!onlyDerived) jobs.push(prefetchOne('month:' + monthKeyNow(-1), 'month', { month: monthKeyNow(-1) }));
     return Promise.all(jobs);
@@ -1658,6 +1667,12 @@
         <a class="card tile" href="#/leads" data-filter="s:ליד חדש"><div class="num">${L.newStatus}</div><div class="lbl">בסטטוס "ליד חדש"</div></a>
         <a class="card tile ${L.untreated ? 'alert' : ''}" href="#/untreated"><div class="num">${L.untreated}</div><div class="lbl">לא טופלו יומיים+</div></a>
       </div>
+      ${d.stage2 ? `<div class="section-title">מאמנים ופיננסים</div>
+      <div class="tiles">
+        <a class="card tile ${d.stage2.lateUncharged ? 'alert' : ''}" href="#/coaches"><div class="num">${d.stage2.lateUncharged}</div><div class="lbl">ביטולים מאוחרים שלא חויבו</div></a>
+        <a class="card tile ${d.stage2.lowCoaches ? 'alert' : ''}" href="#/coaches" data-low="1"><div class="num">${d.stage2.lowCoaches}</div><div class="lbl">מאמנים עם 2 פגישות או פחות</div></a>
+        <a class="card tile ${d.stage2.review ? 'alert' : ''}" href="#/finance"><div class="num">${d.stage2.review}</div><div class="lbl">תנועות "לבדיקה"</div></a>
+      </div>` : ''}
 
       <div class="section-title">ממתינים – לחזור אליהם אחרי פגישה (${(L.waiting || []).length})</div>
       ${(L.waiting || []).length ? `<div class="mlist">${L.waiting.map((w) => `
@@ -1695,9 +1710,263 @@
     h1.addEventListener('pointerdown', () => { lp = setTimeout(() => { location.hash = '#/status'; }, 700); });
     ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => h1.addEventListener(ev, cancelLp));
     h1.addEventListener('contextmenu', (e) => e.preventDefault());
+    const low = $app.querySelector('[data-low]');
+    if (low) low.addEventListener('click', () => { coachFilter = 'low'; });
     $app.querySelectorAll('[data-filter]').forEach((a) => {
       a.addEventListener('click', () => { state.filter = a.dataset.filter; LS.set('lf_filter', state.filter); });
     });
+  }
+
+  // ---------- שלב 2: מאמנים ופגישות (ליאל בלבד) ----------
+  let coachFilter = 'all';
+  const leftCls = (c) => (c.left == null ? '' : c.left <= 0 ? 'done' : c.left <= 2 ? 'low' : '');
+  function confirmSheet(title, html, okText, onOk) {
+    const sh = openSheet(`
+      <div class="row"><b class="grow">${esc(title)}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      ${html}
+      <div class="row"><button class="btn grow" data-ok>${esc(okText)}</button><button class="btn ghost" data-x>ביטול</button></div>`);
+    sh.el.querySelector('[data-ok]').onclick = () => { sh.close(); onOk(); };
+    return sh;
+  }
+
+  function viewCoaches() { return swr('coaches', 'coaches', {}, 'מאמנים ופגישות', renderCoaches); }
+
+  function renderCoaches(d) {
+    const late = d.late || [];
+    const open = late.filter((m) => m.charged === 'לא');
+    const list = (d.coaches || []).filter((c) => coachFilter !== 'low' || (c.left != null && c.left <= 2));
+    const lowN = (d.coaches || []).filter((c) => c.left != null && c.left <= 2).length;
+    shell('מאמנים ופגישות', `
+      <div class="card row" style="align-items:center">
+        <div class="grow small">הורדת פגישות אחרונה: <b>${esc(d.lastRun || '—')}</b></div>
+        <button class="btn small secondary" data-act="run-meetings">▶️ הרץ עכשיו</button>
+      </div>
+      <div class="section-title">ביטולים מאוחרים${open.length ? ` – ${open.length} לא חויבו` : ''}</div>
+      ${late.length ? `<div class="mlist">${late.map((m) => `
+        <div class="card mrow ${m.charged === 'לא' ? 'late-open' : ''}" data-late="${esc(m.id)}">
+          <div class="grow">
+            <a href="#/coach/${encodeURIComponent(m.coach)}"><b>${esc(m.coach)}</b></a>
+            <div class="muted small">${esc(m.date)} ${esc(m.time)}${m.hoursBefore != null ? ` · בוטלה ~${m.hoursBefore} שעות לפני` : ''}</div>
+            <div class="small">${m.charged === 'כן' ? '💳 חויב – ירדה פגישה' : 'לא חויב'}</div>
+          </div>
+          ${m.charged === 'לא' ? '<button class="btn small danger" data-charge="1">לחייב</button>' : '<button class="btn small ghost" data-charge="0">לבטל חיוב</button>'}
+        </div>`).join('')}</div>` : '<div class="card muted">אין ביטולים מאוחרים</div>'}
+      <div class="row" style="margin:16px 0 6px;align-items:center">
+        <div class="section-title grow" style="margin:0">מאמנים בליווי (${(d.coaches || []).length})</div>
+        <div class="chips" style="margin:0"><button class="chip ${coachFilter === 'all' ? 'on' : ''}" data-cf="all">הכל</button><button class="chip ${coachFilter === 'low' ? 'on' : ''}" data-cf="low">נגמרות<span class="n">${lowN}</span></button></div>
+      </div>
+      <div class="mlist">${list.map((c) => `
+        <a class="card mrow coach-row ${leftCls(c)}" href="#/coach/${encodeURIComponent(c.name)}">
+          <div class="grow"><b>${esc(c.name)}</b></div>
+          <span class="left-pill">${c.left == null ? '—' : c.left <= 0 ? 'נגמרה' : c.left} <span class="muted">/ ${c.pkg == null ? '—' : c.pkg}</span></span>
+        </a>`).join('')}</div>`);
+    $app.querySelectorAll('[data-cf]').forEach((b) => { b.onclick = () => { coachFilter = b.dataset.cf; renderCoaches(d); }; });
+    $app.querySelector('[data-act="run-meetings"]').onclick = (ev) => runMeetings(ev.currentTarget);
+    $app.querySelectorAll('[data-late] [data-charge]').forEach((b) => {
+      b.onclick = () => {
+        const m = late.find((x) => x.id === b.closest('[data-late]').dataset.late);
+        if (m) chargeLate(m, b.dataset.charge === '1');
+      };
+    });
+  }
+
+  function runMeetings(btn) {
+    confirmSheet('הרצת הורדת פגישות', '<div class="small">מריץ עכשיו את אותה הורדה של יום שישי: פגישות שהתקיימו יורדות מהחבילות, והסיכום נשלח בטלגרם. פגישה לא יורדת פעמיים.</div>', 'להריץ', () => {
+      btn.disabled = true; btn.textContent = 'רץ…';
+      api('runMeetings').then((r) => { toast('✅ ' + r.message); state.forceFresh = true; markDerivedStale(); if (location.hash === '#/coaches') viewCoaches(); })
+        .catch((e) => toast('ההורדה נכשלה: ' + e.message, true))
+        .finally(() => { btn.disabled = false; btn.textContent = '▶️ הרץ עכשיו'; });
+    });
+  }
+
+  /** לחייב / לבטל חיוב – מיידי במסך, בגיליון דרך סקריפט הפגישות */
+  function chargeLate(m, want) {
+    const d = store.get('coaches');
+    const c = d && d.coaches.find((x) => x.name === m.coach);
+    const before = c && c.left != null ? c.left : null;
+    const after = before == null ? null : before + (want ? -1 : 1);
+    confirmSheet(want ? 'לחייב ביטול מאוחר' : 'לבטל את החיוב',
+      `<div><b>${esc(m.coach)}</b> · ${esc(m.date)} ${esc(m.time)}</div>
+       <div class="small">${want ? 'תרד פגישה מהחבילה' : 'הפגישה תחזור לחבילה'}${before != null ? `: נשארו <b>${before}</b> ← <b>${after}</b>` : ''}</div>`,
+      want ? 'לחייב' : 'לבטל חיוב', () => {
+        const snap = JSON.stringify(d);
+        const apply = (dd) => {
+          const mm = dd.late.find((x) => x.id === m.id); if (mm) mm.charged = want ? 'כן' : 'לא';
+          const cc = dd.coaches.find((x) => x.name === m.coach); if (cc && cc.left != null) cc.left += want ? -1 : 1;
+        };
+        apply(d); store.set('coaches', d); if (location.hash === '#/coaches') renderCoaches(d);
+        api('lateCharge', { id: m.id, want }).then((r) => {
+          toast(want ? `חויב ✓ – נשארו ל${m.coach} ${r.left}` : `החיוב בוטל ✓ – נשארו ל${m.coach} ${r.left}`);
+          const dd = store.get('coaches'); const cc = dd && dd.coaches.find((x) => x.name === m.coach);
+          if (cc && r.left != null) { cc.left = r.left; store.set('coaches', dd); if (location.hash === '#/coaches') renderCoaches(dd); }
+          markDerivedStale();
+        }).catch((e) => {
+          const back = JSON.parse(snap); store.set('coaches', back); if (location.hash === '#/coaches') renderCoaches(back);
+          toast('לא בוצע, המסך הוחזר: ' + e.message, true);
+        });
+      });
+  }
+
+  function viewCoach(name) {
+    return swr('coach:' + name, 'coach', { name }, name, renderCoach);
+  }
+
+  function renderCoach(d) {
+    const c = d.coach;
+    const tel = telHref(d.phone), wa = waNumber(d.phone);
+    shell(c.name, `
+      <div class="card">
+        <div class="row" style="align-items:center">
+          <div class="grow"><h2 style="margin:0">${esc(c.name)}</h2><div class="muted small ltr-text">${esc(c.email)}</div></div>
+          <div class="left-big ${leftCls(c)}"><div class="num">${c.left == null ? '—' : c.left}</div><div class="lbl">נשארו מתוך ${c.pkg == null ? '—' : c.pkg}</div></div>
+        </div>
+        <div class="quick" style="margin-top:10px">
+          ${tel ? `<a class="btn" href="${esc(tel)}">📞 חיוג</a>` : ''}
+          ${wa ? `<a class="btn green" href="https://wa.me/${esc(wa)}" target="_blank" rel="noopener">💬 ווטסאפ</a>` : ''}
+          ${!tel ? '<div class="muted small">לא נמצא טלפון (לפי המייל בגיליון הלידים)</div>' : ''}
+        </div>
+        <div class="row renew-row">
+          <label for="rn" class="small">חידוש חבילה ל-</label>
+          <input id="rn" type="number" min="1" max="100" inputmode="numeric" value="${esc(c.pkg || 12)}" style="width:72px">
+          <span class="small">פגישות</span>
+          <button class="btn small" data-act="renew">חידוש</button>
+        </div>
+      </div>
+      <div class="section-title">היסטוריית פגישות (${d.history.length})</div>
+      ${d.history.length ? `<div class="mlist">${d.history.map((m) => `
+        <div class="card mrow">
+          <div class="grow"><b>${esc(m.date)}</b> <span class="muted">${esc(m.time)}</span><div class="small">${esc(m.status)}</div></div>
+          <span class="pill ${m.charged === 'כן' ? '' : 'warn'}">${m.charged === 'כן' ? 'ירדה' : m.charged === 'לא' ? 'לא ירדה' : esc(m.charged || '—')}</span>
+          ${m.left != null && m.left !== '' ? `<span class="muted small" title="נשארו אחרי">→ ${esc(m.left)}</span>` : ''}
+        </div>`).join('')}</div>` : '<div class="card muted">אין פגישות ב"יומן פגישות"</div>'}`, { back: true });
+    $app.querySelector('[data-act="renew"]').onclick = () => {
+      const n = Math.round(Number(document.getElementById('rn').value));
+      if (!(n > 0 && n <= 100)) return toast('מספר פגישות לא תקין', true);
+      const left = c.left || 0;
+      confirmSheet('חידוש חבילה – ' + c.name, `
+        <table class="ba"><tr><th></th><th>לפני</th><th>אחרי</th></tr>
+          <tr><td>בחבילה (C)</td><td>${c.pkg == null ? '—' : c.pkg}</td><td><b>${n}</b></td></tr>
+          <tr><td>נשארו (D)</td><td>${left}</td><td><b>${left + n}</b></td></tr></table>
+        <div class="muted small">מה שנשאר לא הולך לאיבוד: D = ${left} + ${n}</div>`, 'לחדש', () => {
+        const before = JSON.stringify(d);
+        c.pkg = n; c.left = left + n; store.set('coach:' + c.name, d); renderCoach(d);
+        api('coachRenew', { name: c.name, email: c.email, n }).then((r) => {
+          c.pkg = r.after.pkg; c.left = r.after.left; store.set('coach:' + c.name, d);
+          if (location.hash === '#/coach/' + encodeURIComponent(c.name)) renderCoach(d);
+          toast(`החבילה חודשה ✓ – ${r.after.left} פגישות`);
+          const cs = store.get('coaches'); const cc = cs && cs.coaches.find((x) => x.name === c.name);
+          if (cc) { cc.pkg = r.after.pkg; cc.left = r.after.left; store.set('coaches', cs); }
+          markDerivedStale();
+        }).catch((e) => {
+          const back = JSON.parse(before); store.set('coach:' + c.name, back); renderCoach(back);
+          toast('החידוש לא בוצע: ' + e.message, true);
+        });
+      });
+    };
+  }
+
+  // ---------- שלב 2: פיננסים ----------
+  function viewFinance() { return swr('finance', 'finance', {}, 'פיננסים', renderFinance); }
+  const money = (n) => (n == null ? '—' : ils(Math.round(n)));
+  const decided = {};   // id → { business, undo } – החלטות שנעשו מהמסך הזה
+
+  function renderFinance(d) {
+    const mo = d.months || [];
+    const review = (d.review || []).filter((r) => !decided[r.id]);
+    const pre = (t) => `<div class="pre">${esc(t)}</div>`;
+    shell('פיננסים', `
+      <div class="tiles">
+        ${mo.map((m, i) => `<div class="card tile fin-month">
+          <div class="lbl"><b>${esc(m.label)}</b>${i === 0 ? ' (החודש)' : ''}</div>
+          <div class="fin-line">הכנסות <b>${money(m.income)}</b></div>
+          <div class="fin-line">הוצאות <b>${money(m.expenses)}</b></div>
+          <div class="fin-line">רווח נטו משוער <b>${money(m.net)}</b></div>
+        </div>`).join('')}
+      </div>
+      <div class="muted small">עדכון פיננסים אחרון: ${esc(d.lastUpdate || '—')}</div>
+      <div class="row" style="margin:14px 0 6px;align-items:center">
+        <div class="section-title grow" style="margin:0">לבדיקה (${review.length})</div>
+        <button class="btn small secondary" data-act="add-income">＋ הכנסה ידנית</button>
+      </div>
+      ${(d.review || []).length ? `<div class="mlist">${(d.review || []).map((r) => {
+        const dc = decided[r.id];
+        return `<div class="card tx-row ${dc ? 'decided' : ''}" data-rid="${esc(r.id)}">
+          <div class="tx-top"><b class="grow">${esc(r.desc)}</b><b class="ltr-text">₪${esc(r.amount)}</b></div>
+          <div class="tx-bottom">
+            <span class="muted small grow">${esc(r.date)} · ${esc(r.source)} · ${esc(r.type)}</span>
+            ${dc ? `<span class="small">${dc.business ? '✅ עסקי' : '❌ פרטי'}</span><button class="btn small ghost" data-undo>ביטול</button>`
+              : '<button class="btn small" data-biz="1">✅ עסקי</button><button class="btn small danger" data-biz="0">❌ פרטי</button>'}
+          </div>
+        </div>`;
+      }).join('')}</div>` : '<div class="card muted">אין תנועות לבדיקה 🎉</div>'}
+      ${d.summary && d.summary.debts ? `<div class="section-title">🔴 ${esc(d.summary.debts.title)}</div><div class="card">${pre(d.summary.debts.body)}</div>` : ''}
+      ${d.summary && d.summary.invoices ? `<div class="section-title">🧾 ${esc(d.summary.invoices.title)}</div><div class="card">${pre(d.summary.invoices.body)}</div>` : ''}
+      ${d.summary && d.summary.text ? `<div class="section-title">הסיכום השבועי האחרון${d.summary.at ? ` · ${esc(d.summary.at)}` : ''}</div>
+        <details class="card"><summary>הצגת הסיכום המלא</summary>${pre(d.summary.text)}</details>` : ''}`);
+    $app.querySelector('[data-act="add-income"]').onclick = openAddIncome;
+    $app.querySelectorAll('[data-rid]').forEach((row) => {
+      const r = (d.review || []).find((x) => x.id === row.dataset.rid);
+      row.querySelectorAll('[data-biz]').forEach((b) => { b.onclick = () => decideTx(r, b.dataset.biz === '1'); });
+      const u = row.querySelector('[data-undo]');
+      if (u) u.onclick = () => undoDecide(r);
+    });
+  }
+
+  function decideTx(r, business) {
+    decided[r.id] = { business, pending: true };
+    renderFinance(store.get('finance'));
+    api('finDecide', { id: r.id, business }).then((res) => {
+      decided[r.id] = { business, undo: res.undo };
+      toast(business ? `✅ עסקי – ${r.desc}` : `❌ פרטי – ${r.desc}`);
+      markDerivedStale();
+    }).catch((e) => {
+      delete decided[r.id];
+      if (location.hash === '#/finance') renderFinance(store.get('finance'));
+      toast('לא נשמר: ' + e.message, true);
+    });
+  }
+  function undoDecide(r) {
+    const dc = decided[r.id];
+    if (!dc || !dc.undo) return toast('רגע, עוד נשמר…');
+    delete decided[r.id];
+    renderFinance(store.get('finance'));
+    api('finDecide', { id: r.id, undo: dc.undo }).then(() => { toast('בוטל ✓ – חזר ל"לבדיקה"'); markDerivedStale(); })
+      .catch((e) => { decided[r.id] = dc; if (location.hash === '#/finance') renderFinance(store.get('finance')); toast('הביטול לא בוצע: ' + e.message, true); });
+  }
+
+  function openAddIncome() {
+    const sh = openSheet(`
+      <div class="row"><b class="grow">הכנסה ידנית</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="row">
+        <div class="field grow"><label for="in-date">תאריך</label><input id="in-date" type="date" value="${isoToday()}"></div>
+        <div class="field grow"><label for="in-amount">סכום (₪)</label><input id="in-amount" type="number" inputmode="decimal" min="1" step="0.01"></div>
+      </div>
+      <div class="field"><label for="in-src">מקור</label><select id="in-src"><option value="bit">ביט</option><option value="bank">העברה בנקאית</option><option value="cash">מזומן</option></select></div>
+      <div class="field"><label for="in-desc">תיאור</label><input id="in-desc" placeholder="למשל: ליווי מאמנים – שם המאמן"></div>
+      <div class="notice small" id="in-warn" hidden></div>
+      <button class="btn" data-save>הוספה ל"תנועות"</button>`);
+    const $ = (q) => sh.el.querySelector(q);
+    setTimeout(() => $('#in-amount').focus(), 50);
+    $('[data-save]').onclick = () => {
+      const f = { date: $('#in-date').value, amount: $('#in-amount').value, source: $('#in-src').value, desc: $('#in-desc').value.trim() };
+      const warn = $('#in-warn');
+      if (!f.date) { warn.hidden = false; warn.textContent = 'חסר תאריך'; return; }
+      if (!(Number(f.amount) > 0)) { warn.hidden = false; warn.textContent = 'סכום לא תקין'; return; }
+      if (!f.desc) { warn.hidden = false; warn.textContent = 'חסר תיאור'; return; }
+      sh.close();
+      toast('מוסיף ל"תנועות"…');
+      api('finAddIncome', f).then((r) => { toast(`✅ נוספה הכנסה ₪${Number(f.amount).toLocaleString('he-IL')} (${r.id})`); markDerivedStale(); })
+        .catch((e) => toast('ההכנסה לא נוספה: ' + e.message, true));
+    };
+  }
+
+  function viewMore() {
+    shell('עוד', `<div class="mlist">
+      <a class="card mrow" href="#/ghosting"><span style="font-size:22px">👻</span><div class="grow"><b>גוסטינג</b></div></a>
+      <a class="card mrow" href="#/month"><span style="font-size:22px">💰</span><div class="grow"><b>שכר שי</b></div></a>
+      <a class="card mrow" href="#/zooms"><span style="font-size:22px">📅</span><div class="grow"><b>זומים לשיוך</b></div></a>
+      <a class="card mrow" href="#/notifs"><span style="font-size:22px">🔔</span><div class="grow"><b>התראות והגדרות</b></div></a>
+    </div>`);
   }
 
   // ---------- מסך נסתר: בדיקות מערכת ----------
@@ -1931,6 +2200,12 @@
     if (page === 'zooms') return viewZooms();
     if (page === 'notifs') return viewNotifs();
     if (page === 'status') return viewStatus();
+    if (isAdmin()) {
+      if (page === 'coaches') return viewCoaches();
+      if (page === 'coach' && parts[1]) return viewCoach(decodeURIComponent(parts[1]));
+      if (page === 'finance') return viewFinance();
+      if (page === 'more') return viewMore();
+    }
     location.replace(isAdmin() ? '#/home' : '#/leads');
   }
 

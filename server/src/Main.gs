@@ -35,6 +35,15 @@ const ACTIONS = {
   pushRegister:   { roles: ['admin', 'leads'], fn: actionPushRegister_ },
   pushUnregister: { roles: ['admin', 'leads'], fn: actionPushUnregister_ },
   pushTest:       { roles: ['admin', 'leads'], fn: actionPushTest_ },
+  // שלב 2 – ליאל בלבד
+  coaches:        { roles: ['admin'], fn: actionCoaches_ },
+  coach:          { roles: ['admin'], fn: actionCoach_ },
+  lateCharge:     { roles: ['admin'], fn: actionLateCharge_ },
+  coachRenew:     { roles: ['admin'], fn: actionCoachRenew_ },
+  runMeetings:    { roles: ['admin'], fn: actionRunMeetings_ },
+  finance:        { roles: ['admin'], fn: actionFinance_ },
+  finDecide:      { roles: ['admin'], fn: actionFinDecide_ },
+  finAddIncome:   { roles: ['admin'], fn: actionFinAddIncome_ },
 };
 
 function doGet() {
