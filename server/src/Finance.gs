@@ -80,7 +80,97 @@ function coachesData_(fresh) {
 
 function actionCoaches_(req, ctx) {
   const d = coachesData_(!!req.fresh);
-  return { coaches: d.coaches, late: d.late.filter(function (m) { return m.charged === 'לא' || m.at > Date.now() - 45 * DAY_MS_; }), lastRun: d.lastRun };
+  const cleared = clearedLateIds_();
+  // טלפון לכל מאמן: לפי המייל בגיליון הלידים (בתפעול אין עמודת טלפון)
+  const phones = {};
+  try {
+    const byEmail = {};
+    cachedLeads_(ctx.cfg).leads.forEach(function (l) { const e = String(l.email || '').trim().toLowerCase(); if (e && l.phone) byEmail[e] = l.phone; });
+    d.coaches.forEach(function (c) {
+      c.email.toLowerCase().split(/[,;\s]+/).some(function (e) { if (byEmail[e]) { phones[c.name] = byEmail[e]; return true; } return false; });
+    });
+  } catch (e) { /* */ }
+  return {
+    coaches: d.coaches,
+    meetings: d.meetings.map(function (m) { return { id: m.id, at: m.at, date: m.date, time: m.time, email: m.email, coach: m.coach, status: m.status, charged: m.charged, left: m.left }; }),
+    late: d.late.filter(function (m) { return !cleared[m.id] && (m.charged === 'לא' || m.at > Date.now() - 45 * DAY_MS_); }),
+    phones: phones,
+    online: onlineEnsure_(),
+    lastRun: d.lastRun,
+  };
+}
+
+// ---------- "נקה" לביטול מאוחר: ראיתי, לא מחייבים (נשמר במערכת של האפליקציה, לא בגיליון) ----------
+function clearedLateIds_() {
+  const out = {};
+  sysRows_('lateClear').rows.forEach(function (r) { if (r[0]) out[r[0]] = 1; });
+  return out;
+}
+function actionLateClear_(req, ctx) {
+  const id = String(req.id || '');
+  if (!id) throw apiError_('BAD_REQUEST', 'חסר מזהה');
+  const d = sysRows_('lateClear');
+  if (req.undo) {
+    for (let i = d.rows.length - 1; i >= 0; i--) if (d.rows[i][0] === id) d.sh.deleteRow(i + 2);
+    return { ok: true };
+  }
+  if (!d.rows.some(function (r) { return r[0] === id; })) {
+    d.sh.appendRow([id, Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm'), String(req.coach || ''), String(req.date || '')]);
+  }
+  return { ok: true };
+}
+
+// ---------- מתאמני אונליין: לשונית בגיליון הפיננסים, רק להצגה ----------
+const ONLINE_TAB_ = 'מתאמני אונליין';
+function onlineSheet_(create) {
+  const ss = finSs_();
+  let sh = ss.getSheetByName(ONLINE_TAB_);
+  if (sh || !create) return sh;
+  sh = ss.insertSheet(ONLINE_TAB_, ss.getSheets().length);
+  sh.getRange(1, 1, 1, 3).setValues([['שם', 'סכום חודשי (₪)', 'נוסף בתאריך']]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  sh.setRightToLeft(true);
+  // פעם ראשונה: מעתיקים את הרשימה שליאל ניהל ב"תפעול" (E סכום, F שם). "תפעול" עצמו לא משתנה.
+  const op = ss.getSheetByName('תפעול');
+  if (op && op.getLastRow() > 1) {
+    const today = Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy');
+    const rows = op.getRange(2, 5, op.getLastRow() - 1, 2).getValues()
+      .filter(function (r) { return String(r[1]).trim() && String(r[1]).trim() !== 'סה״כ' && String(r[1]).trim() !== 'סה"כ' && Number(String(r[0]).replace(/[,₪\s]/g, '')) > 0; })
+      .map(function (r) { return [String(r[1]).trim(), Number(String(r[0]).replace(/[,₪\s]/g, '')), today]; });
+    if (rows.length) sh.getRange(2, 1, rows.length, 3).setValues(rows);
+  }
+  return sh;
+}
+function onlineList_() {
+  const sh = onlineSheet_(false);
+  if (!sh || sh.getLastRow() < 2) return sh ? [] : null;   // null = הלשונית עוד לא נוצרה
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues()
+    .filter(function (r) { return String(r[0]).trim(); })
+    .map(function (r) { return { name: String(r[0]).trim(), amount: Number(r[1]) || 0 }; });
+}
+function actionOnline_(req, ctx) {
+  let out = null;
+  finLock_(function () {
+    const sh = onlineSheet_(true);
+    if (req.op === 'add') {
+      const name = String(req.name || '').trim().slice(0, 80);
+      const amount = Number(String(req.amount).replace(/[,₪\s]/g, ''));
+      if (!name) throw apiError_('BAD_REQUEST', 'חסר שם');
+      if (!(amount > 0 && amount < 1e5)) throw apiError_('BAD_REQUEST', 'סכום לא תקין');
+      sh.appendRow([name, amount, Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy')]);
+    } else if (req.op === 'remove') {
+      const n = sh.getLastRow() - 1;
+      const vals = n > 0 ? sh.getRange(2, 1, n, 2).getValues() : [];
+      let row = 0;
+      for (let i = vals.length - 1; i >= 0; i--) {
+        if (String(vals[i][0]).trim() === String(req.name || '').trim() && Number(vals[i][1]) === Number(req.amount)) { row = i + 2; break; }
+      }
+      if (!row) throw apiError_('NOT_FOUND', 'לא נמצא ברשימה – אולי כבר הוסר');
+      sh.deleteRow(row);
+    }
+    out = { online: onlineList_() || [] };
+  });
+  return out;
 }
 
 function actionCoach_(req, ctx) {
@@ -163,11 +253,19 @@ function actionFinance_(req, ctx) {
   const sum = finTab_(ss, 'summary');
   const text = String(sum.getRange('A1').getValue() || '');
   const parts = splitSummary_(text);
+  const cleared = clearedDebts_(ss);
+  const debts = parts['🔴'] ? parseDebts_(parts['🔴'].body).map(function (it) {
+    return it.key ? Object.assign(it, { cleared: !!cleared[it.key] }) : it;
+  }) : null;
   return {
     months: months,
     lastUpdate: year ? year.getRange('K17').getDisplayValue() : '',
     review: review,
-    summary: { text: text, at: sum.getRange('B1').getDisplayValue(), debts: parts['🔴'] || null, invoices: parts['🧾'] || null },
+    month: monthLists_(tx),
+    summary: { text: text, at: sum.getRange('B1').getDisplayValue(),
+      debts: parts['🔴'] ? { title: parts['🔴'].title, items: debts } : null,
+      anomalies: parts['⚠️'] || null,
+      invoices: parts['🧾'] || null },
   };
 }
 
@@ -183,7 +281,7 @@ function txRow_(sh, id) {
 /** ✅ עסקי / ❌ פרטי לשורה "לבדיקה". undo: מחזיר את מה שהיה (רק אם אף אחד לא שינה בינתיים). */
 function actionFinDecide_(req, ctx) {
   let out = null;
-  withLock_(function () {
+  finLock_(function () {
     const sh = finTab_(finSs_(), 'tx');
     const row = txRow_(sh, String(req.id || ''));
     if (!row) throw apiError_('NOT_FOUND', 'השורה לא נמצאה ב"תנועות" – אולי העדכון השבועי שינה אותה');
@@ -231,15 +329,15 @@ function actionFinAddIncome_(req, ctx) {
   if (!desc) throw apiError_('BAD_REQUEST', 'חסר תיאור');
   const id = 'manual-' + req.source + '-' + m[1] + m[2] + m[3] + '-' + (amount % 1 ? String(amount) : String(Math.round(amount)));
   let out = null;
-  withLock_(function () {
+  finLock_(function () {
     const sh = finTab_(finSs_(), 'tx');
     if (txRow_(sh, id)) throw apiError_('DUPLICATE', 'כבר קיימת הכנסה ידנית באותו תאריך, מקור וסכום (' + id + ')');
     const last = sh.getLastRow();
     const note = 'נרשם מהאפליקציה ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy');
-    sh.appendRow([new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])), src.b, desc, 'הכנסה', amount, src.cat, 'כן', 'לא', 'בוצע', id, note]);
+    sh.appendRow([new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12), src.b, desc, 'הכנסה', amount, src.cat, 'כן', 'לא', 'בוצע', id, note]);
     const row = sh.getLastRow();
     if (last >= 2) sh.getRange(last, 1, 1, 11).copyTo(sh.getRange(row, 1, 1, 11), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
-    out = { ok: true, id: id, row: row };
+    out = { ok: true, id: id, row: row, desc: desc, amount: amount };
   });
   return out;
 }
@@ -265,4 +363,162 @@ function finReviewCount_() {
   const c = n > 0 ? sh.getRange(2, TX_.biz, n, 1).getDisplayValues().filter(function (r) { return String(r[0]).trim() === 'לבדיקה'; }).length : 0;
   cache.put('finrev_v1', String(c), 120);
   return c;
+}
+
+
+// ---------- הכנסות / הוצאות החודש (מ"תנועות": עסקי = כן, מה-1 לחודש) ----------
+function monthLists_(tx) {
+  const n = tx.getLastRow() - 1;
+  if (n < 1) return { income: [], expenses: [] };
+  const vals = tx.getRange(2, 1, n, 11).getDisplayValues();
+  const now = new Date();
+  const mm = now.getMonth() + 1, yy = now.getFullYear();
+  const amt = function (s) { return Number(String(s).replace(/[,₪\s]/g, '')) || 0; };
+  const income = [], expenses = [];
+  vals.forEach(function (r) {
+    const m = String(r[0]).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!m || Number(m[2]) !== mm || Number(m[3]) !== yy) return;
+    if (String(r[TX_.biz - 1]).trim() !== 'כן') return;
+    const item = { id: r[TX_.id - 1], date: r[0], day: Number(m[1]), amount: amt(r[TX_.amount - 1]) };
+    if (r[TX_.type - 1] === 'הכנסה') {
+      item.name = String(r[2]).replace(/^עסקה\s*-\s*/, '').replace(/\s*\(\d+\s*תשלומים\)\s*$/, '').trim();
+      const src = String(r[1]), cat = String(r[5]);
+      item.source = /קארדקום/.test(src) ? 'קארדקום' : (/ביט/.test(src + cat) ? 'ביט' : (/מזומן/.test(src + cat) ? 'מזומן' : (/עו"ש|העברה/.test(src + cat) ? 'העברה בנקאית' : src)));
+      income.push(item);
+    } else if (r[TX_.type - 1] === 'הוצאה') {
+      item.name = String(r[2]).trim();
+      expenses.push(item);
+    }
+  });
+  const byDay = function (a, b) { return a.day - b.day; };
+  return { income: income.sort(byDay), expenses: expenses.sort(byDay) };
+}
+
+// ---------- דוח חייבים: פריטים + "נקה" ----------
+const DEBT_TAB_ = 'חייבים שנוקו (מערכת)';
+const DEBT_HEAD_ = ['תאריך ניקוי', 'סוג', 'שם לקוח', 'סכום', 'תאריך החוב'];
+
+/** "עסקאות שלא עברו:\nללא שם - ₪8,800 - 18/10 - 12 תשלומים, …" → פריטים */
+function parseDebts_(body) {
+  const items = [];
+  let type = '';
+  String(body || '').split('\n').forEach(function (line) {
+    const t = line.trim();
+    if (!t) return;
+    if (/^עסקאות שלא עברו/.test(t)) { type = 'עסקה שלא עברה'; items.push({ head: t }); return; }
+    if (/^הוראות קבע/.test(t)) { type = 'הוראת קבע'; items.push({ head: t }); return; }
+    const m = t.match(/^(.+?)\s+-\s+₪\s*([\d,.]+)\s+-\s+(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\s*(?:-\s*)?(.*)$/);
+    if (m && type) {
+      const amount = Number(m[2].replace(/,/g, ''));
+      items.push({ type: type, name: m[1].trim(), amount: amount, date: m[3], extra: m[4].trim(), text: t,
+        key: debtKey_(type, m[1].trim(), amount, m[3]) });
+    } else items.push({ text: t });
+  });
+  return items;
+}
+function debtKey_(type, name, amount, date) {
+  const d = String(date).split('/');
+  return [type, String(name).trim(), Number(amount), Number(d[0]) + '/' + Number(d[1])].join('|');
+}
+function debtSheet_(ss, create) {
+  let sh = ss.getSheetByName(DEBT_TAB_);
+  if (sh || !create) return sh;
+  sh = ss.insertSheet(DEBT_TAB_, ss.getSheets().length);
+  sh.getRange(1, 1, 1, DEBT_HEAD_.length).setValues([DEBT_HEAD_]).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  sh.setRightToLeft(true);
+  sh.getRange('A:E').setNumberFormat('@');
+  sh.hideSheet();
+  return sh;
+}
+function clearedDebts_(ss) {
+  const sh = debtSheet_(ss, false);
+  const out = {};
+  if (!sh || sh.getLastRow() < 2) return out;
+  sh.getRange(2, 1, sh.getLastRow() - 1, 5).getDisplayValues().forEach(function (r) {
+    out[debtKey_(r[1], r[2], Number(String(r[3]).replace(/[,₪\s]/g, '')), r[4])] = 1;
+  });
+  return out;
+}
+function actionDebtClear_(req, ctx) {
+  const type = req.type === 'הוראת קבע' ? 'הוראת קבע' : 'עסקה שלא עברה';
+  const name = String(req.name || '').trim(), amount = Number(req.amount), date = String(req.date || '').trim();
+  if (!name || !(amount > 0) || !date) throw apiError_('BAD_REQUEST', 'פריט לא תקין');
+  const key = debtKey_(type, name, amount, date);
+  let out = null;
+  finLock_(function () {
+    const sh = debtSheet_(finSs_(), true);
+    const n = sh.getLastRow() - 1;
+    const vals = n > 0 ? sh.getRange(2, 1, n, 5).getDisplayValues() : [];
+    const rowOf = function () {
+      for (let i = vals.length - 1; i >= 0; i--) {
+        if (debtKey_(vals[i][1], vals[i][2], Number(String(vals[i][3]).replace(/[,₪\s]/g, '')), vals[i][4]) === key) return i + 2;
+      }
+      return 0;
+    };
+    if (req.undo) { const r = rowOf(); if (r) sh.deleteRow(r); out = { ok: true }; return; }
+    if (!rowOf()) sh.appendRow([Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy'), type, name, String(amount), date]);
+    out = { ok: true };
+  });
+  return out;
+}
+
+// ---------- הוצאה ידנית ----------
+const EXP_METHOD_ = { card: 'כרטיס אשראי', bank: 'עו"ש עסקי', cash: 'מזומן', bit: 'ביט' };
+function actionFinAddExpense_(req, ctx) {
+  const method = EXP_METHOD_[req.method];
+  if (!method) throw apiError_('BAD_REQUEST', 'אמצעי תשלום לא מוכר');
+  const amount = Math.round(Number(String(req.amount).replace(/[,₪\s]/g, '')) * 100) / 100;
+  if (!(amount > 0 && amount < 1e6)) throw apiError_('BAD_REQUEST', 'סכום לא תקין');
+  const m = String(req.date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) throw apiError_('BAD_REQUEST', 'תאריך לא תקין');
+  const desc = String(req.desc || '').trim().slice(0, 200);
+  if (!desc) throw apiError_('BAD_REQUEST', 'חסר שם הוצאה');
+  const id = 'manual-exp-' + m[1] + m[2] + m[3] + '-' + (amount % 1 ? String(amount) : String(Math.round(amount)));
+  let out = null;
+  finLock_(function () {
+    const sh = finTab_(finSs_(), 'tx');
+    if (txRow_(sh, id)) throw apiError_('DUPLICATE', 'כבר קיימת הוצאה ידנית באותו תאריך ובאותו סכום (' + id + ')');
+    const last = sh.getLastRow();
+    const note = 'נרשם מהאפליקציה ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy') + ' · אמצעי: ' + method;
+    sh.appendRow([new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12), method, desc, 'הוצאה', amount, 'הוצאה ידנית', 'כן', req.vat ? 'כן' : 'לא', 'בוצע', id, note]);
+    const row = sh.getLastRow();
+    if (last >= 2) sh.getRange(last, 1, 1, 11).copyTo(sh.getRange(row, 1, 1, 11), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+    out = { ok: true, id: id, desc: desc, amount: amount };
+  });
+  return out;
+}
+
+/** ↶ להכנסה/הוצאה ידנית: מוחק את השורה – רק אם לא שונתה מאז שנוספה */
+function actionFinRemoveManual_(req, ctx) {
+  const id = String(req.id || '');
+  if (!/^manual-/.test(id)) throw apiError_('BAD_REQUEST', 'אפשר למחוק רק שורה ידנית');
+  let out = null;
+  finLock_(function () {
+    const sh = finTab_(finSs_(), 'tx');
+    const row = txRow_(sh, id);
+    if (!row) { out = { ok: true, gone: true }; return; }
+    const r = sh.getRange(row, 1, 1, 11).getDisplayValues()[0];
+    const amount = Number(String(r[TX_.amount - 1]).replace(/[,₪\s]/g, ''));
+    if (String(r[TX_.desc - 1]).trim() !== String(req.desc || '').trim() || amount !== Number(req.amount) || r[TX_.biz - 1] !== 'כן') {
+      throw apiError_('STALE', 'השורה שונתה מאז שנוספה (אולי ע"י העדכון השבועי) – לא מחקתי');
+    }
+    sh.deleteRow(row);
+    out = { ok: true };
+  });
+  return out;
+}
+
+/** בפעם הראשונה שמסך המאמנים נטען – יוצר את הלשונית (עם הרשימה מ"תפעול") */
+function onlineEnsure_() {
+  const l = onlineList_();
+  if (l) return l;
+  let out = [];
+  finLock_(function () { onlineSheet_(true); out = onlineList_() || []; });
+  return out;
+}
+
+/** נעילה לפעולות בגיליון הפיננסים – בלי לאפס את הזיכרון של רשימת הלידים */
+function finLock_(fn) {
+  return withLock_(function () { const r = fn(); CACHE_PATCH_ = 'skip'; return r; });
 }

@@ -437,3 +437,19 @@ details.card .pre { margin-top: 10px; }
 .tx-row { display: flex; flex-direction: column; gap: 8px; }
 .tx-top, .tx-bottom { display: flex; align-items: center; gap: 8px; }
 .tx-bottom .btn.small { min-height: 36px; padding: 6px 12px; }
+
+.more-row { text-decoration: none; color: inherit; align-items: center; }
+.more-row .ico { font-size: 22px; }
+.more-row .badge { position: static; }
+.online-list { display: flex; flex-direction: column; }
+.online-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.online-row.total { border-bottom: 0; border-top: 2px solid var(--line); margin-top: 2px; }
+.online-add { gap: 6px; margin: 10px 0 4px; }
+.debts .debt-head { font-weight: 700; margin: 8px 0 4px; }
+.debts .debt-head:first-child { margin-top: 0; }
+.debt-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.month-list summary { cursor: pointer; font-weight: 700; }
+.mtable { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+.mtable td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.mtable .amt { text-align: left; font-weight: 700; }
+.nowrap { white-space: nowrap; }

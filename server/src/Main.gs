@@ -44,6 +44,11 @@ const ACTIONS = {
   finance:        { roles: ['admin'], fn: actionFinance_ },
   finDecide:      { roles: ['admin'], fn: actionFinDecide_ },
   finAddIncome:   { roles: ['admin'], fn: actionFinAddIncome_ },
+  finAddExpense:  { roles: ['admin'], fn: actionFinAddExpense_ },
+  finRemoveManual:{ roles: ['admin'], fn: actionFinRemoveManual_ },
+  debtClear:      { roles: ['admin'], fn: actionDebtClear_ },
+  lateClear:      { roles: ['admin'], fn: actionLateClear_ },
+  online:         { roles: ['admin'], fn: actionOnline_ },
 };
 
 function doGet() {
