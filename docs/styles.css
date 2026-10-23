@@ -453,3 +453,15 @@ details.card .pre { margin-top: 10px; }
 .mtable td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .mtable .amt { text-align: left; font-weight: 700; }
 .nowrap { white-space: nowrap; }
+
+button.fin-month { text-align: start; font: inherit; color: inherit; cursor: pointer; width: 100%; }
+.fin-month.sel { outline: 2px solid var(--brand); }
+.prev-banner { display: flex; align-items: center; gap: 8px; background: #eaf2fb; border-radius: 10px; padding: 8px 12px; margin-top: 10px; }
+.fin-info { font-size: 13px; color: var(--muted, #556); margin-top: 6px; }
+.fin-forecast summary { cursor: pointer; list-style: none; }
+.fin-forecast summary::-webkit-details-marker { display: none; }
+.fin-forecast summary::after { content: ' ▾'; }
+.fc-row { display: flex; justify-content: space-between; max-width: 260px; padding: 2px 0; }
+.year-card .fin-line { font-size: 15px; margin: 3px 0; }
+.mtable th { text-align: start; font-size: 12px; color: var(--muted, #667); padding: 4px; }
+.mtable tr.total td { border-top: 2px solid var(--line); }

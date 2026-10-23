@@ -243,9 +243,9 @@ function actionFinance_(req, ctx) {
   }
   const tx = finTab_(ss, 'tx');
   const review = [];
-  if (tx.getLastRow() > 1) {
-    const vals = tx.getRange(2, 1, tx.getLastRow() - 1, 11).getDisplayValues();
-    vals.forEach(function (r) {
+  const txVals = tx.getLastRow() > 1 ? tx.getRange(2, 1, tx.getLastRow() - 1, 11).getDisplayValues() : [];
+  {
+    txVals.forEach(function (r) {
       if (String(r[TX_.biz - 1]).trim() !== 'לבדיקה') return;
       review.push({ id: r[TX_.id - 1], date: r[0], source: r[1], desc: r[2], type: r[3], amount: r[4], cat: r[5], note: r[10] });
     });
@@ -261,7 +261,12 @@ function actionFinance_(req, ctx) {
     months: months,
     lastUpdate: year ? year.getRange('K17').getDisplayValue() : '',
     review: review,
-    month: monthLists_(tx),
+    month: monthLists_(txVals, now.getFullYear(), now.getMonth() + 1),
+    prevMonth: monthLists_(txVals, prevDate.getFullYear(), prevDate.getMonth() + 1),
+    year: year ? yearTotals_(year) : null,
+    fixed: fixedExpenses_(ss),
+    balance: balances_(ss),
+    forecast: forecast_(ss, now),
     summary: { text: text, at: sum.getRange('B1').getDisplayValue(),
       debts: parts['🔴'] ? { title: parts['🔴'].title, items: debts } : null,
       anomalies: parts['⚠️'] ? { title: parts['⚠️'].title, items: anomalyItems_(parts['⚠️'].body) } : null,
@@ -367,12 +372,7 @@ function finReviewCount_() {
 
 
 // ---------- הכנסות / הוצאות החודש (מ"תנועות": עסקי = כן, מה-1 לחודש) ----------
-function monthLists_(tx) {
-  const n = tx.getLastRow() - 1;
-  if (n < 1) return { income: [], expenses: [] };
-  const vals = tx.getRange(2, 1, n, 11).getDisplayValues();
-  const now = new Date();
-  const mm = now.getMonth() + 1, yy = now.getFullYear();
+function monthLists_(vals, yy, mm) {
   const amt = function (s) { return Number(String(s).replace(/[,₪\s]/g, '')) || 0; };
   const income = [], expenses = [];
   vals.forEach(function (r) {
@@ -541,4 +541,78 @@ function actionAnomClear_(req, ctx) {
     d.sh.appendRow([key, Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]);
   }
   return { ok: true };
+}
+
+// ---------- השנה: שורת "סה״כ שנתי" בלשונית השנה (אותן עמודות כמו הריבוע החודשי) ----------
+function yearTotals_(sh) {
+  const n = Math.min(sh.getLastRow(), 30);
+  const vals = sh.getRange(1, 1, n, 12).getValues();
+  const num = function (x) { return typeof x === 'number' ? x : null; };
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][11]).trim() === 'סה״כ שנתי' || String(vals[i][11]).trim() === 'סה"כ שנתי') {
+      return { income: num(vals[i][8]), expenses: num(vals[i][6]), net: num(vals[i][0]) };
+    }
+  }
+  // אין שורת סיכום – מסכמים את חודשי השנה עד החודש הנוכחי (שורה 2 = ינואר)
+  const out = { income: 0, expenses: 0, net: 0 };
+  for (let m = 0; m <= new Date().getMonth(); m++) {
+    const r = vals[m + 1] || [];
+    out.income += num(r[8]) || 0; out.expenses += num(r[6]) || 0; out.net += num(r[0]) || 0;
+  }
+  return out;
+}
+
+// ---------- נספחים: הוצאות קבועות ----------
+function fixedExpenses_(ss) {
+  const sh = ss.getSheetByName('הוצאות קבועות');
+  if (!sh || sh.getLastRow() < 2) return null;
+  const vals = sh.getRange(1, 1, sh.getLastRow(), 7).getDisplayValues();
+  const head = vals[0];
+  const col = function (name) { return head.findIndex(function (h) { return String(h).indexOf(name) === 0; }); };
+  const cName = 0, cAmt = col('סכום'), cFreq = col('תדירות'), cLast = col('חיוב אחרון');
+  const items = [];
+  let total = null;
+  for (let i = 1; i < vals.length; i++) {
+    const r = vals[i];
+    const name = String(r[cName] || '').trim();
+    if (!name) continue;
+    if (/^סה.?כ/.test(name)) { total = r[cAmt]; continue; }
+    if (!r[cAmt] && !r[cFreq]) continue;   // הערות בתחתית
+    items.push({ name: name, amount: cAmt >= 0 ? r[cAmt] : '', freq: cFreq >= 0 ? r[cFreq] : '', last: cLast >= 0 ? r[cLast] : '' });
+  }
+  return { items: items, total: total };
+}
+
+// ---------- יתרה בעו"ש + חיוב הבא בכאל (לשונית "יתרות (מערכת)", שורה 2) ----------
+function balances_(ss) {
+  const sh = ss.getSheetByName('יתרות (מערכת)');
+  if (!sh || sh.getLastRow() < 2) return null;
+  const r = sh.getRange(2, 1, 1, 6).getDisplayValues()[0];
+  const num = function (x) { const n = Number(String(x).replace(/[,₪\s]/g, '')); return String(x).trim() === '' || isNaN(n) ? null : n; };
+  return { updated: r[0], balance: num(r[1]), asOf: r[2], nextCharge: num(r[3]), chargeDate: r[4], note: r[5],
+    error: /^שגיאה/.test(String(r[5]).trim()) };
+}
+
+// ---------- צפוי להיכנס מקארדקום בחודש הבא (לשונית "קארדקום תחזית (מערכת)") ----------
+function forecast_(ss, now) {
+  const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const out = { month: next.getMonth() + 1, year: next.getFullYear(), total: null, items: [] };
+  const sh = ss.getSheetByName('קארדקום תחזית (מערכת)');
+  if (!sh || sh.getLastRow() < 1) return out;
+  const status = String(sh.getRange('H1').getDisplayValue()).trim();
+  out.updated = sh.getRange('B1').getDisplayValue();
+  if (status !== 'OK') { out.error = status; return out; }
+  if (sh.getLastRow() < 4) return out;
+  sh.getRange(4, 1, sh.getLastRow() - 3, 2).getDisplayValues().forEach(function (r) {
+    const s = String(r[0]).trim();
+    let d = null, m;
+    if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})/))) d = { y: +m[1], mo: +m[2], day: +m[3] };
+    else if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/))) d = { y: +m[3], mo: +m[2], day: +m[1] };
+    const amt = Number(String(r[1]).replace(/[,₪\s]/g, ''));
+    if (!d || isNaN(amt) || d.y !== out.year || d.mo !== out.month) return;
+    out.items.push({ date: ('0' + d.day).slice(-2) + '/' + ('0' + d.mo).slice(-2), day: d.day, amount: amt });
+  });
+  out.items.sort(function (a, b) { return a.day - b.day; });
+  if (out.items.length) out.total = Math.round(out.items.reduce(function (s, x) { return s + x.amount; }, 0) * 100) / 100;
+  return out;
 }

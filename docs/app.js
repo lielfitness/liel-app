@@ -1963,11 +1963,35 @@
     </details>`;
   }
 
+  let finView = 'cur';   // 'cur' = החודש הנוכחי, 'prev' = החודש הקודם (בלחיצה על הריבוע שלו)
+  const HEB_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+
+  /** שורות מידע קטנות: יתרה בעו"ש + חיוב הבא בכאל, וצפי מקארדקום לחודש הבא */
+  function finInfoHtml(d) {
+    const b = d.balance, f = d.forecast;
+    const lines = [];
+    if (b) {
+      const dt = (x) => `<bdi>${esc(String(x).slice(0, 5))}</bdi>`;
+      const amt = (n) => (n == null ? '—' : '₪' + Number(n).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+      lines.push(`<div class="fin-info">${b.error ? '<span title="העדכון האחרון נכשל – מוצגים הערכים הקודמים">⚠️</span> ' : ''}יתרה בעו״ש <bdi>383842</bdi>: <b>${amt(b.balance)}</b>${b.asOf ? ` (נכון ל-${dt(b.asOf)})` : ''}${b.nextCharge != null ? ` · חיוב הבא בכאל: <b>${amt(b.nextCharge)}</b>${b.chargeDate ? ` ב-${dt(b.chargeDate)}` : ''}` : ''}</div>`);
+    }
+    if (f) {
+      const mName = HEB_MONTHS[(f.month || 1) - 1];
+      lines.push(f.total != null && f.items && f.items.length
+        ? `<details class="fin-info fin-forecast"><summary>צפוי להיכנס מקארדקום ב${esc(mName)}: <b>₪${Number(f.total).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></summary>
+            ${f.items.map((x) => `<div class="fc-row"><bdi>${esc(x.date)}</bdi><b>₪${Number(x.amount).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></div>`).join('')}</details>`
+        : `<div class="fin-info">צפוי להיכנס מקארדקום ב${esc(mName)}: אין תחזית כרגע</div>`);
+    }
+    return lines.join('');
+  }
+
   function renderFinance(d) {
     const mo = d.months || [];
+    const isPrev = finView === 'prev' && !!mo[1];
+    const cur = isPrev ? mo[1] : mo[0];
     const review = (d.review || []).filter((r) => !decided[r.id]);
     const pre = (t) => `<div class="pre">${esc(t)}</div>`;
-    const ml = d.month || { income: [], expenses: [] };
+    const ml = (isPrev ? d.prevMonth : d.month) || { income: [], expenses: [] };
     const sumOf = (a) => a.reduce((s, x) => s + (Number(x.amount) || 0), 0);
     const debts = d.summary && d.summary.debts;
     const debtItems = debts ? (debts.items || []).filter((it) => !it.key || !it.cleared) : [];
@@ -1976,17 +2000,21 @@
     const anomItems = anom ? anom.items.filter((it) => !it.cleared) : [];
     shell('פיננסים', `
       <div class="tiles">
-        ${mo.map((m, i) => `<div class="card tile fin-month">
-          <div class="lbl"><b>${esc(m.label)}</b>${i === 0 ? ' (החודש)' : ''}</div>
+        ${mo.map((m, i) => `<button type="button" class="card tile fin-month ${(i === 1) === isPrev ? 'sel' : ''}" data-fm="${i === 1 ? 'prev' : 'cur'}">
+          <div class="lbl"><b>${esc(m.label)}</b>${i === 0 ? ' (החודש)' : ' (החודש הקודם)'}</div>
           <div class="fin-line">הכנסות <b>${money(m.income)}</b></div>
           <div class="fin-line">הוצאות <b>${money(m.expenses)}</b></div>
           <div class="fin-line">רווח נטו משוער <b>${money(m.net)}</b></div>
-        </div>`).join('')}
+          ${i === 1 && !isPrev ? '<div class="muted small">לדוח המלא ←</div>' : ''}
+        </button>`).join('')}
       </div>
+      ${isPrev ? `<div class="prev-banner"><span class="grow">מוצג הדוח של <b>${esc(cur.label)}</b></span><button class="btn small" data-fm="cur">← חזרה ל${esc(mo[0].label)}</button></div>` : ''}
+      ${finInfoHtml(d)}
       <div class="row" style="align-items:center;margin-top:6px">
         <div class="muted small grow">עדכון פיננסים אחרון: ${esc(d.lastUpdate || '—')}</div>
         <a class="btn small secondary" href="${FIN_TASK_URL}" target="_blank" rel="noopener">🔄 עדכון פיננסים עכשיו</a>
       </div>
+      ${isPrev ? `<div class="notice info small" style="margin-top:12px">"לבדיקה", דוח החייבים, החריגים והסיכום השבועי מגיעים מהעדכון השבועי האחרון, ולכן מוצגים בחודש הנוכחי.</div>` : `
       <div class="row" style="margin:14px 0 6px;align-items:center;flex-wrap:wrap;gap:6px">
         <div class="section-title grow" style="margin:0">לבדיקה (${review.length})</div>
         <button class="btn small secondary" data-act="add-income">＋ הכנסה ידנית</button>
@@ -2014,13 +2042,30 @@
         ${Object.keys(anomUndo).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(anomUndo[k].text)}</span><button class="btn small ghost" data-unanom="${esc(k)}">↶ ביטול</button></div>`).join('')}
         ${anomItems.length ? anomItems.map((it) => `<div class="debt-row" data-anom="${esc(it.key)}"><span class="grow small">${esc(it.text)}</span><button class="btn small ghost" data-clear>נקה</button></div>`).join('') : (Object.keys(anomUndo).length ? '' : '<div class="muted small">אין חריגים</div>')}
       </div>` : ''}
-      ${d.summary && d.summary.invoices ? `<div class="section-title">🧾 ${esc(d.summary.invoices.title)}</div><div class="card">${pre(d.summary.invoices.body)}</div>` : ''}
-      <div class="section-title">החודש</div>
-      ${monthDetails('הכנסות החודש', ml.income, sumOf(ml.income), mo[0] ? mo[0].income : null, true)}
-      ${monthDetails('הוצאות החודש', ml.expenses, sumOf(ml.expenses), mo[0] ? mo[0].expenses : null, false)}
-      ${d.summary && d.summary.text ? `<details class="card"><summary>הצגת הסיכום המלא${d.summary.at ? ` · ${esc(d.summary.at)}` : ''}</summary>${pre(d.summary.text)}</details>` : ''}`);
-    $app.querySelector('[data-act="add-income"]').onclick = () => openManualTx('inc');
-    $app.querySelector('[data-act="add-expense"]').onclick = () => openManualTx('exp');
+      ${d.summary && d.summary.invoices ? `<div class="section-title">🧾 ${esc(d.summary.invoices.title)}</div><div class="card">${pre(d.summary.invoices.body)}</div>` : ''}`}
+      <div class="section-title">${isPrev ? esc(cur.label) : 'החודש'}</div>
+      ${monthDetails(isPrev ? 'הכנסות ' + cur.label : 'הכנסות החודש', ml.income, sumOf(ml.income), cur ? cur.income : null, true)}
+      ${monthDetails(isPrev ? 'הוצאות ' + cur.label : 'הוצאות החודש', ml.expenses, sumOf(ml.expenses), cur ? cur.expenses : null, false)}
+      ${!isPrev && d.summary && d.summary.text ? `<details class="card"><summary>הצגת הסיכום המלא${d.summary.at ? ` · ${esc(d.summary.at)}` : ''}</summary>${pre(d.summary.text)}</details>` : ''}
+      ${d.year ? `<div class="section-title">השנה</div>
+      <div class="card year-card">
+        <div class="fin-line">הכנסות שנתיות <b>${money(d.year.income)}</b></div>
+        <div class="fin-line">הוצאות שנתיות <b>${money(d.year.expenses)}</b></div>
+        <div class="fin-line">רווח נטו שנתי <b>${money(d.year.net)}</b></div>
+        <div class="muted small">מ-1 בינואר עד היום</div>
+      </div>` : ''}
+      ${d.fixed ? `<div class="section-title">נספחים</div>
+      <details class="card month-list"><summary>הוצאות קבועות${d.fixed.total ? ` – ₪${esc(d.fixed.total)}` : ''}</summary>
+        <table class="mtable"><thead><tr><th>שם</th><th>חודש קודם</th><th>תדירות</th><th>חיוב אחרון</th></tr></thead><tbody>
+        ${d.fixed.items.map((x) => `<tr><td>${esc(x.name)}</td><td class="nowrap amt">${x.amount && x.amount !== '-' ? '₪' + esc(x.amount) : '—'}</td><td class="small">${esc(x.freq)}</td><td class="nowrap small">${esc(x.last)}</td></tr>`).join('')}
+        ${d.fixed.total ? `<tr class="total"><td><b>סה״כ</b></td><td class="nowrap amt">₪${esc(d.fixed.total)}</td><td></td><td></td></tr>` : ''}
+        </tbody></table>
+      </details>` : ''}`);
+    $app.querySelectorAll('[data-fm]').forEach((b) => {
+      b.onclick = () => { const v = b.dataset.fm; if (v === finView) return; finView = v; renderFinance(store.get('finance') || d); window.scrollTo(0, 0); };
+    });
+    const ai = $app.querySelector('[data-act="add-income"]'); if (ai) ai.onclick = () => openManualTx('inc');
+    const ae = $app.querySelector('[data-act="add-expense"]'); if (ae) ae.onclick = () => openManualTx('exp');
     $app.querySelectorAll('[data-rid]').forEach((row) => {
       const r = (d.review || []).find((x) => x.id === row.dataset.rid);
       row.querySelectorAll('[data-biz]').forEach((b) => { b.onclick = () => decideTx(r, b.dataset.biz === '1'); });
