@@ -1650,7 +1650,9 @@
   function renderHome(d) {
     state.alertsCount = d.zoomAlerts;
     const L = d.leads, F = d.fin;
+    const issues = (d.health && d.health.issues) || [];
     shell('תמונת מצב', `
+      ${issues.map((x) => `<div class="health-warn">⚠️ ${esc(x)}</div>`).join('')}
       <div class="section-title" style="margin-top:4px">לידים</div>
       <div class="tiles">
         <a class="card tile" href="#/leads" data-filter="s:ליד חדש"><div class="num">${L.newStatus}</div><div class="lbl">בסטטוס "ליד חדש"</div></a>
@@ -1674,16 +1676,6 @@
           <div class="grow"><b>${esc(z.name)}</b></div><span class="pill">${esc(fmtIso(z.date))}</span>
         </a>`).join('')}</div>` : '<div class="card muted">אין זומים השבוע</div>'}
 
-      ${d.zoomAuto ? `<div class="card small" style="margin-top:10px">
-        <b>עדכון אוטומטי של זומים:</b> ${d.zoomAuto.trigger === 'ok' ? '⚡ מיידי (טריגר שינוי ביומן) + גיבוי כל 10 דק׳' : esc(d.zoomAuto.trigger)}
-        ${d.zoomAuto.calendarWrite === false ? '<br><span style="color:#b10202">❌ אין הרשאת כתיבה ליומן – ביטול/שינוי מועד מהאפליקציה לא יעבדו. צריך להריץ reinstallTriggers בעורך הסקריפט.</span>' : d.zoomAuto.calendarWrite ? '<br>✅ הרשאת כתיבה ליומן (ביטול/שינוי מועד מהאפליקציה)' : ''}
-        ${d.zoomAuto.last ? `<br>אחרון: ${esc(d.zoomAuto.last.name)} – עודכן ${d.zoomAuto.last.seconds != null ? `תוך ${d.zoomAuto.last.seconds < 120 ? d.zoomAuto.last.seconds + ' שניות' : Math.round(d.zoomAuto.last.seconds / 60) + ' דקות'}` : ''} מהקביעה (${esc(d.zoomAuto.last.via)}, התאמה לפי ${esc(d.zoomAuto.last.how || '')})` : ''}
-      </div>` : ''}
-      ${d.notify ? `<div class="card small" style="margin-top:10px">
-        <b>התראות:</b> ${d.notify.trigger ? `בדיקת לידים חדשים ${(d.notify.minutes || 1) > 1 ? `כל ${d.notify.minutes} דק׳ (גיבוי ל-Make)` : 'כל דקה'} ✅${d.notify.last ? ` · אחרונה ${esc(fmtTs(d.notify.last))}` : ''}${d.notify.runs ? ` · היום ${d.notify.runs} בדיקות, ממוצע ${(d.notify.avgMs / 1000).toFixed(1)} שנ׳ (≈${Math.round(d.notify.avgMs * 1440 / (d.notify.minutes || 1) / 60000)} דק׳ ביום מתוך 90 המותרות)` : ''}` : '❌ בדיקת לידים חדשים לא פעילה – צריך להריץ setupNotifications בעורך הסקריפט'}
-        <br>${d.notify.push ? 'Push לטלפון: מוגדר ✅' : 'Push לטלפון: עוד לא הוגדר (Firebase)'}
-      </div>` : ''}
-
       <div class="section-title">עסק</div>
       ${d.finError ? `<div class="notice">${esc(d.finError)}</div>` : `
       <div class="tiles">
@@ -1696,9 +1688,44 @@
           <div class="muted small">${ils(Math.round(F.month.expensesNet))} אחרי מע״מ · עד העדכון האחרון</div></div>` : ''}
       </div>`}
     `);
+    // לחיצה ארוכה על הכותרת → מסך בדיקות נסתר
+    const h1 = $app.querySelector('.topbar h1');
+    let lp = null;
+    const cancelLp = () => clearTimeout(lp);
+    h1.addEventListener('pointerdown', () => { lp = setTimeout(() => { location.hash = '#/status'; }, 700); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => h1.addEventListener(ev, cancelLp));
+    h1.addEventListener('contextmenu', (e) => e.preventDefault());
     $app.querySelectorAll('[data-filter]').forEach((a) => {
       a.addEventListener('click', () => { state.filter = a.dataset.filter; LS.set('lf_filter', state.filter); });
     });
+  }
+
+  // ---------- מסך נסתר: בדיקות מערכת ----------
+  function viewStatus() {
+    if (!isAdmin()) return (location.hash = '#/leads');
+    return swr('home', 'home', {}, 'בדיקות מערכת', renderStatus);
+  }
+  function renderStatus(d) {
+    const h = d.health || { issues: [], details: {} };
+    const x = h.details || {};
+    const ago = (t) => (t ? relTime(t) : 'עוד לא נרשם');
+    const z = x.zoomLast;
+    shell('בדיקות מערכת', `
+      ${h.issues.length ? h.issues.map((i) => `<div class="health-warn">⚠️ ${esc(i)}</div>`).join('') : '<div class="notice info">✅ הכל תקין</div>'}
+      <div class="section-title">טריגרים היום</div>
+      <div class="card small">
+        ${(x.runs || []).map((r) => `<div><b>${esc(r.label)}:</b> ${r.runs} הרצות · ממוצע ${(r.avgMs / 1000).toFixed(1)} שנ׳ · ${r.totalMin} דק׳ · אחרונה ${esc(ago(r.last))}</div>`).join('')}
+        <div style="margin-top:6px"><b>סה״כ היום:</b> ${x.usedMin != null ? x.usedMin : '—'} מתוך 90 דק׳${x.prevDay ? ` · אתמול: ${Math.round(x.prevDay.ms / 6000) / 10} דק׳` : ''}</div>
+        <div class="muted">בדיקת לידים חדשים: כל ${x.watchMinutes || 1} דק׳ · טריגרים מותקנים: ${esc((x.triggers || []).join(', '))}</div>
+      </div>
+      <div class="section-title">זומים</div>
+      <div class="card small">
+        <div>טריגר שינוי ביומן: ${x.calTrigger === 'ok' ? '⚡ פעיל (+ גיבוי כל 10 דק׳)' : esc(x.calTrigger || '')}</div>
+        <div>הרשאת כתיבה ליומן: ${x.calendarWrite ? '✅' : '❌'}</div>
+        ${z ? `<div>אחרון: ${esc(z.name)}${z.seconds != null ? ` – עודכן תוך ${z.seconds < 120 ? z.seconds + ' שניות' : Math.round(z.seconds / 60) + ' דקות'}` : ''} (${esc(z.via || '')}, התאמה לפי ${esc(z.how || '')})</div>` : ''}
+      </div>
+      <div class="section-title">Push</div>
+      <div class="card small">${x.push ? 'Firebase מוגדר ✅' : 'Firebase לא מוגדר'}</div>`, { back: true });
   }
 
   // ---------- מרכז התראות ----------
@@ -1903,6 +1930,7 @@
     if (page === 'month') return viewMonth();
     if (page === 'zooms') return viewZooms();
     if (page === 'notifs') return viewNotifs();
+    if (page === 'status') return viewStatus();
     location.replace(isAdmin() ? '#/home' : '#/leads');
   }
 

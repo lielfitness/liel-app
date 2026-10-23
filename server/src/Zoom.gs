@@ -215,6 +215,11 @@ function installZoomTrigger() {
 
 /** הטריגר (כל 10 דקות, וגם מטריגר היומן). */
 function scanZoomBookings(via) {
+  const t0 = Date.now();
+  try { return scanZoomBookingsCore_(via); } finally { trackRun_('zoom', t0); }
+}
+
+function scanZoomBookingsCore_(via) {
   const cfg = getConfig_();
   if (via !== 'calendar') ensureCalendarTrigger_();
   withLock_(function () {

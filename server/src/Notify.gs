@@ -297,6 +297,10 @@ function watchKey_(l) {
 
 function watchNewLeads() {
   const t0 = Date.now();
+  try { return watchNewLeadsCore_(t0); } finally { trackRun_('watch', t0); }
+}
+
+function watchNewLeadsCore_(t0) {
   const cfg = getConfig_();
   const props = PropertiesService.getScriptProperties();
   // בדיקה קלה: רק עמודות שם+טלפון. אם לא השתנה כלום – יוצאים.

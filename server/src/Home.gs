@@ -26,12 +26,7 @@ function actionHome_(req, ctx) {
         .sort(function (a, b) { return (a.date || '9999') < (b.date || '9999') ? -1 : 1; }),
     },
     zoomAlerts: readJsonProp_(ZOOM_ALERTS_KEY_, []).length,
-    zoomAuto: {
-      trigger: PropertiesService.getScriptProperties().getProperty('CAL_TRIGGER') || 'עוד לא הותקן (יותקן בסריקה הבאה, תוך 10 דק׳)',
-      last: readJsonProp_('ZOOM_LAST', null),
-      calendarWrite: hasCalendarWrite_(),
-    },
-    notify: notifyStatus_(),
+    health: healthCheck_(),
     fin: null,
     finError: '',
   };

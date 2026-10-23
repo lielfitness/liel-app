@@ -667,6 +667,11 @@ function syncRewardsAfterEdit_(e, first, lastRow) {
 
 /** עריכה ידנית בלשונית הלידים → מעדכן "עודכן לאחרונה" בשורות שנערכו. */
 function onLeadsEdit(e) {
+  const t0 = Date.now();
+  try { return onLeadsEditCore_(e); } finally { trackRun_('edit', t0); }
+}
+
+function onLeadsEditCore_(e) {
   try {
     if (!e || !e.range) return;
     const sh = e.range.getSheet();
