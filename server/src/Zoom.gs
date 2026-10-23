@@ -308,7 +308,7 @@ function scanZoomBookingsCore_(via) {
           const r2 = readLeads_(cfg);
           syncRewards_(r2.sh, r2.leads, [prevLink.iso.slice(0, 7), iso.slice(0, 7)], false);
           linkZoom_(links, ev.getId(), pl, start.getTime(), iso);
-          notify_('zoom_moved', { name: pl.name, link: '#/lead/' + pl.id });
+          notify_('zoom_moved', { name: pl.name, when: start, link: '#/lead/' + pl.id });
           sendTelegramLiel_('🔁 <b>זום הוזז – ' + esc_(pl.name) + '</b>\n' + fmtWhen_(new Date(prevLink.start)) + ' ← ' + fmtWhen_(start),
             [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + pl.id }]);
           seen[key] = start.getTime();
@@ -348,7 +348,7 @@ function scanZoomBookingsCore_(via) {
         const r2 = readLeads_(cfg);
         syncRewards_(r2.sh, r2.leads, [resched.oldIso.slice(0, 7), iso.slice(0, 7)], false);
         r = readLeads_(cfg);
-        notify_('zoom_moved', { name: lead.name, link: '#/lead/' + lead.id });
+        notify_('zoom_moved', { name: lead.name, when: start, link: '#/lead/' + lead.id });
         sendTelegramLiel_('🔁 <b>זום הוזז – ' + esc_(lead.name) + '</b>\n' + fmtWhen_(new Date(resched.oldStart)) + ' ← ' + fmtWhen_(start) + delNote +
           (addedEmailR ? '\n📧 נוסף מייל לליד: ' + esc_(addedEmailR) : ''),
           [{ text: 'פתח כרטיס ליד', url: appUrl + '#/lead/' + lead.id }]);
@@ -365,7 +365,7 @@ function scanZoomBookingsCore_(via) {
         SpreadsheetApp.flush();
         const r2 = readLeads_(cfg);
         syncRewards_(r2.sh, r2.leads, [iso.slice(0, 7)], false);
-        notify_('zoom_booked', { name: lead.name, link: '#/lead/' + lead.id });
+        notify_('zoom_booked', { name: lead.name, when: start, link: '#/lead/' + lead.id });
         sendTelegramLiel_('📅 <b>זום חדש נקבע</b>\n' + esc_(lead.name) + '\n' + fmtWhen_(start) +
           (match.viaPending ? '\nℹ️ שויך לפי "קביעת זום" מהכרטיס – בפגישה ביומן לא היה מייל/טלפון של הליד. כדאי לוודא.' : '') +
           (addedEmail ? '\n📧 נוסף מייל לליד: ' + esc_(addedEmail) : ''),
@@ -385,7 +385,7 @@ function scanZoomBookingsCore_(via) {
           emails: info.emails, phones: info.phones, reason: reason,
           leadId: lead ? lead.id : '', leadRow: lead ? lead.row : 0, createdAt: Date.now(),
         });
-        notify_('zoom_booked', { name: info.name || ev.getTitle(), text: 'צריך שיוך ידני', link: '#/zooms' });
+        notify_('zoom_booked', { name: info.name || ev.getTitle(), when: start, text: 'צריך שיוך ידני', link: '#/zooms' });
         sendTelegramLiel_('📅 <b>זום חדש נקבע – צריך שיוך ידני</b>\n' + esc_(info.name || ev.getTitle()) + '\n' + fmtWhen_(start) + '\n' + esc_(reason),
           [{ text: 'פתח באפליקציה', url: appUrl + '#/zooms' }]);
       }

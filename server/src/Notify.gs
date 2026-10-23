@@ -17,7 +17,7 @@
  */
 
 const NOTIF_TYPES_ = {
-  lead_new:       { label: 'ליד חדש',  icon: '🆕', roles: ['admin', 'leads'] },
+  lead_new:       { label: 'ליד חדש',  icon: '🎯', roles: ['admin', 'leads'] },
   zoom_booked:    { label: 'זום נקבע', icon: '📅', roles: ['admin'] },
   zoom_cancelled: { label: 'זום בוטל', icon: '❌', roles: ['admin'] },
   zoom_moved:     { label: 'זום הוזז', icon: '🔁', roles: ['admin'] },
@@ -112,8 +112,10 @@ function notify_(type, p, opts) {
     if (!users.length) return 0;
     const sh = sysTab_('notif');
     const now = new Date();
-    const title = t.icon + ' ' + t.label;
-    const body = String(p.name || '').trim() + (p.text ? ' · ' + String(p.text) : '');
+    // הכותרת כוללת את השם (נראה ישר במסך הנעול): "📅 זום נקבע – דנה כהן · שלישי 28/10 14:30"
+    const nm = shortName_(p.name);
+    const title = p.title || (t.icon + ' ' + t.label + (nm ? ' – ' + nm : '') + (p.when ? ' · ' + whenText_(p.when) : ''));
+    const body = p.text ? String(p.text) : '';
     users.forEach(function (e) {
       const id = Utilities.getUuid().replace(/-/g, '').slice(0, 12);
       sh.appendRow([id, String(now.getTime()), Utilities.formatDate(now, TZ_, 'dd/MM/yyyy HH:mm'), e, type, title, body, p.link || '', '']);
@@ -329,7 +331,7 @@ function watchNewLeadsCore_(t0) {
   writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys });
   const todo = fresh.filter(function (l) { return claimLeadNotice_(watchKey_(l)); });
   if (todo.length > 5) {
-    notify_('lead_new', { name: todo.length + ' לידים חדשים', link: '#/leads' });
+    notify_('lead_new', { title: '🎯 ' + todo.length + ' לידים חדשים', link: '#/leads' });
   } else {
     todo.forEach(function (l) { notify_('lead_new', { name: l.name || l.phone, link: '#/lead/' + l.id }); });
   }
@@ -384,6 +386,24 @@ function claimLeadNotice_(key) {
     cache.put('lnk:' + key, '1', 6 * 3600);
     return true;
   } finally { if (got) lock.releaseLock(); }
+}
+
+/** "מאמנת כושר | Daniell Blaish 💪" → "Daniell Blaish": החלק שהוא שם, שם פרטי + משפחה בלבד */
+function shortName_(full) {
+  const raw = String(full || '').trim();
+  if (!raw) return '';
+  const parts = raw.split(/\s[-–—]\s|[|｜•·\/]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+  const generic = /(מאמנ|מאמן|כושר|פילאטיס|סטודיו|fitness|coach|trainer|תזונה|אונליין)/i;
+  const pick = parts.filter(function (x) { return !generic.test(x); })[0] || parts[0] || raw;
+  const words = pick.replace(/[^\p{L}\p{M}\s'"׳״-]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+  return words.length ? words.slice(0, 2).join(' ') : raw.slice(0, 30);
+}
+
+/** תאריך → "שלישי 28/10 14:30" (שעון ישראל) */
+function whenText_(d) {
+  d = d instanceof Date ? d : new Date(d);
+  const days = ['שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת', 'ראשון'];   // u: 1=שני … 7=ראשון
+  return days[Number(Utilities.formatDate(d, TZ_, 'u')) - 1] + ' ' + Utilities.formatDate(d, TZ_, 'dd/MM HH:mm');
 }
 
 // ---------- נקודת התראות לסקריפטים אחרים (Make וכו') ----------
