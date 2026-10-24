@@ -405,8 +405,9 @@ function parseDebts_(body) {
   String(body || '').split('\n').forEach(function (line) {
     const t = line.trim();
     if (!t) return;
-    if (/^עסקאות שלא עברו/.test(t)) { type = 'עסקה שלא עברה'; items.push({ head: t }); return; }
-    if (/^הוראות קבע/.test(t)) { type = 'הוראת קבע'; items.push({ head: t }); return; }
+    // כותרת, ולפעמים באותה שורה גם תוכן ("עסקאות שלא עברו: אין", "הוראות קבע: הבדיקה מהמק נכשלה…")
+    const hm = t.match(/^(עסקאות שלא עברו|הוראות קבע(?: שלא עברו)?)\s*:?\s*(.*)$/);
+    if (hm) { type = /^עסקאות/.test(hm[1]) ? 'עסקה שלא עברה' : 'הוראת קבע'; items.push({ head: hm[1] + ':', note: hm[2] }); return; }
     const m = t.match(/^(.+?)\s+-\s+₪\s*([\d,.]+)\s+-\s+(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\s*(?:-\s*)?(.*)$/);
     if (m && type) {
       const amount = Number(m[2].replace(/,/g, ''));

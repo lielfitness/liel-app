@@ -465,3 +465,4 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .year-card .fin-line { font-size: 15px; margin: 3px 0; }
 .mtable th { text-align: start; font-size: 12px; color: var(--muted, #667); padding: 4px; }
 .mtable tr.total td { border-top: 2px solid var(--line); }
+.debts .debt-note { font-weight: 400; }

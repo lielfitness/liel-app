@@ -2034,7 +2034,7 @@
       }).join('')}</div>` : '<div class="card muted">אין תנועות לבדיקה 🎉</div>'}
       ${debts ? `<div class="section-title">🔴 ${esc(debts.title)}</div><div class="card debts">
         ${Object.keys(debtUndo).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(debtUndo[k].name)} · ${money(debtUndo[k].amount)}</span><button class="btn small ghost" data-undebt="${esc(k)}">↶ ביטול</button></div>`).join('')}
-        ${debtItems.map((it) => it.head ? `<div class="debt-head">${esc(it.head)}</div>`
+        ${debtItems.map((it) => it.head ? `<div class="debt-head">${esc(it.head)}${it.note ? ` <span class="debt-note">${esc(it.note)}</span>` : ''}</div>`
           : it.key ? `<div class="debt-row" data-debt="${esc(it.key)}"><span class="grow"><b>${esc(it.name)}</b> · ${money(it.amount)} · ${esc(it.date)}${it.extra ? `<div class="muted small">${esc(it.extra)}</div>` : ''}</span><button class="btn small ghost" data-clear>נקה</button></div>`
           : `<div class="small">${esc(it.text)}</div>`).join('')}
       </div>` : ''}
