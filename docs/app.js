@@ -729,9 +729,12 @@
     hooks = hooks || {};
     lead = findLead(lead.id) || lead;   // תמיד על הגרסה העדכנית שבזיכרון
     const before = lead;
+    const tLocal = performance.now();
     const local = applyLocal(lead, action, params);
     setLead(local);
     hooks.onChange && hooks.onChange(local, 'local');
+    const lt = Math.round(performance.now() - tLocal);   // כמה זמן לקח לעדכן את המסך (מדידה)
+    const tQueued = performance.now();
     const id = lead.id;
     const seq = (seqByLead[id] = (seqByLead[id] || 0) + 1);
     pendingByLead[id] = (pendingByLead[id] || 0) + 1;
@@ -741,7 +744,7 @@
     const run = () => {
       const cur = findLead(id) || lead;
       if (String(cur.id).startsWith('tmp-')) return Promise.reject(new Error('הליד עוד לא נשמר בגיליון'));
-      return api(action, Object.assign({}, params, { row: cur.row, id: cur.id }));
+      return api(action, Object.assign({}, params, { row: cur.row, id: cur.id, _lt: lt, _qw: Math.round(performance.now() - tQueued) }));
     };
     const p = (queueByLead[id] || Promise.resolve()).catch(() => {}).then(run);
     queueByLead[id] = p;
@@ -824,6 +827,7 @@
    */
   function undoRedo(isUndo) {
     if (!(isUndo ? state.undoCount : state.redoCount)) return;
+    const tLocal = performance.now();
     const entry = (isUndo ? getUndoStack() : getRedoStack()).pop() || null;
     isUndo ? saveUndoStack() : saveRedoStack();
     let current = null, reinserted = false, removed = null, removedAt = -1, back = null;
@@ -860,10 +864,13 @@
       if (back) (isUndo ? dropRedoLocal : dropUndoLocal)(back);
       if (entry) (isUndo ? pushUndoLocal : pushRedoLocal)(entry);
     };
+    // מדידה: כמה זמן לקח למסך להשתנות (−1 = לא היה מה להחיל במסך מיד – מחכים לשרת)
+    const lt = entry && (current || reinserted || removed) ? Math.round(performance.now() - tLocal) : -1;
+    const tQueued = performance.now();
     undoChain = undoChain.then(async () => {
       await Promise.allSettled(Object.values(queueByLead));
       try {
-        const d = await api(isUndo ? 'undo' : 'redo');
+        const d = await api(isUndo ? 'undo' : 'redo', { _lt: lt, _qw: Math.round(performance.now() - tQueued) });
         syncUndoCounts(d);
         if (d.done) {
           if (d.lead) { setLead(d.lead); showLead(d.lead); }

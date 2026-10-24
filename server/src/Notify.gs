@@ -362,6 +362,7 @@ function watchNewLeads() {
     try { flushQuiet_(); } catch (e) { console.warn('quiet: ' + e); }
     try { dailyCoachCheck_(); } catch (e) { console.warn('coaches: ' + e); }
     try { pollOnboard_(); } catch (e) { console.warn('onboard: ' + e); }
+    try { flushPerf_(); } catch (e) { console.warn('perf: ' + e); }
     return watchNewLeadsCore_(t0);
   } finally { trackRun_('watch', t0); }
 }
