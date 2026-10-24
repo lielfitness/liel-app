@@ -155,16 +155,19 @@ const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
 function logPerf_(e, out) {
   const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
   if (!PERF_ACTIONS_[req.action]) return;
-  const log = readJsonProp_('PERF_LOG', []);
+  const cache = CacheService.getScriptCache();
+  const log = JSON.parse(cache.get('perf_buf') || '[]');
   log.push({ t: Date.now(), a: req.action, ms: out.ms, v: req.v || '', ok: !!out.ok, f: req.fields ? Object.keys(req.fields).join(',') : (req.kind || ''),
     ph: PHASES_ ? PHASES_.join(' · ') : '', lt: req._lt != null ? req._lt : '', qw: req._qw != null ? req._qw : '' });
-  writeJsonProp_('PERF_LOG', log.slice(-40));
+  cache.put('perf_buf', JSON.stringify(log.slice(-40)), 21600);
 }
 /** מתוך הבדיקה של כל דקה: מעביר את המדידות ללשונית "ביצועים" בגיליון המערכת (כדי שאפשר לקרוא אותן) */
 function flushPerf_() {
-  const log = readJsonProp_('PERF_LOG', []);
+  const cache = CacheService.getScriptCache();
+  const log = JSON.parse(cache.get('perf_buf') || '[]').concat(readJsonProp_('PERF_LOG', []));
   if (!log.length) return;
-  writeJsonProp_('PERF_LOG', []);
+  cache.remove('perf_buf');
+  PropertiesService.getScriptProperties().deleteProperty('PERF_LOG');
   const ss = systemSs_();
   let sh = ss.getSheetByName('ביצועים');
   if (!sh) { sh = ss.insertSheet('ביצועים'); sh.appendRow(['זמן', 'פעולה', 'שדות', 'בשרת (ms)', 'גרסה', 'הצליח', 'מסך מקומי (ms)', 'המתנה בתור (ms)', 'שלבים']); sh.setFrozenRows(1); }

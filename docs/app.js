@@ -277,6 +277,7 @@
       <header class="topbar">
         ${opts.back ? `<button class="icon-btn" data-act="back" aria-label="חזרה">→</button>` : ''}
         <h1>${esc(title)}</h1>
+        <span class="sync-ind" data-sync hidden aria-live="polite"></span>
         <nav class="topnav">${desktopNavItems().map(tlink).join('')}</nav>
         <div class="nav-more" hidden><button type="button" class="nav-more-btn" aria-haspopup="true">☰ עוד ▾</button><div class="nav-more-menu" hidden></div></div>
         <span class="spacer"></span>
@@ -303,7 +304,27 @@
     if (back) back.onclick = () => (history.length > 1 ? history.back() : (location.hash = '#/leads'));
     if (keepY != null) window.scrollTo(0, keepY);
     fitTopNav();
+    renderSync();
   }
+
+  // ---------- סמן קטן "שומר…" (לא חוסם) ----------
+  let syncN = 0, syncDoneT = null, syncJustDone = false;
+  function syncStart() { syncN++; syncJustDone = false; clearTimeout(syncDoneT); renderSync(); }
+  function syncEnd() {
+    syncN = Math.max(0, syncN - 1);
+    if (!syncN) { syncJustDone = true; clearTimeout(syncDoneT); syncDoneT = setTimeout(() => { syncJustDone = false; renderSync(); }, 1300); }
+    renderSync();
+  }
+  function renderSync() {
+    const el = $app.querySelector('[data-sync]');
+    if (!el) return;
+    if (syncN) { el.hidden = false; el.className = 'sync-ind busy'; el.innerHTML = '<span class="sync-spin"></span>שומר…'; }
+    else if (syncJustDone) { el.hidden = false; el.className = 'sync-ind done'; el.textContent = '✓ נשמר'; }
+    else el.hidden = true;
+  }
+  // גרסה מקומית לכל ליד: תשובה מהשרת לא דורסת שינוי מקומי חדש יותר
+  const localVer = {};
+  function bumpLocal(id) { localVer[realId(id)] = (localVer[realId(id)] || 0) + 1; return localVer[realId(id)]; }
 
   /** פריטי התפריט העליון במחשב. שי – בדיוק מה שמותר לה היום. */
   function desktopNavItems() {
@@ -736,6 +757,8 @@
     const lt = Math.round(performance.now() - tLocal);   // כמה זמן לקח לעדכן את המסך (מדידה)
     const tQueued = performance.now();
     const id = lead.id;
+    const ver = bumpLocal(id);
+    syncStart();
     const seq = (seqByLead[id] = (seqByLead[id] || 0) + 1);
     pendingByLead[id] = (pendingByLead[id] || 0) + 1;
     const undoEntry = { leadId: id, before: before };
@@ -751,7 +774,7 @@
     p.then((d) => {
       markDerivedStale();
       if (d.undoCount != null) { state.undoCount = d.undoCount; state.redoCount = d.redoCount || 0; updateUndoBtn(); }
-      if (seq === seqByLead[realId(id)] && d.lead) { setLead(d.lead); hooks.onChange && hooks.onChange(d.lead, 'server'); }
+      if (seq === seqByLead[realId(id)] && ver === localVer[realId(id)] && d.lead) { setLead(d.lead); hooks.onChange && hooks.onChange(d.lead, 'server'); }
       hooks.onOk && hooks.onOk(d);
       if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
       if (d.reward && d.reward.warning) toast('⚠️ ' + d.reward.warning, true);
@@ -761,10 +784,11 @@
       dropUndoLocal(undoEntry);
       if (seq === seqByLead[realId(id)]) { const b = findLead(id) ? withId(before, findLead(id)) : before; setLead(b); hooks.onChange && hooks.onChange(b, 'revert'); }
       hooks.onFail && hooks.onFail(e);
-      toast('השינוי לא נשמר בגיליון והוחזר למצב הקודם: ' + e.message, true);
+      toast('השמירה נכשלה – נסה שוב · ' + e.message, true);
     }).finally(() => {
       pendingByLead[id]--;
       if (!pendingByLead[id]) { delete pendingByLead[id]; }
+      syncEnd();
     });
     return p;
   }
@@ -787,9 +811,9 @@
   function withId(saved, cur) { return Object.assign({}, saved, { id: cur.id, row: cur.row, _pending: cur._pending }); }
 
   /** מציג ליד שהשתנה – רק במקום שבו הוא מופיע במסך */
-  function showLead(lead) {
-    if (rowEl(lead.id)) patchRow(lead.id, lead);
-    else if (onLeadCard(lead.id)) { if (!cardBusy()) renderLead(lead); }
+  function showLead(lead, force) {
+    if (rowEl(lead.id)) patchRow(lead.id, lead, force);
+    else if (onLeadCard(lead.id)) { if (force || !cardBusy()) { if (force) cardDirty = () => false; renderLead(lead); } }
     else if (location.hash === '#/untreated' && !isEditing()) renderUntreated();
   }
 
@@ -847,18 +871,24 @@
     } else if (entry && state.leads) {
       current = findLead(entry.leadId);
       if (current) {
+        try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch (e) { /* */ }
         const b = withId(entry.before, current);
-        setLead(b); showLead(b);
+        setLead(b); showLead(b, true);
         back = { leadId: current.id, before: current };
       }
     }
+    // הליד "בשמירה" עד שהשרת מאשר – רענון ברקע לא יחזיר אותו לערך הישן
+    const pid = current ? current.id : null;
+    const ver = pid ? bumpLocal(pid) : 0;
+    if (pid) pendingByLead[pid] = (pendingByLead[pid] || 0) + 1;
+    syncStart();
     if (back) (isUndo ? pushRedoLocal : pushUndoLocal)(back);
     if (isUndo) { state.undoCount = Math.max(0, state.undoCount - 1); state.redoCount++; }
     else { state.redoCount = Math.max(0, state.redoCount - 1); state.undoCount++; }
     updateUndoBtn();
-    toast(isUndo ? '↶ בוטל' : '↷ בוצע שוב');
+    if (!entry) toast(isUndo ? 'מבטל…' : 'מבצע שוב…');
     const revert = () => {
-      if (current) { setLead(current); showLead(current); }
+      if (current && ver === localVer[realId(current.id)]) { setLead(current); showLead(current, true); }
       if (reinserted) { state.leads = state.leads.filter((l) => l.id !== entry.leadId); persistLeads(); updateLeadsView(); }
       if (removed) { state.leads.splice(Math.max(0, removedAt), 0, removed); persistLeads(); updateLeadsView(); }
       if (back) (isUndo ? dropRedoLocal : dropUndoLocal)(back);
@@ -873,18 +903,24 @@
         const d = await api(isUndo ? 'undo' : 'redo', { _lt: lt, _qw: Math.round(performance.now() - tQueued) });
         syncUndoCounts(d);
         if (d.done) {
-          if (d.lead) { setLead(d.lead); showLead(d.lead); }
-          toast(d.message + (d.warning ? ' · ⚠️ ' + d.warning : ''), !!d.warning);
+          // תשובה מהשרת מוחלת רק אם לא נעשה מאז שינוי מקומי חדש יותר באותו ליד
+          if (d.lead && (!pid || ver === localVer[realId(pid)])) { setLead(d.lead); showLead(d.lead); }
+          else if (d.lead && !pid) { setLead(d.lead); showLead(d.lead); }
+          if (d.warning) toast('⚠️ ' + d.warning, true);
+          else if (!entry) toast(d.message);
           markDerivedStale();
         } else {
           revert();
-          toast(d.message, true);
+          toast((isUndo ? 'הביטול' : 'הביצוע מחדש') + ' נכשל – ' + d.message, true);
           softRefresh();
         }
       } catch (e) {
         revert();
-        if (e.code !== 'AUTH') toast((isUndo ? 'הביטול' : 'הביצוע מחדש') + ' נכשל, המסך הוחזר: ' + e.message, true);
+        if (e.code !== 'AUTH') toast('השמירה נכשלה – נסה שוב · ' + e.message, true);
         refetchUndoCounts();
+      } finally {
+        if (pid) { pendingByLead[pid]--; if (!pendingByLead[pid]) delete pendingByLead[pid]; }
+        syncEnd();
       }
     });
   }
@@ -904,7 +940,7 @@
   }
 
   /** מעדכן שורה במקום, בלי לפגוע בשדה שהמשתמשת מקלידה בו כרגע. */
-  function patchRow(oldId, lead) {
+  function patchRow(oldId, lead, force) {
     const el = rowEl(oldId);
     if (!el || !lead) return;
     el.dataset.id = lead.id;
@@ -917,10 +953,10 @@
     el.querySelector('.g-entry').textContent = fmtIso(lead.entry) || lead.entryRaw || '';
     el.querySelector('.g-att').innerHTML = attemptsHtml(lead);
     const sel = el.querySelector('select[data-status]');
-    if (!sel || document.activeElement !== sel) el.querySelector('.g-status').innerHTML = statusSelect(lead);
+    if (force || !sel || document.activeElement !== sel) el.querySelector('.g-status').innerHTML = statusSelect(lead);
     el.querySelector('.g-zoom').textContent = lead.zoomDate ? '🎥 ' + fmtIso(lead.zoomDate) : '';
     el.querySelectorAll('textarea[data-field]').forEach((t) => {
-      if (document.activeElement !== t) t.value = lead[t.dataset.field] || '';
+      if (force || document.activeElement !== t) t.value = lead[t.dataset.field] || '';
     });
   }
 
@@ -1526,7 +1562,7 @@
       cardDirty = () => false;
       optimistic(lead, 'updateLead', { fields }, {
         onChange: (l, why) => { if (why === 'local') renderLead(l); else redraw(l); },
-        onOk: (d) => { if (!d.ghost && !(d.reward && d.reward.warning)) toast('נשמר ✓'); afterClosed(lead, { fields }); },
+        onOk: () => { afterClosed(lead, { fields }); },
       });
     };
 

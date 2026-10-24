@@ -11,16 +11,49 @@ const FIELD_LABELS_ = {
   zoomDate: 'תאריך זום', zoomResult: 'תוצאת זום', callResult: 'תוצאת שיחה',
 };
 
-// שתי מחסניות לכל משתמש: U = לביטול (↶), R = לביצוע שוב (↷)
-function stackIndexKey_(st, email) { return st + 'I:' + email; }
+// שתי מחסניות לכל משתמש: U = לביטול (↶), R = לביצוע שוב (↷).
+// כל מחסנית = ערך אחד ב-Script Properties (מערך של פעולות) – קריאה אחת וכתיבה אחת לכל פעולה (מהיר).
+// הפורמט הישן (אינדקס + ערך לכל פעולה) מומר אוטומטית בקריאה הראשונה.
+function stackIndexKey_(st, email) { return st + 'I:' + email; }        // פורמט ישן
 function stackEntryKey_(st, email, id) { return st + ':' + email + ':' + id; }
-function undoIndexKey_(email) { return stackIndexKey_('U', email); }
-function undoEntryKey_(email, id) { return stackEntryKey_('U', email, id); }
+function stackKey_(st, email) { return 'US:' + st + ':' + email; }
+const STACK_N_ = {};   // כמה פעולות יש בכל מחסנית (מתעדכן בכל קריאה/כתיבה בבקשה הזו)
 
-function stackIndex_(st, email) { return readJsonProp_(stackIndexKey_(st, email), []); }
-function undoIndex_(email) { return stackIndex_('U', email); }
-function undoCount_(email) { return email ? stackIndex_('U', email).length : 0; }
-function redoCount_(email) { return email ? stackIndex_('R', email).length : 0; }
+function loadStack_(st, email) {
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty(stackKey_(st, email));
+  let list = null;
+  if (raw) { try { list = JSON.parse(raw); } catch (e) { list = []; } }
+  else {
+    // המרה מהפורמט הישן (פעם אחת)
+    const oldIdx = props.getProperty(stackIndexKey_(st, email));
+    list = [];
+    if (oldIdx) {
+      let ids = [];
+      try { ids = JSON.parse(oldIdx); } catch (e) { ids = []; }
+      ids.forEach(function (id) {
+        const r = props.getProperty(stackEntryKey_(st, email, id));
+        if (r) { try { list.push(JSON.parse(r)); } catch (e) { /* */ } }
+        props.deleteProperty(stackEntryKey_(st, email, id));
+      });
+      props.deleteProperty(stackIndexKey_(st, email));
+      saveStack_(st, email, list);
+    }
+  }
+  STACK_N_[st] = list.length;
+  return list;
+}
+function saveStack_(st, email, list) {
+  let l = list.slice(-UNDO_MAX_);
+  let json = JSON.stringify(l);
+  while (json.length > 8800 && l.length) { l = l.slice(1); json = JSON.stringify(l); }   // מגבלת 9KB לערך
+  const props = PropertiesService.getScriptProperties();
+  if (l.length) props.setProperty(stackKey_(st, email), json); else props.deleteProperty(stackKey_(st, email));
+  STACK_N_[st] = l.length;
+  return l.length;
+}
+function undoCount_(email) { if (!email) return 0; return STACK_N_.U != null ? STACK_N_.U : loadStack_('U', email).length; }
+function redoCount_(email) { if (!email) return 0; return STACK_N_.R != null ? STACK_N_.R : loadStack_('R', email).length; }
 
 function describeFields_(fields) {
   const names = Object.keys(fields).map(function (k) { return FIELD_LABELS_[k] || k; });
@@ -49,36 +82,25 @@ function pushUndoEntry_(email, entry, loc) {
 function pushStack_(st, email, entry, loc) {
   entry.id = Utilities.getUuid().slice(0, 8);
   entry.ts = Date.now();
-  const json = JSON.stringify(entry);
-  if (json.length > 8500) return;   // שינוי ארוך במיוחד – לא נשמר
-  const props = PropertiesService.getScriptProperties();
-  const idx = stackIndex_(st, email);
-  idx.push(entry.id);
-  while (idx.length > UNDO_MAX_) props.deleteProperty(stackEntryKey_(st, email, idx.shift()));
-  const upd = {};
-  upd[stackEntryKey_(st, email, entry.id)] = json;
-  upd[stackIndexKey_(st, email)] = JSON.stringify(idx);
-  props.setProperties(upd);
-  if (loc && st === 'U') loc.undoCount = idx.length;
+  if (JSON.stringify(entry).length > 8500) return STACK_N_[st] || 0;   // שינוי ארוך במיוחד – לא נשמר
+  const list = loadStack_(st, email);
+  list.push(entry);
+  const n = saveStack_(st, email, list);
+  if (loc && st === 'U') loc.undoCount = n;
+  return n;
 }
 
 function clearStack_(st, email) {
-  const idx = stackIndex_(st, email);
-  if (!idx.length) return;
-  const props = PropertiesService.getScriptProperties();
-  idx.forEach(function (id) { props.deleteProperty(stackEntryKey_(st, email, id)); });
-  props.deleteProperty(stackIndexKey_(st, email));
+  PropertiesService.getScriptProperties().deleteProperty(stackKey_(st, email));
+  STACK_N_[st] = 0;
 }
 
 function popStack_(st, email) {
-  const idx = stackIndex_(st, email);
-  const id = idx.pop();
-  if (!id) return null;
-  const props = PropertiesService.getScriptProperties();
-  const raw = props.getProperty(stackEntryKey_(st, email, id));
-  props.deleteProperty(stackEntryKey_(st, email, id));
-  writeJsonProp_(stackIndexKey_(st, email), idx);
-  try { return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  const list = loadStack_(st, email);
+  const e = list.pop();
+  if (!e) return null;
+  saveStack_(st, email, list);
+  return e;
 }
 
 function deserializeCell_(v) {
@@ -181,14 +203,9 @@ function undoRedo_(req, ctx, from, to, verb) {
 
     let warning = '';
     loc.out = leadAfterWrite_(ctx.cfg, loc);
-    if (!e.zoomMonths && !e.ghost && !e.ghostRecopy && loc.out) CACHE_PATCH_ = loc.out;
-    if (e.zoomMonths) {
-      SpreadsheetApp.flush();
-      const r2 = readLeads_(ctx.cfg);
-      const res = syncRewards_(r2.sh, r2.leads, e.zoomMonths, false);
-      warning = lockedWarning_(res.locked);
-      loc.out = rereadLead_(ctx.cfg, loc.lead.id, row);
-    }
+    if (!e.ghost && !e.ghostRecopy && loc.out) CACHE_PATCH_ = loc.out;
+    // תגמול (S): מחושב ברקע תוך דקה (לא בתוך הבקשה)
+    if (e.zoomMonths) { queueRewardSync_(e.zoomMonths, null); warning = lockedMonthsWarning_(e.zoomMonths); }
     pushStack_(to, ctx.email, inverse);
 
     let message = verb + ': ' + e.desc + ' של ' + e.name;
@@ -200,7 +217,7 @@ function undoRedo_(req, ctx, from, to, verb) {
   });
   if (out.done && loc) out.lead = loc.out || leadAfterWrite_(ctx.cfg, loc);
   if (out.done && out.restoredRow) out.lead = rereadLead_(ctx.cfg, out.leadId, out.restoredRow);
-  out.undoCount = undoCount_(ctx.email);
+  out.undoCount = undoCount_(ctx.email);   // מהזיכרון של הבקשה – בלי קריאה נוספת
   out.redoCount = redoCount_(ctx.email);
   phase_('build');
   if (req.debug) out.phases = PHASES_;

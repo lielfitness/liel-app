@@ -435,19 +435,14 @@ function actionUpdateLead_(req, ctx) {
     const zoomChanged = (fields.zoomDate != null && String(fields.zoomDate).trim() !== lead.zoomDate) ||
       (fields.zoomResult != null && String(fields.zoomResult).trim() !== lead.zoomResult);
     if (zoomChanged) {
-      SpreadsheetApp.flush();
+      // התגמול (S) מחושב מחדש ברקע, תוך דקה (הבדיקה של כל דקה) – כדי שהשמירה תהיה מהירה
       const newZoom = fields.zoomDate != null ? String(fields.zoomDate).trim() : lead.zoomDate;
       const oldMonth = lead.zoomDate.slice(0, 7), newMonth = newZoom.slice(0, 7);
-      const r2 = readLeads_(ctx.cfg);
-      const res = syncRewards_(r2.sh, r2.leads, [oldMonth, newMonth], false);
-      // הזום נמחק: הליד כבר לא בשום חודש – מרוקנים את S אם החודש הישן פתוח
-      if (!newZoom && oldMonth && !isLockedMonth_(oldMonth) && String(lead.reward || '').trim()) {
-        r2.sh.getRange(row, COL_.reward).setValue('');
-      }
-      reward = { changes: res.changes.length, warning: lockedWarning_(res.locked) };
       zoomMonths = [oldMonth, newMonth];
-      lead._raw = null;   // S אולי השתנה – הליד ייקרא מחדש מהגיליון
-      phase_('reward sync');
+      // הזום נמחק: הליד כבר לא בשום חודש – S מתרוקן (אם החודש פתוח), גם זה ברקע
+      queueRewardSync_(zoomMonths, !newZoom && oldMonth && String(lead.reward || '').trim() ? lead.id : null);
+      reward = { deferred: true, warning: lockedMonthsWarning_(zoomMonths) };
+      phase_('reward queued');
     }
 
     const newStatus = fields.status != null ? String(fields.status).trim() : lead.status;
@@ -461,9 +456,10 @@ function actionUpdateLead_(req, ctx) {
       phase_('ghosting');
     }
     recordUndo_(ctx.email, loc, describeFields_(fields), { zoomMonths: zoomMonths, ghost: ghost && ghost.copied ? ghost : null });
+    phase_('undo saved');
     result = loc;
     result.out = leadAfterWrite_(ctx.cfg, loc);
-    if (!zoomMonths && result.out) CACHE_PATCH_ = result.out;   // רק הליד הזה השתנה
+    if (result.out && !(ghost && ghost.copied)) CACHE_PATCH_ = result.out;   // רק הליד הזה השתנה (S – ברקע)
   });
   const out = { lead: result.out, ghost: ghost, reward: reward, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email), redoCount: 0 };
   phase_('build');
@@ -705,4 +701,36 @@ function actionGetLead_(req, ctx) {
   const lead = publicLead_(loc.lead);
   lead.zoomEvent = futureZoomByLead_()[lead.id] || null;
   return { lead: lead };
+}
+
+// ---------- תגמול (S) ברקע ----------
+// השמירה רק רושמת אילו חודשים צריך לחשב מחדש; הבדיקה של כל דקה (watchNewLeads) מחשבת.
+function queueRewardSync_(months, clearLeadId) {
+  const q = readJsonProp_('REWARD_QUEUE', { months: [], clear: [] });
+  (months || []).forEach(function (m) { if (m && q.months.indexOf(m) < 0) q.months.push(m); });
+  if (clearLeadId && q.clear.indexOf(clearLeadId) < 0) q.clear.push(clearLeadId);
+  writeJsonProp_('REWARD_QUEUE', q);
+}
+function lockedMonthsWarning_(months) {
+  return lockedWarning_((months || []).filter(function (m) { return m && isLockedMonth_(m); }));
+}
+function runRewardQueue_() {
+  const q = readJsonProp_('REWARD_QUEUE', null);
+  if (!q || (!q.months.length && !q.clear.length)) return;
+  withLock_(function () {
+    const fresh = readJsonProp_('REWARD_QUEUE', { months: [], clear: [] });
+    PropertiesService.getScriptProperties().deleteProperty('REWARD_QUEUE');
+    const cfg = getConfig_();
+    let r = readLeads_(cfg);
+    // זום שנמחק: מרוקנים S אם אין תאריך זום והחודש הישן פתוח
+    fresh.clear.forEach(function (id) {
+      const l = r.leads.filter(function (x) { return x.id === id; })[0];
+      if (l && !l.zoomDate && String(l.reward || '').trim()) {
+        const open = fresh.months.some(function (m) { return m && !isLockedMonth_(m); });
+        if (open) r.sh.getRange(l.row, COL_.reward).setValue('');
+      }
+    });
+    if (fresh.clear.length) { SpreadsheetApp.flush(); r = readLeads_(cfg); }
+    syncRewards_(r.sh, r.leads, fresh.months.filter(Boolean), false);
+  });
 }

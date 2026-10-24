@@ -363,6 +363,7 @@ function watchNewLeads() {
     try { dailyCoachCheck_(); } catch (e) { console.warn('coaches: ' + e); }
     try { pollOnboard_(); } catch (e) { console.warn('onboard: ' + e); }
     try { flushPerf_(); } catch (e) { console.warn('perf: ' + e); }
+    try { runRewardQueue_(); } catch (e) { console.warn('rewards: ' + e); }
     return watchNewLeadsCore_(t0);
   } finally { trackRun_('watch', t0); }
 }
