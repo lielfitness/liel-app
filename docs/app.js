@@ -1934,10 +1934,10 @@
 
   // ---------- שלב 2: מאמנים ופגישות (ליאל בלבד) ----------
   // הכל נטען מראש (מאמנים + כל היסטוריית הפגישות) – הכרטיסים נפתחים מהזיכרון
-  let coachFilter = 'all';
+  let coachFilter = 'active';
   const leftCls = (c) => (c.left == null ? '' : c.left <= 0 ? 'done' : c.left <= 2 ? 'low' : '');
   const COACH_FILTERS = [
-    { k: 'all', t: 'הכל', f: () => true },
+    { k: 'active', t: 'פעילים', f: (c) => c.left != null && c.left > 0 },
     { k: 'low', t: 'נגמרות', f: (c) => c.left != null && c.left >= 1 && c.left <= 2 },
     { k: 'done', t: 'הסתיימו', f: (c) => c.left != null && c.left <= 0 },
   ];
@@ -1996,7 +1996,7 @@
         </div>`).join('')}</div>` : (Object.keys(lateUndo).length ? '' : '<div class="card muted">אין ביטולים מאוחרים</div>')}
       ${gapSectionHtml(d)}
       <div class="row" style="margin:16px 0 6px;align-items:center;flex-wrap:wrap;gap:6px">
-        <div class="section-title grow" style="margin:0">מאמנים בליווי (${(d.coaches || []).length})</div>
+        <div class="grow"><div class="section-title" style="margin:0">מאמנים בליווי</div>${d.count ? `<div class="muted small coach-count">מאמנים ובוגרי ליווי – <b>${d.count.total}</b></div>` : ''}</div>
         <div class="chips" style="margin:0">${COACH_FILTERS.map((x) => `<button class="chip ${coachFilter === x.k ? 'on' : ''}" data-cf="${x.k}">${x.t}<span class="n">${(d.coaches || []).filter(x.f).length}</span></button>`).join('')}</div>
       </div>
       <div class="mlist">${list.length ? list.map((c) => `
@@ -2938,7 +2938,7 @@
     if (page === 'status') return viewStatus();
     if (page === 'settings') return viewSettings();
     if (isAdmin()) {
-      if (page === 'coaches') { if (parts[1] === 'low' || parts[1] === 'done') coachFilter = parts[1]; return viewCoaches(); }
+      if (page === 'coaches') { coachFilter = parts[1] === 'low' || parts[1] === 'done' ? parts[1] : 'active'; return viewCoaches(); }
       if (page === 'coach' && parts[1]) return viewCoach(decodeURIComponent(parts[1]));
       if (page === 'finance') {
         if (parts[1] === 'debts') { finView = 'cur'; const go = () => { const el = $app.querySelector('.debts'); if (el) el.scrollIntoView({ block: 'start' }); }; const r = viewFinance(); setTimeout(go, 60); return r; }

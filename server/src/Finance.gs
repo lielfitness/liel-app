@@ -98,6 +98,7 @@ function actionCoaches_(req, ctx) {
     online: onlineEnsure_(),
     tracks: onbTracks_(),
     gap: coachGapView_(),
+    count: coachCount_(),
     lastRun: d.lastRun,
   };
 }

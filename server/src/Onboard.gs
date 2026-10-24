@@ -155,3 +155,33 @@ function authorizeForms() {
   const f = FormApp.openById(getConfig_().onboardFormId);
   console.log('✅ יש גישה לטופס: ' + f.getTitle() + ' (' + f.getItems().length + ' שאלות)');
 }
+
+// ---------- מונה "מאמנים ובוגרי ליווי" ----------
+// בסיס: Script Property COACH_COUNT_BASE = {"count":110,"from":"<זמן ISO>"} (אפשר לתקן ידנית).
+// מעליו: כל קליטה אמיתית ומוצלחת אחרי זמן הבסיס, מהאפליקציה או מהטופס (לשונית "קליטות (מערכת)"),
+// לפי מייל – מייל נספר פעם אחת; בדיקות, הרצה חוזרת והוספה ידנית לא נספרות.
+function coachCount_() {
+  const props = PropertiesService.getScriptProperties();
+  let base = readJsonProp_('COACH_COUNT_BASE', null);
+  if (!base) { base = { count: 110, from: new Date().toISOString(), note: '112 קבצי "ליווי מקצועי" פחות שחר בר ונועה בנאי (24/10/2026)' }; writeJsonProp_('COACH_COUNT_BASE', base); }
+  const from = new Date(base.from).getTime();
+  const seen = {};
+  let added = 0;
+  try {
+    const ss = SpreadsheetApp.openById(getConfig_().onboardSheetId);
+    const sh = ss.getSheetByName(ONB_TAB_);
+    if (sh && sh.getLastRow() > 1) {
+      sh.getRange(2, 1, sh.getLastRow() - 1, 15).getDisplayValues().forEach(function (r) {
+        const m = String(r[0]).match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})/);
+        if (!m) return;
+        const t = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5])).getTime();
+        const email = String(r[ONB_COLS_.email]).trim().toLowerCase();
+        if (t <= from || r[ONB_COLS_.test] === 'כן' || !email || seen[email]) return;
+        const failed = ONB_STEPS_.some(function (s) { return /נכשל/.test(r[ONB_COLS_[s[0]]]); });
+        if (failed) return;
+        seen[email] = 1; added++;
+      });
+    }
+  } catch (e) { /* */ }
+  return { total: Number(base.count) + added, base: Number(base.count), added: added };
+}
