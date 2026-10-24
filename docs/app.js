@@ -562,17 +562,26 @@
 
   // שורות שנערכו במסך הזה נשארות גלויות גם אם כבר לא מתאימות לסינון (עד שמחליפים סינון/חיפוש)
   let stickyIds = new Set();
+  // "החודש" (ליאל בלבד): רק לידים שנכנסו מה-1 בחודש הנוכחי ועד היום – חל על הקבוצות, המונים והרשימה
+  let monthOnly = LS.get('lf_month_only') === '1';
+  function monthStartIso() { const d = new Date(); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-01`; }
+  function baseLeads() {
+    if (!monthOnly || !isAdmin()) return state.leads;
+    const from = monthStartIso(), to = isoToday();
+    return state.leads.filter((l) => l.entry && l.entry >= from && l.entry <= to);
+  }
   function leadsListNow() {
-    return state.leads.filter((l) => stickyIds.has(l.id) || (matchesFilter(l, state.filter) && matchSearch(l, state.search))).sort(sortNewest);
+    return baseLeads().filter((l) => stickyIds.has(l.id) || (matchesFilter(l, state.filter) && matchSearch(l, state.search))).sort(sortNewest);
   }
   function chipsHtml() {
     const statuses = state.meta.statuses;
+    const all = baseLeads();
     const counts = {};
-    statuses.forEach((st) => { counts[st] = state.leads.filter((l) => matchesFilter(l, 's:' + st)).length; });
-    const waitingN = state.leads.filter((l) => matchesFilter(l, 'waiting')).length;
-    const chips = FILTERS.map((f) => ({ k: f.k, t: f.t, n: state.leads.filter(f.f).length }))
+    statuses.forEach((st) => { counts[st] = all.filter((l) => matchesFilter(l, 's:' + st)).length; });
+    const waitingN = all.filter((l) => matchesFilter(l, 'waiting')).length;
+    const chips = FILTERS.map((f) => ({ k: f.k, t: f.t, n: all.filter(f.f).length }))
       .concat(state.meta.waitingFilter ? [{ k: 'waiting', t: 'ממתינים', n: waitingN }] : [])
-      .concat(state.meta.closedFilter ? [{ k: 'closed', t: 'נסגר', n: state.leads.filter((l) => matchesFilter(l, 'closed')).length }] : [])
+      .concat(state.meta.closedFilter ? [{ k: 'closed', t: 'נסגר', n: all.filter((l) => matchesFilter(l, 'closed')).length }] : [])
       .concat(statuses.filter((st) => counts[st]).map((st) => ({ k: 's:' + st, t: st, n: counts[st] })));
     return chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span></button>`).join('');
   }
@@ -616,6 +625,7 @@
         <button class="btn add-lead" data-act="add-lead">＋ ליד</button>
       </div>
       <div class="chips" id="chips">${chipsHtml()}</div>
+      ${isAdmin() ? `<div class="month-toggle-row"><button class="chip month-toggle ${monthOnly ? 'on' : ''}" data-act="month-only">${monthOnly ? 'החודש ✕' : '📅 החודש'}</button>${monthOnly ? '<span class="muted small">מוצגים רק לידים שנכנסו מה-1 בחודש</span>' : ''}</div>` : ''}
       <div id="results"></div>`);
 
     bindGrid(document.getElementById('results'));
@@ -623,6 +633,12 @@
     $app.querySelector('[data-act="add-lead"]').onclick = openAddLead;
     const q = document.getElementById('q');
     q.oninput = () => { state.search = q.value.trim(); stickyIds = new Set(); drawResults(); };
+    const mt = $app.querySelector('[data-act="month-only"]');
+    if (mt) mt.onclick = () => {
+      monthOnly = !monthOnly; LS.set('lf_month_only', monthOnly ? '1' : '0');
+      stickyIds = new Set();
+      const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y);
+    };
     document.getElementById('chips').onclick = (ev) => {
       const b = ev.target.closest('.chip[data-f]');
       if (!b) return;
