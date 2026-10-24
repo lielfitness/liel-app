@@ -35,7 +35,8 @@
     get(name) { try { const v = LS.get(this.key(name)); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
     set(name, data) { try { LS.set(this.key(name), JSON.stringify(data)); } catch (e) { /* מקום */ } },
     clearAll() {
-      try { Object.keys(localStorage).filter((k) => k.indexOf('lf_c:') === 0).forEach((k) => localStorage.removeItem(k)); } catch (e) { /* */ }
+      // התור של השמירות (outbox) לא נמחק ביציאה: אחרי כניסה מחדש הוא נשלח לשרת
+      try { Object.keys(localStorage).filter((k) => k.indexOf('lf_c:') === 0 && !/:outbox$/.test(k)).forEach((k) => localStorage.removeItem(k)); } catch (e) { /* */ }
     },
   };
 
@@ -860,8 +861,8 @@
       if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
       if (d.reward && d.reward.warning) toast('⚠️ ' + d.reward.warning, true);
     }).catch((e) => {
+      if (e.code === 'AUTH') return;   // נשאר בתור – יישלח אחרי כניסה מחדש
       obRemove(opId);
-      if (e.code === 'AUTH') return;
       state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
       dropUndoLocal(undoEntry);
       if (seq === seqByLead[realId(id)]) { const b = findLead(id) ? withId(before, findLead(id)) : before; setLead(b); hooks.onChange && hooks.onChange(b, 'revert'); }

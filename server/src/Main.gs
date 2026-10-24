@@ -158,12 +158,29 @@ function roleOf_(email, cfg) {
 const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
 function logPerf_(e, out) {
   const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-  if (!PERF_ACTIONS_[req.action]) return;
-  const cache = CacheService.getScriptCache();
-  const log = JSON.parse(cache.get('perf_buf') || '[]');
-  log.push({ t: Date.now(), a: req.action, ms: out.ms, v: req.v || '', ok: !!out.ok, f: req.fields ? Object.keys(req.fields).join(',') : (req.kind || ''),
-    ph: PHASES_ ? PHASES_.join(' · ') : '', lt: req._lt != null ? req._lt : '', qw: req._qw != null ? req._qw : '' });
-  cache.put('perf_buf', JSON.stringify(log.slice(-40)), 21600);
+  const entry = function (p, ok, ms, via) {
+    return { t: Date.now(), a: p.action + (via ? ' (' + via + ')' : ''), ms: ms, v: req.v || '', ok: ok, f: p.fields ? Object.keys(p.fields).join(',') : (p.kind || ''),
+      ph: !via && PHASES_ ? PHASES_.join(' · ') : '', lt: p._lt != null ? p._lt : '', qw: p._qw != null ? p._qw : '' };
+  };
+  let add = [];
+  if (PERF_ACTIONS_[req.action]) add.push(entry(req, !!out.ok, out.ms, ''));
+  // שמירות שנשלחו מהתור (ביציאה מהאפליקציה / בפתיחה מחדש) – שורה לכל שמירה. הזמן הוא של כל הבקשה.
+  if (req.action === 'batch') {
+    const res = (out.data && out.data.results) || [];
+    (req.ops || []).slice(0, 40).forEach(function (op, i) {
+      const p = Object.assign({}, op.params || {}, { action: op.action });
+      if (PERF_ACTIONS_[op.action]) add.push(entry(p, !!out.ok && !!(res[i] && res[i].ok), out.ms, 'תור, ' + (i + 1) + '/' + req.ops.length));
+    });
+  }
+  if (!add.length) return;
+  // נעילה קצרה למשתמש: שתי בקשות במקביל לא ימחקו זו לזו את הרישום
+  const lock = LockService.getUserLock();
+  const got = lock.tryLock(3000);
+  try {
+    const cache = CacheService.getScriptCache();
+    const log = JSON.parse(cache.get('perf_buf') || '[]').concat(add);
+    cache.put('perf_buf', JSON.stringify(log.slice(-80)), 21600);
+  } finally { if (got) lock.releaseLock(); }
 }
 /** מתוך הבדיקה של כל דקה: מעביר את המדידות ללשונית "ביצועים" בגיליון המערכת (כדי שאפשר לקרוא אותן) */
 function flushPerf_() {
