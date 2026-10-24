@@ -494,3 +494,7 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
   .nav-more-menu a:hover, .nav-more-menu a.active { background: #eef3fa; }
   .nav-more-menu .badge { margin-inline-start: auto; }
 }
+.update-bar { position: fixed; z-index: 60; left: 12px; right: 12px; bottom: calc(var(--nav-h) + var(--safe-b) + 12px); background: #1b2a3a; color: #fff;
+  border-radius: 12px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.update-bar span { flex: 1; }
+@media (min-width: 900px) { .update-bar { bottom: 16px; left: auto; right: 16px; max-width: 380px; } }

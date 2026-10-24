@@ -131,6 +131,28 @@
   function sk(l) { return l.statusKey != null ? l.statusKey : String(l.status || '').trim(); }
 
   // ---------- API ----------
+  // ---------- גרסה חדשה: בודקים כל 5 דקות ובכל חזרה לאפליקציה; נטענת לבד כשלא באמצע פעולה ----------
+  let newVersionShown = false;
+  function checkNewVersion() {
+    if (!APP_VERSION) return;
+    fetch('index.html?_=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((html) => {
+      const m = html.match(/app\.js\?v=(\d+)/);
+      if (!m || Number(m[1]) <= Number(APP_VERSION)) return;
+      const busy = Object.keys(pendingByLead).length || isEditing() || document.querySelector('.sheet-backdrop, .booking-overlay');
+      if (!busy) { location.reload(); return; }
+      if (newVersionShown) return;
+      newVersionShown = true;
+      const bar = document.createElement('div');
+      bar.className = 'update-bar';
+      bar.innerHTML = '<span>גרסה חדשה של האפליקציה</span><button class="btn small">רענן</button>';
+      bar.querySelector('button').onclick = () => location.reload();
+      document.body.appendChild(bar);
+    }).catch(() => {});
+  }
+  setInterval(() => { if (document.visibilityState === 'visible') checkNewVersion(); }, 5 * 60000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(checkNewVersion, 1500); });
+  setTimeout(checkNewVersion, 15000);
+
   // הגרסה שרצה עכשיו (מתוך app.js?v=N) – נשלחת לשרת, כדי לזהות גרסה ישנה מהזיכרון של הדפדפן
   const APP_VERSION = (() => { try { return (document.currentScript.src.match(/[?&]v=(\d+)/) || [])[1] || ''; } catch (e) { return ''; } })();
   const PERF_LOCAL = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
@@ -2256,9 +2278,9 @@
   }
 
   // ---------- שלב 3: קליטת מאמן ----------
-  /** ליאל שינה ליד ל"נסגר" ונשמר → נפתחת קליטת מאמן ממולאת מראש. שי – כלום, כמו היום. */
+  /** ליאל סימן "נסגר" בתוצאת זום (P) ונשמר → נפתחת קליטת מאמן ממולאת מראש. שי – כלום, כמו היום. */
   function afterClosed(lead, params) {
-    if (!params || !params.fields || params.fields.status !== 'נסגר' || !isAdmin() || state.viewAs) return;
+    if (!params || !params.fields || params.fields.zoomResult !== 'נסגר' || !isAdmin() || state.viewAs) return;
     const l = findLead(lead.id) || lead;
     const email = String(l.email || '').trim();
     openOnboard({ name: l.name || '', phone: formPhone(l.phone), email: email && email !== '-' ? email.toLowerCase() : '', fromLead: true });
@@ -2282,7 +2304,7 @@
     const fromLead = !!pre.fromLead;
     const sh = openSheet(`
       <div class="row"><b class="grow">קליטת מאמן חדש</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
-      ${fromLead ? '<div class="notice info small">הליד סומן "נסגר" ✓ – לקלוט אותו כמאמן?</div>' : ''}
+      ${fromLead ? '<div class="notice info small">תוצאת הזום סומנה "נסגר" ✓ – לקלוט אותו כמאמן?</div>' : ''}
       <div class="field"><label>מסלול</label>
         <div class="seg"><button type="button" class="chip ${fromLead ? '' : 'on'}" data-track="פרימיום">פרימיום</button><button type="button" class="chip" data-track="בייסיק">בייסיק</button></div></div>
       <div class="field"><label for="ob-name">שם מלא</label><input id="ob-name" autocomplete="off" value="${esc(pre.name || '')}"></div>
