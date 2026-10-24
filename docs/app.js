@@ -239,11 +239,14 @@
     const cur = '#/' + (location.hash.replace(/^#\/?/, '').split('/')[0] || '');
     const nav = navItems();
     const link = (n) => `<a href="${n.h}" class="${cur === n.h ? 'active' : ''}"><span class="ico">${n.ico}</span><span>${esc(n.t)}</span>${n.badge ? `<span class="badge">${n.badge}</span>` : ''}</a>`;
+    // תפריט עליון (מחשב בלבד): כל הפריטים בשורה, ומה שלא נכנס עובר ל"עוד" (fitTopNav)
+    const tlink = (n) => `<a href="${n.h}" class="tn-item ${cur === n.h ? 'active' : ''}"${n.act ? ` data-nav-act="${n.act}"` : ''}><span class="ico">${n.ico}</span><span>${esc(n.t)}</span>${n.badge ? `<span class="badge">${n.badge}</span>` : ''}</a>`;
     $app.innerHTML = `
       <header class="topbar">
         ${opts.back ? `<button class="icon-btn" data-act="back" aria-label="חזרה">→</button>` : ''}
         <h1>${esc(title)}</h1>
-        <nav class="topnav">${nav.map(link).join('')}</nav>
+        <nav class="topnav">${desktopNavItems().map(tlink).join('')}</nav>
+        <div class="nav-more" hidden><button type="button" class="nav-more-btn" aria-haspopup="true">☰ עוד ▾</button><div class="nav-more-menu" hidden></div></div>
         <span class="spacer"></span>
         <a class="icon-btn bell" data-bell href="#/notifs" title="התראות" aria-label="התראות" style="text-decoration:none">🔔<span class="badge" ${state.unread ? '' : 'hidden'}>${state.unread}</span></a>
         <a class="icon-btn" data-alerts href="#/zooms" title="זומים לשיוך" style="text-decoration:none" ${state.alertsCount ? '' : 'hidden'}>📅<span class="badge">${state.alertsCount}</span></a>
@@ -267,7 +270,53 @@
     const back = $app.querySelector('[data-act="back"]');
     if (back) back.onclick = () => (history.length > 1 ? history.back() : (location.hash = '#/leads'));
     if (keepY != null) window.scrollTo(0, keepY);
+    fitTopNav();
   }
+
+  /** פריטי התפריט העליון במחשב. שי – בדיוק מה שמותר לה היום. */
+  function desktopNavItems() {
+    if (!isAdmin()) return navItems();
+    return [
+      { h: '#/home', ico: '🏠', t: 'בית' },
+      { h: '#/leads', ico: '👥', t: 'לידים' },
+      { h: '#/coaches', ico: '🏋️', t: 'מאמנים' },
+      { h: '#/finance', ico: '📊', t: 'פיננסים' },
+      { h: '#/onboard', act: 'onboard', ico: '＋', t: 'קליטת מאמן' },
+      { h: '#/untreated', ico: '⏰', t: 'לידים שלא טופלו', badge: untreatedCount() },
+      { h: '#/ghosting', ico: '👻', t: 'גוסטינג' },
+      { h: '#/month', ico: '💰', t: 'שכר שי' },
+      { h: '#/zooms', ico: '📅', t: 'זומים לשיוך', badge: state.alertsCount },
+      { h: '#/notifs', ico: '🔔', t: 'התראות', badge: state.unread },
+      { h: '#/settings', ico: '⚙️', t: 'הגדרות' },
+    ];
+  }
+  /** מכניס כמה שאפשר לשורה; מה שלא נכנס עובר ל"עוד" – מהסוף להתחלה. מתעדכן כשמשנים את גודל החלון. */
+  function fitTopNav() {
+    const nav = $app.querySelector('.topnav');
+    const more = $app.querySelector('.nav-more');
+    if (!nav || !more || getComputedStyle(nav).display === 'none') return;
+    const menu = more.querySelector('.nav-more-menu');
+    const items = [...nav.querySelectorAll('.tn-item')];
+    items.forEach((a) => { a.hidden = false; });
+    more.hidden = true; menu.hidden = true; menu.innerHTML = '';
+    const over = () => nav.scrollWidth > nav.clientWidth + 1;
+    if (!over()) return;
+    more.hidden = false;
+    const moved = [];
+    for (let i = items.length - 1; i >= 0 && over(); i--) { items[i].hidden = true; moved.unshift(items[i]); }
+    moved.forEach((a) => { const c = a.cloneNode(true); c.hidden = false; c.classList.remove('tn-item'); c.classList.add('more-item'); menu.appendChild(c); });
+  }
+  let navResizeT = null;
+  window.addEventListener('resize', () => { clearTimeout(navResizeT); navResizeT = setTimeout(fitTopNav, 80); });
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.nav-more-btn');
+    const menu = $app.querySelector('.nav-more-menu');
+    if (btn && menu) { menu.hidden = !menu.hidden; return; }
+    const act = e.target.closest('[data-nav-act]');
+    if (menu && !e.target.closest('.nav-more-menu')) menu.hidden = true;
+    if (act && act.dataset.navAct === 'onboard') { e.preventDefault(); if (menu) menu.hidden = true; openOnboard(); }
+    else if (act && menu) menu.hidden = true;
+  });
 
   /** מספרים בכותרת ובתפריט – מתעדכנים במקום, בלי לצייר את המסך מחדש */
   function updateBadges() {
@@ -276,7 +325,7 @@
     const bb = $app.querySelector('[data-bell] .badge');
     if (bb) { bb.hidden = !state.unread; bb.textContent = state.unread > 99 ? '99+' : state.unread; }
     const n = untreatedCount();
-    $app.querySelectorAll('nav a[href="#/untreated"], nav a[href="#/more"]').forEach((el) => {
+    $app.querySelectorAll('nav a[href="#/untreated"], nav a[href="#/more"], .nav-more-menu a[href="#/untreated"]').forEach((el) => {
       let b = el.querySelector('.badge');
       if (!n) { if (b) b.remove(); return; }
       if (!b) { b = document.createElement('span'); b.className = 'badge'; el.appendChild(b); }
@@ -840,7 +889,7 @@
     stickyIds.add(lead.id);
     return optimistic(lead, action, params, {
       onChange: (l, why) => { patchRow(l.id, l); if (why === 'local') markRow(l.id, 'busy', 'שומר…'); },
-      onOk: () => markRow(lead.id, 'ok', okMsg || 'נשמר ✓'),
+      onOk: () => { markRow(lead.id, 'ok', okMsg || 'נשמר ✓'); afterClosed(lead, params); },
       onFail: () => markRow(lead.id, 'err', 'לא נשמר ✕'),
     });
   }
@@ -1438,7 +1487,7 @@
       cardDirty = () => false;
       optimistic(lead, 'updateLead', { fields }, {
         onChange: (l, why) => { if (why === 'local') renderLead(l); else redraw(l); },
-        onOk: (d) => { if (!d.ghost && !(d.reward && d.reward.warning)) toast('נשמר ✓'); },
+        onOk: (d) => { if (!d.ghost && !(d.reward && d.reward.warning)) toast('נשמר ✓'); afterClosed(lead, { fields }); },
       });
     };
 
@@ -1668,7 +1717,6 @@
       </div>
       ${d.stage2 ? `<div class="section-title">מאמנים ופיננסים</div>
       <div class="tiles">
-        <a class="card tile ${d.stage2.lateUncharged ? 'alert' : ''}" href="#/coaches"><div class="num">${d.stage2.lateUncharged}</div><div class="lbl">ביטולים מאוחרים שלא חויבו</div></a>
         <a class="card tile ${d.stage2.lowCoaches ? 'alert' : ''}" href="#/coaches" data-low="1"><div class="num">${d.stage2.lowCoaches}</div><div class="lbl">מאמנים עם 2 פגישות או פחות</div></a>
         <a class="card tile ${d.stage2.review ? 'alert' : ''}" href="#/finance"><div class="num">${d.stage2.review}</div><div class="lbl">תנועות "לבדיקה"</div></a>
       </div>` : ''}
@@ -2198,19 +2246,53 @@
   }
 
   // ---------- שלב 3: קליטת מאמן ----------
-  function openOnboard() {
+  /** ליאל שינה ליד ל"נסגר" ונשמר → נפתחת קליטת מאמן ממולאת מראש. שי – כלום, כמו היום. */
+  function afterClosed(lead, params) {
+    if (!params || !params.fields || params.fields.status !== 'נסגר' || !isAdmin() || state.viewAs) return;
+    const l = findLead(lead.id) || lead;
+    const email = String(l.email || '').trim();
+    openOnboard({ name: l.name || '', phone: formPhone(l.phone), email: email && email !== '-' ? email.toLowerCase() : '', fromLead: true });
+  }
+  /** טלפון לפורמט שהטופס מקבל: 05X-XXXXXXX (נייד), אחרת 0X-XXXXXXX */
+  function formPhone(p) {
+    let d = String(p || '').replace(/\D/g, '');
+    if (d.indexOf('972') === 0) d = '0' + d.slice(3);
+    if (d.length === 9 && d[0] !== '0') d = '0' + d;
+    if (/^05\d{8}$/.test(d)) return d.slice(0, 3) + '-' + d.slice(3);
+    if (/^0[2-9]\d{7}$/.test(d)) return d.slice(0, 2) + '-' + d.slice(2);
+    return String(p || '').trim();
+  }
+  function coachByEmail(email) {
+    const cs = store.get('coaches');
+    return email && cs ? cs.coaches.find((c) => String(c.email).toLowerCase().split(/[,;\s]+/).includes(email)) : null;
+  }
+
+  function openOnboard(pre) {
+    pre = pre || {};
+    const fromLead = !!pre.fromLead;
     const sh = openSheet(`
       <div class="row"><b class="grow">קליטת מאמן חדש</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      ${fromLead ? '<div class="notice info small">הליד סומן "נסגר" ✓ – לקלוט אותו כמאמן?</div>' : ''}
       <div class="field"><label>מסלול</label>
-        <div class="seg"><button type="button" class="chip on" data-track="פרימיום">פרימיום</button><button type="button" class="chip" data-track="בייסיק">בייסיק</button></div></div>
-      <div class="field"><label for="ob-name">שם מלא</label><input id="ob-name" autocomplete="off"></div>
-      <div class="field"><label for="ob-email">מייל</label><input id="ob-email" type="email" inputmode="email" class="ltr-input" autocomplete="off"></div>
-      <div class="field"><label for="ob-phone">טלפון</label><input id="ob-phone" type="tel" inputmode="tel" class="ltr-input" autocomplete="off"></div>
-      <div class="field"><label for="ob-n">פגישות בחבילה</label><input id="ob-n" type="number" min="1" max="50" step="1" inputmode="numeric" value="12" style="width:90px"></div>
+        <div class="seg"><button type="button" class="chip ${fromLead ? '' : 'on'}" data-track="פרימיום">פרימיום</button><button type="button" class="chip" data-track="בייסיק">בייסיק</button></div></div>
+      <div class="field"><label for="ob-name">שם מלא</label><input id="ob-name" autocomplete="off" value="${esc(pre.name || '')}"></div>
+      <div class="field"><label for="ob-email">מייל</label><input id="ob-email" type="email" inputmode="email" class="ltr-input" autocomplete="off" value="${esc(pre.email || '')}"></div>
+      <div class="field"><label for="ob-phone">טלפון</label><input id="ob-phone" type="tel" inputmode="tel" class="ltr-input" autocomplete="off" value="${esc(pre.phone || '')}"></div>
+      <div class="field"><label for="ob-n">פגישות בחבילה</label><input id="ob-n" type="number" min="1" max="50" step="1" inputmode="numeric" value="${fromLead ? '' : 12}" placeholder="${fromLead ? 'בחרו מסלול' : ''}" style="width:110px"></div>
       <div class="notice small" id="ob-warn" hidden></div>
-      <button class="btn" data-save>המשך</button>`);
+      <div class="row"><button class="btn grow" data-save>המשך</button>${fromLead ? '<button class="btn ghost" data-x>לא עכשיו</button>' : ''}</div>`);
     const $ = (q) => sh.el.querySelector(q);
-    let track = 'פרימיום';
+    let track = fromLead ? '' : 'פרימיום';
+    // מאמן קיים (לפי המייל בתפעול) – מציגים כבר עכשיו, לפני השליחה
+    const showExisting = () => {
+      const c = coachByEmail($('#ob-email').value.trim().toLowerCase());
+      const w = $('#ob-warn');
+      if (c) { w.hidden = false; w.textContent = `⚠️ המייל הזה כבר קיים בתפעול – ${c.name} (${c.left == null ? '—' : c.left} פגישות נשארו). קליטה לא תישלח.`; }
+      else if (/כבר קיים בתפעול/.test(w.textContent)) { w.hidden = true; w.textContent = ''; }
+    };
+    $('#ob-email').addEventListener('input', showExisting);
+    if (!store.get('coaches')) api('coaches').then((d) => { store.set('coaches', d); showExisting(); }).catch(() => {});
+    showExisting();
     sh.el.querySelectorAll('[data-track]').forEach((b) => {
       b.onclick = () => {
         track = b.dataset.track;
@@ -2218,12 +2300,13 @@
         $('#ob-n').value = TRACK_DEFAULT[track];   // שינוי מסלול מחזיר את ברירת המחדל שלו
       };
     });
-    setTimeout(() => $('#ob-name').focus(), 50);
+    if (!fromLead) setTimeout(() => $('#ob-name').focus(), 50);
     $('[data-save]').onclick = () => {
       const f = { track, name: $('#ob-name').value.trim(), email: $('#ob-email').value.trim().toLowerCase(), phone: $('#ob-phone').value.trim(), n: Number($('#ob-n').value) };
       const warn = $('#ob-warn');
       const bad = (m) => { warn.hidden = false; warn.textContent = m; };
       const d = f.phone.replace(/\D/g, ''); const local = d.indexOf('972') === 0 ? '0' + d.slice(3) : d;
+      if (!f.track) return bad('בחרו מסלול (פרימיום / בייסיק)');
       if (f.name.length < 2) return bad('חסר שם מלא');
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) return bad('מייל לא תקין');
       if (!/^05\d{8}$/.test(local) && !/^0[2-9]\d{7}$/.test(local)) return bad('טלפון ישראלי לא תקין');
@@ -2348,8 +2431,15 @@
 
   // ---------- מרכז התראות ----------
   function applyNotifs(d) {
-    state.unread = d.unread || 0;
+    state.unread = d.badge != null ? d.badge : (d.unread || 0);   // המונה על הפעמון: מה שהגיע מאז שנפתח מסך ההתראות
     updateBadges();
+  }
+  /** נפתח מסך ההתראות → המונה על הפעמון מתאפס (לכל משתמש בנפרד). "לא נקראה" ברשימה נשאר. */
+  function markNotifsSeen() {
+    const d = store.get('notifs');
+    if (d) { d.badge = 0; store.set('notifs', d); }
+    state.unread = 0; updateBadges();
+    api('notifSeen').catch(() => {});
   }
   let notifsFetch = null;
   function refreshNotifs() {
@@ -2379,7 +2469,8 @@
   }
 
   function viewNotifs() {
-    return swr('notifs', 'notifications', {}, 'התראות', (d) => { applyNotifs(d); renderNotifs(d); });
+    markNotifsSeen();
+    return swr('notifs', 'notifications', {}, 'התראות', (d) => { if (d.badge) markNotifsSeen(); else applyNotifs(d); renderNotifs(d); });
   }
 
   function renderNotifs(d) {
@@ -2569,6 +2660,7 @@
     if (page === 'zooms') return viewZooms();
     if (page === 'notifs') return viewNotifs();
     if (page === 'status') return viewStatus();
+    if (page === 'settings') return viewSettings();
     if (isAdmin()) {
       if (page === 'coaches') { if (parts[1] === 'low' || parts[1] === 'done') coachFilter = parts[1]; return viewCoaches(); }
       if (page === 'coach' && parts[1]) return viewCoach(decodeURIComponent(parts[1]));
@@ -2577,7 +2669,6 @@
         return viewFinance();
       }
       if (page === 'more') return viewMore();
-      if (page === 'settings') return viewSettings();
       if (page === 'onboard') return viewOnboard();
     }
     location.replace(isAdmin() ? '#/home' : '#/leads');

@@ -476,3 +476,21 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .onb-steps .step.ok { background: #d4edda; color: #155724; }
 .onb-steps .step.bad { background: #fdecea; color: #b10202; }
 .small.ok { color: #1e8e3e; } .small.bad { color: #b10202; }
+
+/* תפריט עליון במחשב: ממלא את השורה, מה שלא נכנס – ב"עוד" */
+.nav-more { display: none; }
+@media (min-width: 900px) {
+  .topnav { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+  .topnav a { flex: 0 0 auto; white-space: nowrap; }
+  .topnav a[hidden] { display: none; }
+  .topbar .spacer { display: none; }
+  .nav-more { display: block; position: relative; flex: 0 0 auto; }
+  .nav-more[hidden] { display: none; }
+  .nav-more-btn { background: rgba(255,255,255,.12); color: #fff; border: 0; border-radius: 999px; padding: 8px 14px; font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap; }
+  .nav-more-menu { position: absolute; top: calc(100% + 6px); inset-inline-start: 0; background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.15); padding: 6px; min-width: 210px; z-index: 30; }
+  .nav-more-menu[hidden] { display: none; }
+  .nav-more-menu a { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 8px; color: var(--ink); text-decoration: none; white-space: nowrap; }
+  .nav-more-menu a:hover, .nav-more-menu a.active { background: #eef3fa; }
+  .nav-more-menu .badge { margin-inline-start: auto; }
+}

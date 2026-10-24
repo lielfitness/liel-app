@@ -200,10 +200,24 @@ function actionNotifications_(req, ctx) {
   return {
     items: list,
     unread: list.filter(function (n) { return !n.read; }).length,
+    // המונה על הפעמון: לא נקראו ושהגיעו אחרי הפעם האחרונה שהמשתמש פתח את מסך ההתראות
+    badge: list.filter(function (n) { return !n.read && n.at > (Number(mine._seenAt) || 0); }).length,
     types: types.map(function (k) { return { k: k, label: NOTIF_TYPES_[k].label, icon: NOTIF_TYPES_[k].icon }; }),
     settings: settings,
     push: { configured: !!PropertiesService.getScriptProperties().getProperty('FCM_SERVICE_ACCOUNT'), devices: myDevices_(ctx.email).length },
   };
+}
+
+/** נפתח מסך ההתראות → מאפסים את המונה על הפעמון (לכל משתמש בנפרד) */
+function actionNotifSeen_(req, ctx) {
+  const d = sysRows_('settings');
+  const i = d.rows.findIndex(function (r) { return String(r[0]).toLowerCase() === ctx.email; });
+  let cur = {};
+  if (i >= 0) { try { cur = JSON.parse(d.rows[i][1] || '{}'); } catch (e) { cur = {}; } }
+  cur._seenAt = Date.now();
+  if (i >= 0) d.sh.getRange(i + 2, 2).setValue(JSON.stringify(cur));
+  else d.sh.appendRow([ctx.email, JSON.stringify(cur)]);
+  return { ok: true };
 }
 
 function actionNotifRead_(req, ctx) {

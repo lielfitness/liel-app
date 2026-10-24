@@ -31,6 +31,7 @@ const ACTIONS = {
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
   notifications:  { roles: ['admin', 'leads'], fn: actionNotifications_ },
   notifRead:      { roles: ['admin', 'leads'], fn: actionNotifRead_ },
+  notifSeen:      { roles: ['admin', 'leads'], fn: actionNotifSeen_ },
   notifSettings:  { roles: ['admin', 'leads'], fn: actionNotifSettings_ },
   pushRegister:   { roles: ['admin', 'leads'], fn: actionPushRegister_ },
   pushUnregister: { roles: ['admin', 'leads'], fn: actionPushUnregister_ },
