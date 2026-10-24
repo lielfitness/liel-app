@@ -211,6 +211,9 @@ function undoRedo_(req, ctx, from, to, verb) {
 
     let warning = '';
     loc.out = leadAfterWrite_(ctx.cfg, loc);
+    if (e.changes.some(function (c) { return c.col === COL_.status; }) && loc.out && !e.ghost && !e.ghostRecopy) {
+      try { ghostSyncLead_(ctx.cfg, loc.out); } catch (err) { console.warn('ghost: ' + err); }
+    }
     if (!e.ghost && !e.ghostRecopy && loc.out) CACHE_PATCH_ = loc.out;
     // תגמול (S): מחושב ברקע תוך דקה (לא בתוך הבקשה)
     if (e.zoomMonths) { queueRewardSync_(e.zoomMonths, null); warning = lockedMonthsWarning_(e.zoomMonths); }

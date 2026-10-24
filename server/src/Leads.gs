@@ -448,6 +448,9 @@ function actionUpdateLead_(req, ctx) {
     }
 
     const newStatus = fields.status != null ? String(fields.status).trim() : lead.status;
+    if (canonicalStatus_(lead.status) === 'Ghosting' && newStatus !== 'Ghosting') {
+      try { ghostSyncLead_(ctx.cfg, Object.assign({}, lead, { status: newStatus })); } catch (err) { console.warn('ghost: ' + err); }
+    }
     if (newStatus === 'Ghosting' && lead.status !== 'Ghosting') {
       SpreadsheetApp.flush();
       const merged = Object.assign({}, lead, {
@@ -592,7 +595,18 @@ function copyToGhosting_(cfg, lead) {
       return (pk && idx('טלפון') >= 0 && phoneKey_(r[idx('טלפון')]) === pk) ||
              (em && em !== '-' && String(r[idx('מייל')]).trim().toLowerCase() === em);
     });
-    if (dup) return { copied: false, reason: 'כבר קיים בלשונית Ghosting' };
+    if (dup) {
+      const sc = headers.indexOf(GHOST_STATE_HEADER_);
+      if (sc >= 0) {
+        const pk2 = phoneKey_(lead.phone), em2 = String(lead.email || '').toLowerCase();
+        data.forEach(function (r, i) {
+          const same = (pk2 && idx('טלפון') >= 0 && phoneKey_(r[idx('טלפון')]) === pk2) || (em2 && em2 !== '-' && String(r[idx('מייל')]).trim().toLowerCase() === em2);
+          if (same && String(r[sc]).trim()) ghostUnmark_(sh, { row: i + 3 }, sc + 1);
+        });
+        invalidateGhost_();
+      }
+      return { copied: false, reason: 'כבר קיים בלשונית Ghosting' };
+    }
   }
 
   const values = {
@@ -646,9 +660,15 @@ function readGhosting_(ctx) {
   rows.forEach(function (r) {
     for (let i = r.length - 1; i >= used; i--) if (String(r[i]).trim()) { used = i + 1; break; }
   });
+  // עמודת "מצב": מי שיצא מ-Ghosting מסומן שם – מוצג בנפרד, והעמודה עצמה לא מוצגת כעמודה רגילה
+  const sc = headers.indexOf(GHOST_STATE_HEADER_);
+  const keep = [];
+  for (let i = 0; i < used; i++) if (i !== sc) keep.push(i);
+  const pick = function (r) { return keep.map(function (i) { return r[i]; }); };
   return {
-    headers: headers.slice(0, used),
-    rows: rows.map(function (r) { return r.slice(0, used); }),
+    headers: pick(headers),
+    rows: rows.map(pick),
+    states: rows.map(function (r) { return sc >= 0 ? String(r[sc] || '').trim() : ''; }),
   };
 }
 
@@ -699,6 +719,13 @@ function onLeadsEditCore_(e) {
     sh.getRange(first, upCol, vals.length, 1).setNumberFormat('dd/MM/yyyy HH:mm').setValues(vals);
 
     if (c1 <= COL_.zoomDate && c2 >= COL_.zoomResult) syncRewardsAfterEdit_(e, first, lastRow);
+    // סטטוס שונה ישירות בגיליון → Ghosting אוטומטי (כניסה / סימון יציאה)
+    if (c1 <= COL_.status && c2 >= COL_.status && lastRow - first <= 20) {
+      const cfg = getConfig_();
+      for (let r = first; r <= lastRow; r++) {
+        try { ghostSyncLead_(cfg, readLeadAt_(sh, ex, r)); } catch (err) { console.warn('ghost: ' + err); }
+      }
+    }
   } catch (err) {
     console.error(err);
   }

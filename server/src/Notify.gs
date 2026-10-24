@@ -366,6 +366,7 @@ function watchNewLeads() {
     try { flushPerf_(); } catch (e) { console.warn('perf: ' + e); }
     try { runRewardQueue_(); } catch (e) { console.warn('rewards: ' + e); }
     try { computeCoachGap_(false); } catch (e) { console.warn('gap: ' + e); }
+    try { ghostReconcile_(false); } catch (e) { console.warn('ghost sync: ' + e); }
     return watchNewLeadsCore_(t0);
   } finally { trackRun_('watch', t0); }
 }

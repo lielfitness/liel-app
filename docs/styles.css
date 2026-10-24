@@ -507,3 +507,6 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 @keyframes syncspin { to { transform: rotate(360deg); } }
 .month-toggle-row { display: flex; align-items: center; gap: 8px; margin: -2px 0 10px; }
 .chip.month-toggle.on { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 700; }
+.ghost-sec { margin: 22px 0 4px; font-size: 16px; }
+.ghost-left td { color: #8a8a8a; }
+.ghost-left td:not(:first-child) { text-decoration: line-through; }

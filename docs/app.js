@@ -1728,13 +1728,18 @@
   }
 
   function renderGhosting(d) {
-    const rows = d.rows.slice().reverse();
+    const states = d.states || [];
+    const all = d.rows.map((r, i) => ({ r, st: states[i] || '' })).reverse();
+    const active = all.filter((x) => !x.st), left = all.filter((x) => x.st);
+    const table = (list, withState) => `<div class="ghost-table${withState ? ' ghost-left' : ''}"><table>
+        <thead><tr>${withState ? '<th>מצב</th>' : ''}${d.headers.map((h) => `<th>${esc(h || '—')}</th>`).join('')}</tr></thead>
+        <tbody>${list.map(({ r, st }) => `<tr>${withState ? `<td>${esc(st)}</td>` : ''}${r.map((c, i) => `<td>${/טלפון/.test(d.headers[i]) ? `<a class="ltr" href="${esc(telHref(c))}">${esc(c)}</a>` : esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>`;
     shell('גוסטינג', `
-      <div class="muted small">${rows.length} לידים · החדשים למעלה</div>
-      ${rows.length ? `<div class="ghost-table"><table>
-        <thead><tr>${d.headers.map((h) => `<th>${esc(h || '—')}</th>`).join('')}</tr></thead>
-        <tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td>${/טלפון/.test(d.headers[i]) ? `<a class="ltr" href="${esc(telHref(c))}">${esc(c)}</a>` : esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
-      </table></div>` : '<div class="empty">הלשונית ריקה</div>'}`);
+      <div class="muted small">${active.length} לידים ב-Ghosting · החדשים למעלה</div>
+      ${active.length ? table(active, false) : '<div class="empty">אין כרגע לידים ב-Ghosting</div>'}
+      ${left.length ? `<h3 class="ghost-sec">יצאו מ-Ghosting (${left.length})</h3>
+      <div class="muted small">נשארים בלשונית לתיעוד – לא נמחקים</div>${table(left, true)}` : ''}`);
   }
 
   // ---------- מסך: החודש שלי ----------
