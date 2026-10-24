@@ -936,7 +936,7 @@
     const tLocal = performance.now();
     const entry = (isUndo ? getUndoStack() : getRedoStack()).pop() || null;
     isUndo ? saveUndoStack() : saveRedoStack();
-    let current = null, reinserted = false, removed = null, removedAt = -1, back = null;
+    let current = null, reinserted = false, removed = null, removedAt = -1, back = null, coachBack = null;
     if (entry && entry.kind === 'delete' && state.leads && !findLead(entry.leadId)) {
       // ↶ מחיקה → הליד חוזר
       state.leads.splice(Math.max(0, entry.at || 0), 0, entry.before); persistLeads(); reinserted = true;
@@ -950,6 +950,11 @@
         back = { kind: 'delete', leadId: removed.id, before: removed, at: removedAt };
         if (onLeadCard(removed.id)) location.hash = '#/leads'; else updateLeadsView();
       }
+    } else if (entry && /^coach/.test(entry.kind || '')) {
+      // הוספת מאמן / הורדת פגישה: מיד במסך המאמנים, בשרת ברקע
+      coachBack = coachLocal(entry);
+      back = coachBack.back;
+      redrawStage2();
     } else if (entry && state.leads) {
       current = findLead(entry.leadId);
       if (current) {
@@ -972,6 +977,7 @@
     obAdd({ opId, action: isUndo ? 'undo' : 'redo', desc: opDesc(isUndo ? 'undo' : 'redo', {}, current), at: Date.now(), params: { opId } });
     if (!entry) toast(isUndo ? 'מבטל…' : 'מבצע שוב…');
     const revert = () => {
+      if (coachBack) { coachLocal(coachBack.back); redrawStage2(); }
       if (current && ver === localVer[realId(current.id)]) { setLead(current); showLead(current, true); }
       if (reinserted) { state.leads = state.leads.filter((l) => l.id !== entry.leadId); persistLeads(); updateLeadsView(); }
       if (removed) { state.leads.splice(Math.max(0, removedAt), 0, removed); persistLeads(); updateLeadsView(); }
@@ -979,7 +985,7 @@
       if (entry) (isUndo ? pushUndoLocal : pushRedoLocal)(entry);
     };
     // מדידה: כמה זמן לקח למסך להשתנות (−1 = לא היה מה להחיל במסך מיד – מחכים לשרת)
-    const lt = entry && (current || reinserted || removed) ? Math.round(performance.now() - tLocal) : -1;
+    const lt = entry && (current || reinserted || removed || coachBack) ? Math.round(performance.now() - tLocal) : -1;
     const tQueued = performance.now();
     undoChain = undoChain.then(async () => {
       await Promise.allSettled(Object.values(queueByLead).concat(replayP ? [replayP] : []));
@@ -993,6 +999,7 @@
           else if (d.lead && !pid) { setLead(d.lead); showLead(d.lead); }
           if (d.warning) toast('⚠️ ' + d.warning, true);
           else if (!entry) toast(d.message);
+          if (d.coach) refreshStage2('coaches');
           markDerivedStale();
         } else {
           revert();
@@ -1967,8 +1974,9 @@
     const online = d.online || [];
     const total = online.reduce((a, o) => a + (Number(o.amount) || 0), 0);
     shell('מאמנים ופגישות', `
-      <div class="row" style="gap:8px;margin-bottom:10px">
+      <div class="row" style="gap:8px;margin-bottom:10px;flex-wrap:wrap">
         <button class="btn grow" data-act="onboard">＋ קליטת מאמן</button>
+        <button class="btn secondary" data-act="coach-add">＋ הוספה ידנית</button>
         <a class="btn secondary" href="#/onboard">קליטות אחרונות</a>
       </div>
       <div class="card row" style="align-items:center">
@@ -1986,6 +1994,7 @@
           </div>
           ${m.charged === 'לא' ? '<button class="btn small danger" data-charge="1">לחייב</button><button class="btn small ghost" data-clear>נקה</button>' : '<button class="btn small ghost" data-charge="0">לבטל חיוב</button>'}
         </div>`).join('')}</div>` : (Object.keys(lateUndo).length ? '' : '<div class="card muted">אין ביטולים מאוחרים</div>')}
+      ${gapSectionHtml(d)}
       <div class="row" style="margin:16px 0 6px;align-items:center;flex-wrap:wrap;gap:6px">
         <div class="section-title grow" style="margin:0">מאמנים בליווי (${(d.coaches || []).length})</div>
         <div class="chips" style="margin:0">${COACH_FILTERS.map((x) => `<button class="chip ${coachFilter === x.k ? 'on' : ''}" data-cf="${x.k}">${x.t}<span class="n">${(d.coaches || []).filter(x.f).length}</span></button>`).join('')}</div>
@@ -2010,6 +2019,9 @@
     $app.querySelectorAll('[data-cf]').forEach((b) => { b.onclick = () => { coachFilter = b.dataset.cf; renderCoaches(d); }; });
     $app.querySelector('[data-act="run-meetings"]').onclick = (ev) => runMeetings(ev.currentTarget);
     $app.querySelector('[data-act="onboard"]').onclick = openOnboard;
+    $app.querySelector('[data-act="coach-add"]').onclick = openCoachAdd;
+    $app.querySelectorAll('[data-gap] [data-clear]').forEach((b) => { b.onclick = () => clearGap(b.closest('[data-gap]').dataset.gap, true); });
+    $app.querySelectorAll('[data-ungap]').forEach((b) => { b.onclick = () => clearGap(b.dataset.ungap, false); });
     $app.querySelectorAll('[data-late]').forEach((row) => {
       const m = late.find((x) => x.id === row.dataset.late);
       row.querySelectorAll('[data-charge]').forEach((b) => { b.onclick = () => chargeLate(m, b.dataset.charge === '1'); });
@@ -2130,6 +2142,7 @@
           <input id="rn" type="number" min="1" max="100" inputmode="numeric" value="${esc(renewDefault(d, c))}" placeholder="מספר" style="width:72px">
           <span class="small">פגישות</span>
           <button class="btn small" data-act="renew">חידוש</button>
+          <button class="btn small secondary" data-act="minus-one" ${c.left > 0 ? '' : 'disabled'}>−1 פגישה</button>
         </div>
       </div>
       <div class="section-title">היסטוריית פגישות (${history.length})</div>
@@ -2140,6 +2153,7 @@
           ${m.left != null && m.left !== '' ? `<span class="muted small" title="נשארו אחרי">→ ${esc(m.left)}</span>` : ''}
         </div>`).join('')}</div>` : '<div class="card muted">אין פגישות ב"יומן פגישות"</div>'}`, { back: true });
     $app.querySelector('[data-act="renew"]').onclick = () => renewCoach(c);
+    $app.querySelector('[data-act="minus-one"]').onclick = () => minusOne(c);
   }
 
   const TRACK_DEFAULT = { 'פרימיום': 12, 'בייסיק': 6 };
@@ -2548,6 +2562,103 @@
         'להריץ שוב', () => submitOnboard({ name: x.name, email: x.email, track: x.track }, { rerun: x.rid }));
     });
     if (items.some((x) => x.pending)) pollOnboardList(0);
+  }
+
+  // ---------- לא בוצעה פגישה 3 שבועות ----------
+  const gapUndo = {};
+  const ddmm = (t) => { const d = new Date(t); return p2(d.getDate()) + '/' + p2(d.getMonth() + 1); };
+  function gapKeyOf(r) { return r.name + '|' + (r.last || 'none'); }
+  function gapSectionHtml(d) {
+    const g = d.gap;
+    if (!g) return '<div class="section-title">לא בוצעה פגישה 3 שבועות</div><div class="card muted small">מחושב ברקע מהיומן – יופיע תוך כמה דקות</div>';
+    const rows = g.rows.filter((r) => !gapUndo[gapKeyOf(r)]);
+    return `<div class="section-title">לא בוצעה פגישה 3 שבועות${rows.length ? ` (${rows.length})` : ''}</div>
+      ${Object.keys(gapUndo).map((k) => `<div class="card mrow decided"><div class="grow small">נוקה: <b>${esc(gapUndo[k].name)}</b></div><button class="btn small ghost" data-ungap="${esc(k)}">↶ ביטול</button></div>`).join('')}
+      ${rows.length ? `<div class="mlist">${rows.map((r) => `
+        <div class="card mrow late-open" data-gap="${esc(gapKeyOf(r))}">
+          <div class="grow">
+            <a href="#/coach/${encodeURIComponent(r.name)}"><b>${esc(r.name)}</b></a>
+            <div class="muted small">${r.last ? `פגישה אחרונה ${ddmm(r.last)} · לפני ${r.days} ימים` : 'אין פגישה בשנה האחרונה'} · נשארו ${r.left}</div>
+            ${r.next ? `<div class="small">📅 יש פגישה ב-${ddmm(r.next)}</div>` : ''}
+          </div>
+          <button class="btn small ghost" data-clear>נקה</button>
+        </div>`).join('')}</div>` : (Object.keys(gapUndo).length ? '' : '<div class="card muted">כל המאמנים נפגשו ב-3 השבועות האחרונים 👏</div>')}`;
+  }
+  function clearGap(key, clear) {
+    const d = store.get('coaches');
+    const r = clear ? d && d.gap && d.gap.rows.find((x) => gapKeyOf(x) === key) : gapUndo[key];
+    if (!r) return;
+    if (clear) gapUndo[key] = r; else delete gapUndo[key];
+    redrawStage2();
+    api('gapClear', { name: r.name, last: r.last, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – יחזור אם לא תהיה פגישה 3 שבועות אחרי הפגישה הבאה' : '↶ חזר לרשימה'))
+      .catch((e) => { if (clear) delete gapUndo[key]; else gapUndo[key] = r; redrawStage2(); toast('לא נשמר: ' + e.message, true); });
+  }
+
+  // ---------- הוספת מאמן ידנית / הורדת פגישה ידנית – מיד במסך, ברקע בשרת (תור + ↶/↷) ----------
+  /** מחיל במסך פעולת מאמן ומחזיר את ההפוכה (ל-↶/↷) */
+  function coachLocal(e) {
+    let back = null;
+    patchStore('coaches', (d) => {
+      const i = d.coaches.findIndex((c) => c.name === e.name);
+      if (e.kind === 'coachAdd') { if (i >= 0) d.coaches.splice(i, 1); back = Object.assign({}, e, { kind: 'coachAddRedo' }); }
+      else if (e.kind === 'coachAddRedo') { if (i < 0) d.coaches.push({ name: e.name, email: e.email, pkg: e.n, left: e.n }); back = Object.assign({}, e, { kind: 'coachAdd' }); }
+      else if (e.kind === 'coachMinus') { if (i >= 0) d.coaches[i].left += 1; back = Object.assign({}, e, { kind: 'coachMinusRedo' }); }
+      else if (e.kind === 'coachMinusRedo') { if (i >= 0) d.coaches[i].left = Math.max(0, d.coaches[i].left - 1); back = Object.assign({}, e, { kind: 'coachMinus' }); }
+    });
+    return { back: back };
+  }
+  function coachOp(action, params, desc, localEntry) {
+    const undoEntry = localEntry;
+    coachLocal(Object.assign({}, localEntry, { kind: localEntry.kind === 'coachAdd' ? 'coachAddRedo' : 'coachMinusRedo' }));   // מחיל קדימה
+    redrawStage2();
+    pushUndoLocal(undoEntry); clearRedoLocal();
+    state.undoCount++; state.redoCount = 0; updateUndoBtn();
+    const opId = newOpId();
+    obAdd({ opId, action, desc, at: Date.now(), params: Object.assign({}, params, { opId }) });
+    syncStart();
+    undoChain = undoChain.then(async () => {
+      try {
+        const d = await api(action, Object.assign({}, params, { opId }));
+        obRemove(opId); syncUndoCounts(d);
+        if (d.exists) throw Object.assign(new Error(d.message), { soft: true });
+        markDerivedStale(); refreshStage2('coaches');
+      } catch (e) {
+        obRemove(opId);
+        dropUndoLocal(undoEntry); state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
+        coachLocal(undoEntry); redrawStage2();   // חוזר למצב הקודם
+        if (e.code !== 'AUTH') toast(e.soft ? e.message : 'השמירה נכשלה – נסה שוב · ' + e.message, true);
+      } finally { syncEnd(); }
+    });
+  }
+  function openCoachAdd() {
+    const sh = openSheet(`
+      <div class="row"><b class="grow">הוספת מאמן ידנית</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="muted small">רק לרשימת "תפעול" – בלי Wix, בלי קובץ ובלי ווטסאפ.</div>
+      <div class="field"><label for="ca-name">שם</label><input id="ca-name" autocomplete="off"></div>
+      <div class="field"><label for="ca-email">מייל</label><input id="ca-email" type="email" inputmode="email" class="ltr-input" autocomplete="off"></div>
+      <div class="field"><label for="ca-n">פגישות בחבילה</label><input id="ca-n" type="number" min="1" max="50" inputmode="numeric" style="width:100px"></div>
+      <div class="notice small" id="ca-warn" hidden></div>
+      <button class="btn" data-save>הוספה</button>`);
+    const $ = (q) => sh.el.querySelector(q);
+    setTimeout(() => $('#ca-name').focus(), 50);
+    $('[data-save]').onclick = () => {
+      const name = $('#ca-name').value.trim(), email = $('#ca-email').value.trim().toLowerCase(), n = Number($('#ca-n').value);
+      const warn = $('#ca-warn'); const bad = (m) => { warn.hidden = false; warn.textContent = m; };
+      if (name.length < 2) return bad('חסר שם');
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return bad('מייל לא תקין');
+      if (!(Number.isInteger(n) && n >= 1 && n <= 50)) return bad('מספר פגישות צריך להיות שלם בין 1 ל-50');
+      const ex = coachByEmail(email);
+      if (ex) return bad(`${ex.name} כבר ברשימה (לפי המייל)`);
+      sh.close();
+      coachOp('coachAdd', { name, email, n }, 'הוספת מאמן – ' + name, { kind: 'coachAdd', name, email, n });
+      toast(`נוסף ✓ – ${name} (${n} פגישות)`);
+    };
+  }
+  function minusOne(c) {
+    if (!(c.left > 0)) return;
+    confirmSheet('הורדת פגישה', `<div>להוריד פגישה ל<b>${esc(c.name)}</b>? יישארו <b>${c.left - 1}</b></div><div class="muted small">יירשם גם ב"יומן פגישות" כ"הורדה ידנית". ↶ מבטל.</div>`, 'להוריד', () => {
+      coachOp('coachMinus', { name: c.name, email: c.email }, 'הורדת פגישה – ' + c.name, { kind: 'coachMinus', name: c.name, email: c.email });
+    });
   }
 
   function viewMore() {
