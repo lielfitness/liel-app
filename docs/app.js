@@ -402,7 +402,7 @@
 
   function applyLeadsData(d) {
     state.leads = d.leads;
-    state.meta = { statuses: d.statuses, zoomResults: d.zoomResults, hasUpdatedCol: d.hasUpdatedCol, sources: d.sources, waitingFilter: !!d.waitingFilter };
+    state.meta = { statuses: d.statuses, zoomResults: d.zoomResults, hasUpdatedCol: d.hasUpdatedCol, sources: d.sources, waitingFilter: !!d.waitingFilter, closedFilter: !!d.closedFilter };
   }
   function persistLeads() {
     if (!state.leads || !state.meta) return;
@@ -490,6 +490,7 @@
   function matchesFilter(l, f) {
     if (!f || f === 'active' || f === 'all') return true;
     if (f === 'waiting') return String(l.zoomResult || '').trim() === 'ממתין';
+    if (f === 'closed') return String(l.zoomResult || '').trim() === 'נסגר';   // "נסגר" = תוצאת זום (P), לא סטטוס
     if (!f.startsWith('s:')) return true;
     const st = f.slice(2);
     if (st === 'נסגר') return String(l.zoomResult || '').trim() === 'נסגר';
@@ -571,6 +572,7 @@
     const waitingN = state.leads.filter((l) => matchesFilter(l, 'waiting')).length;
     const chips = FILTERS.map((f) => ({ k: f.k, t: f.t, n: state.leads.filter(f.f).length }))
       .concat(state.meta.waitingFilter ? [{ k: 'waiting', t: 'ממתינים', n: waitingN }] : [])
+      .concat(state.meta.closedFilter ? [{ k: 'closed', t: 'נסגר', n: state.leads.filter((l) => matchesFilter(l, 'closed')).length }] : [])
       .concat(statuses.filter((st) => counts[st]).map((st) => ({ k: 's:' + st, t: st, n: counts[st] })));
     return chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span></button>`).join('');
   }
@@ -605,6 +607,7 @@
   function renderLeadsView() {
     if (state.filter === 'all') state.filter = 'active';
     if (state.filter === 'waiting' && !state.meta.waitingFilter) state.filter = 'active';
+    if (state.filter === 'closed' && !state.meta.closedFilter) state.filter = 'active';
     stickyIds = new Set();
 
     shell('לידים', `

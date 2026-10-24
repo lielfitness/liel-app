@@ -216,6 +216,7 @@ function actionListLeads_(req, ctx) {
     zoomResults: allowedValues_(ZOOM_RESULTS_, ctx.role),
     sources: leadSources_(c.leads),
     waitingFilter: ctx.role === 'admin',   // סינון "ממתינים" – רק לליאל
+    closedFilter: ctx.role === 'admin',    // סינון "נסגר" (תוצאת זום P = נסגר) – רק לליאל
     hasUpdatedCol: c.hasUpdatedCol,
     hasShaiNotesCol: c.hasShaiNotesCol,
   };
