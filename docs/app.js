@@ -131,9 +131,12 @@
   function sk(l) { return l.statusKey != null ? l.statusKey : String(l.status || '').trim(); }
 
   // ---------- API ----------
+  // הגרסה שרצה עכשיו (מתוך app.js?v=N) – נשלחת לשרת, כדי לזהות גרסה ישנה מהזיכרון של הדפדפן
+  const APP_VERSION = (() => { try { return (document.currentScript.src.match(/[?&]v=(\d+)/) || [])[1] || ''; } catch (e) { return ''; } })();
+  const PERF_LOCAL = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
   async function api(action, params) {
     if (!CFG.apiUrl) throw new Error('האתר עוד לא מחובר לשרת (חסר apiUrl ב-config.js)');
-    const body = Object.assign({ action, session: state.session }, params || {});
+    const body = Object.assign({ action, session: state.session, v: APP_VERSION }, params || {});
     if (state.viewAs && action !== 'login') body.viewAs = state.viewAs;
     if (LS.get('lf_debug') === '1') body.debug = true;
     let res;
@@ -150,6 +153,13 @@
     let out;
     try { out = await res.json(); } catch (e) { throw new Error('תשובה לא תקינה מהשרת'); }
     logTiming(action, performance.now() - t0, out.ms, out.data && out.data.phases);
+    if (PERF_LOCAL[action]) {
+      try {
+        const l = JSON.parse(LS.get('lf_perf') || '[]');
+        l.push({ t: Date.now(), a: action, total: Math.round(performance.now() - t0), server: out.ms || 0 });
+        LS.set('lf_perf', JSON.stringify(l.slice(-30)));
+      } catch (e) { /* */ }
+    }
     if (!out.ok) {
       if (out.code === 'AUTH') { logout(true); }
       const err = new Error(out.error || 'שגיאה');
@@ -2411,6 +2421,8 @@
     const x = h.details || {};
     const ago = (t) => (t ? relTime(t) : 'עוד לא נרשם');
     const z = x.zoomLast;
+    const perfLocal = (() => { try { return JSON.parse(LS.get('lf_perf') || '[]').slice().reverse(); } catch (e) { return []; } })();
+    const perfRows = perfLocal.map((p) => `<tr><td class="nowrap">${esc(new Date(p.t).toLocaleTimeString('he-IL'))}</td><td>${esc(p.a)}</td><td>${(p.total / 1000).toFixed(1)}</td><td>${(p.server / 1000).toFixed(1)}</td></tr>`).join('');
     shell('בדיקות מערכת', `
       ${h.issues.length ? h.issues.map((i) => `<div class="health-warn">⚠️ ${esc(i)}</div>`).join('') : '<div class="notice info">✅ הכל תקין</div>'}
       <div class="section-title">טריגרים היום</div>
@@ -2425,6 +2437,8 @@
         <div>הרשאת כתיבה ליומן: ${x.calendarWrite ? '✅' : '❌'}</div>
         ${z ? `<div>אחרון: ${esc(z.name)}${z.seconds != null ? ` – עודכן תוך ${z.seconds < 120 ? z.seconds + ' שניות' : Math.round(z.seconds / 60) + ' דקות'}` : ''} (${esc(z.via || '')}, התאמה לפי ${esc(z.how || '')})</div>` : ''}
       </div>
+      <div class="section-title">זמני שמירה במכשיר הזה (גרסה ${esc(APP_VERSION || '?')})</div>
+      <div class="card small">${perfRows ? `<table class="mtable"><thead><tr><th>מתי</th><th>פעולה</th><th>סה״כ שנ׳</th><th>בשרת שנ׳</th></tr></thead><tbody>${perfRows}</tbody></table>` : 'עוד אין מדידות – שמרו משהו בכרטיס ליד וחזרו לכאן'}</div>
       <div class="section-title">Push</div>
       <div class="card small">${x.push ? 'Firebase מוגדר ✅' : 'Firebase לא מוגדר'}</div>`, { back: true });
   }

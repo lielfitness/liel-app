@@ -29,6 +29,7 @@ const ACTIONS = {
   cancelZoom:   { roles: ['admin', 'leads'], fn: actionCancelZoom_ },
   deleteLead:   { roles: ['admin'],          fn: actionDeleteLead_ },
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
+  perfLog:      { roles: ['admin'], fn: actionPerfLog_ },
   notifications:  { roles: ['admin', 'leads'], fn: actionNotifications_ },
   notifRead:      { roles: ['admin', 'leads'], fn: actionNotifRead_ },
   notifSeen:      { roles: ['admin', 'leads'], fn: actionNotifSeen_ },
@@ -74,6 +75,7 @@ function doPost(e) {
     if (!err.code) console.error(err && err.stack || err);
   }
   out.ms = Date.now() - t0;
+  try { logPerf_(e, out); } catch (err) { /* מדידה בלבד */ }
   return ContentService.createTextOutput(JSON.stringify(out))
     .setMimeType(ContentService.MimeType.JSON);
 }
@@ -147,3 +149,15 @@ function roleOf_(email, cfg) {
   const r = cfg.users[String(email || '').toLowerCase()];
   return (r === 'admin' || r === 'leads') ? r : null;
 }
+
+// ---------- מדידת זמני שמירה (לבדיקת מהירות) ----------
+const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
+function logPerf_(e, out) {
+  const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+  if (!PERF_ACTIONS_[req.action]) return;
+  const log = readJsonProp_('PERF_LOG', []);
+  log.push({ t: Date.now(), a: req.action, ms: out.ms, v: req.v || '', ok: !!out.ok, f: req.fields ? Object.keys(req.fields).join(',') : (req.kind || ''),
+    ph: PHASES_ ? PHASES_.join(' · ') : '' });
+  writeJsonProp_('PERF_LOG', log.slice(-40));
+}
+function actionPerfLog_(req, ctx) { return { log: readJsonProp_('PERF_LOG', []).slice().reverse() }; }
