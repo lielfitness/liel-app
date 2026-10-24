@@ -34,6 +34,7 @@ const SYS_TABS_ = {
   settings: { name: 'הגדרות',  head: ['משתמש', 'הגדרות (JSON)'] },
   lateClear: { name: 'ביטולים שנוקו', head: ['מזהה פגישה', 'נוקה בתאריך', 'מאמן', 'תאריך הפגישה'] },
   anomClear: { name: 'חריגים שנוקו', head: ['פריט', 'נוקה בתאריך'] },
+  gapClear:  { name: 'מאמנים שנוקו (3 שבועות)', head: ['מאמן|פגישה אחרונה', 'נוקה בתאריך', 'מאמן'] },
   sent:      { name: 'התראות שנשלחו', head: ['מזהה', 'נשלח בתאריך'] },
 };
 const NOTIF_KEEP_DAYS_ = 60;
@@ -364,6 +365,7 @@ function watchNewLeads() {
     try { pollOnboard_(); } catch (e) { console.warn('onboard: ' + e); }
     try { flushPerf_(); } catch (e) { console.warn('perf: ' + e); }
     try { runRewardQueue_(); } catch (e) { console.warn('rewards: ' + e); }
+    try { computeCoachGap_(false); } catch (e) { console.warn('gap: ' + e); }
     return watchNewLeadsCore_(t0);
   } finally { trackRun_('watch', t0); }
 }

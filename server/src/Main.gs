@@ -52,6 +52,9 @@ const ACTIONS = {
   finRemoveManual:{ roles: ['admin'], fn: actionFinRemoveManual_ },
   debtClear:      { roles: ['admin'], fn: actionDebtClear_ },
   lateClear:      { roles: ['admin'], fn: actionLateClear_ },
+  gapClear:       { roles: ['admin'], fn: actionGapClear_ },
+  coachAdd:       { roles: ['admin'], fn: actionCoachAdd_ },
+  coachMinus:     { roles: ['admin'], fn: actionCoachMinus_ },
   anomClear:      { roles: ['admin'], fn: actionAnomClear_ },
   online:         { roles: ['admin'], fn: actionOnline_ },
   onboard:        { roles: ['admin'], fn: actionOnboard_ },
@@ -194,7 +197,7 @@ function opDupOut_(dup, ctx) {
 }
 
 /** כמה שינויים ברצף, לפי הסדר (כשיוצאים מהאפליקציה / בפתיחה הבאה). שינוי שכבר הוחל – מדולג. */
-const BATCH_OK_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
+const BATCH_OK_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1 };
 function actionBatch_(req, ctx) {
   const results = [];
   (req.ops || []).slice(0, 40).forEach(function (op) {

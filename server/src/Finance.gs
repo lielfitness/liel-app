@@ -97,6 +97,7 @@ function actionCoaches_(req, ctx) {
     phones: phones,
     online: onlineEnsure_(),
     tracks: onbTracks_(),
+    gap: coachGapView_(),
     lastRun: d.lastRun,
   };
 }
@@ -617,4 +618,69 @@ function forecast_(ss, now) {
   out.items.sort(function (a, b) { return a.day - b.day; });
   if (out.items.length) out.total = Math.round(out.items.reduce(function (s, x) { return s + x.amount; }, 0) * 100) / 100;
   return out;
+}
+
+// ---------- הוספת מאמן ידנית / הורדת פגישה ידנית (ליאל) – דרך סקריפט הפגישות, עם ↶/↷ ----------
+function actionCoachAdd_(req, ctx) {
+  const name = String(req.name || '').trim(), email = String(req.email || '').trim().toLowerCase(), n = Number(req.n);
+  if (name.length < 2) throw apiError_('BAD_REQUEST', 'חסר שם');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw apiError_('BAD_REQUEST', 'מייל לא תקין');
+  if (!(Number.isInteger(n) && n >= 1 && n <= 50)) throw apiError_('BAD_REQUEST', 'מספר פגישות צריך להיות שלם בין 1 ל-50');
+  let out = null, dup = null;
+  finLock_(function () {
+    dup = opSeen_(req); if (dup) return;
+    const r = finCall_('coachAdd', { name: name, email: email, n: n });
+    if (r.exists) { out = { exists: true, message: (r.name || name) + ' כבר ברשימה (לפי המייל)' }; opMark_(req, out); return; }
+    pushUndoEntry_(ctx.email, { kind: 'coachAdd', row: r.row, name: name, email: email, n: n, desc: 'הוספת מאמן', changes: [] });
+    out = { added: true, row: r.row };
+    opMark_(req, out);
+  });
+  CacheService.getScriptCache().remove('coach_v1');
+  if (dup) return opDupOut_(dup, ctx);
+  return Object.assign(out, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
+}
+
+function actionCoachMinus_(req, ctx) {
+  let out = null, dup = null;
+  finLock_(function () {
+    dup = opSeen_(req); if (dup) return;
+    const r = finCall_('minus', { name: req.name, email: String(req.email || '').split(/[,;\s]+/)[0], ref: req.opId || '' });
+    pushUndoEntry_(ctx.email, { kind: 'coachMinus', logId: r.logId, name: r.coach, email: String(req.email || ''), desc: 'הורדת פגישה', changes: [] });
+    out = { left: r.left };
+    opMark_(req, out);
+  });
+  CacheService.getScriptCache().remove('coach_v1');
+  if (dup) return opDupOut_(dup, ctx);
+  return Object.assign(out, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
+}
+
+/** ↶/↷ להוספת מאמן ולהורדת פגישה (נקרא מתוך undoRedo_, בתוך הנעילה) */
+function coachUndoRedo_(e, to, verb, ctx) {
+  const say = function (what) { return verb + ': ' + what + ' – ' + e.name; };
+  try {
+    if (e.kind === 'coachAdd') {
+      finCall_('coachAddUndo', { row: e.row, name: e.name, email: e.email });
+      pushStack_(to, ctx.email, { kind: 'coachAddRedo', name: e.name, email: e.email, n: e.n, desc: 'הוספת מאמן', changes: [] });
+      return { done: true, message: say('הוספת מאמן'), coach: true };
+    }
+    if (e.kind === 'coachAddRedo') {
+      const r = finCall_('coachAdd', { name: e.name, email: e.email, n: e.n });
+      if (r.exists) return { done: false, message: e.name + ' כבר ברשימה – לא הוספתי שוב' };
+      pushStack_(to, ctx.email, { kind: 'coachAdd', row: r.row, name: e.name, email: e.email, n: e.n, desc: 'הוספת מאמן', changes: [] });
+      return { done: true, message: say('הוספת מאמן'), coach: true };
+    }
+    if (e.kind === 'coachMinus') {
+      const r = finCall_('minusUndo', { logId: e.logId });
+      pushStack_(to, ctx.email, { kind: 'coachMinusRedo', name: e.name, email: e.email, desc: 'הורדת פגישה', changes: [] });
+      return { done: true, message: say('הורדת פגישה') + ' (נשארו ' + r.left + ')', coach: true };
+    }
+    if (e.kind === 'coachMinusRedo') {
+      const r = finCall_('minus', { name: e.name, email: String(e.email || '').split(/[,;\s]+/)[0] });
+      pushStack_(to, ctx.email, { kind: 'coachMinus', logId: r.logId, name: e.name, email: e.email, desc: 'הורדת פגישה', changes: [] });
+      return { done: true, message: say('הורדת פגישה') + ' (נשארו ' + r.left + ')', coach: true };
+    }
+  } catch (err) {
+    return { done: false, message: 'אי אפשר ל' + (verb === 'בוטל' ? 'בטל' : 'בצע שוב') + ': ' + (err.message || err) };
+  } finally { CacheService.getScriptCache().remove('coach_v1'); }
+  return null;
 }

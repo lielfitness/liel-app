@@ -131,6 +131,11 @@ function undoRedo_(req, ctx, from, to, verb) {
       if (out.done && verb !== 'בוטל') out.message = out.message.replace(/^בוטל:/, verb + ':');
       return;
     }
+    if (/^coach/.test(e.kind || '')) {   // הוספת מאמן / הורדת פגישה ידנית
+      out = coachUndoRedo_(e, to, verb, ctx) || { done: false, message: 'פעולה לא מוכרת' };
+      CACHE_PATCH_ = 'skip';
+      return;
+    }
     if (e.kind === 'redelete') {        // ↷ מחיקת ליד שבוטלה → מוחק שוב
       try {
         const d = deleteLeadCore_(ctx, e.row, e.leadId, e.name, e.phone, true);
