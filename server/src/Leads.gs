@@ -395,9 +395,10 @@ function invalidateLeads_() {
 function actionUpdateLead_(req, ctx) {
   const fields = req.fields || {};
   let ghost = null, reward = null;
-  let result = null;
+  let result = null, dup = null;
   phase_('start');
   withLock_(function () {
+    dup = opSeen_(req); if (dup) { CACHE_PATCH_ = 'skip'; return; }   // אותו שינוי כבר הגיע (שליחה חוזרת מהמכשיר)
     phase_('lock');
     const loc = locateForWrite_(ctx.cfg, req.row, req.id);
     loc.undo = {};
@@ -461,8 +462,11 @@ function actionUpdateLead_(req, ctx) {
     result = loc;
     result.out = leadAfterWrite_(ctx.cfg, loc);
     if (result.out && !(ghost && ghost.copied)) CACHE_PATCH_ = result.out;   // רק הליד הזה השתנה (S – ברקע)
+    opMark_(req);
   });
+  if (dup) return opDupOut_(dup, ctx);
   const out = { lead: result.out, ghost: ghost, reward: reward, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email), redoCount: 0 };
+  opMark_(req, { lead: out.lead });
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;
@@ -485,9 +489,10 @@ function parseLocalDateTime_(s) {
  */
 function actionMarkAttempt_(req, ctx) {
   const kind = req.kind === 'wa' ? 'wa' : 'call';
-  let result = null;
+  let result = null, dup = null;
   phase_('start');
   withLock_(function () {
+    dup = opSeen_(req); if (dup) { CACHE_PATCH_ = 'skip'; return; }
     phase_('lock');
     const loc = locateForWrite_(ctx.cfg, req.row, req.id);
     loc.undo = {};
@@ -550,8 +555,11 @@ function actionMarkAttempt_(req, ctx) {
     result = loc;
     result.out = leadAfterWrite_(ctx.cfg, loc);
     if (result.out) CACHE_PATCH_ = result.out;
+    opMark_(req);
   });
+  if (dup) return opDupOut_(dup, ctx);
   const out = { lead: result.out, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email), redoCount: 0 };
+  opMark_(req, { lead: out.lead });
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;

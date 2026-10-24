@@ -118,8 +118,11 @@ function actionRedo_(req, ctx) { return undoRedo_(req, ctx, 'R', 'U', 'בוצע 
 function undoRedo_(req, ctx, from, to, verb) {
   let out = null, loc = null;
   phase_('start');
+  let dup = null;
   withLock_(function () {
+    dup = opSeen_(req); if (dup) { CACHE_PATCH_ = 'skip'; return; }   // ↶/↷ שכבר בוצע – לא מבצעים שוב
     const e = popStack_(from, ctx.email);
+    opMark_(req);
     if (!e) { out = { done: false, message: verb === 'בוטל' ? 'אין מה לבטל' : 'אין מה לבצע שוב' }; return; }
 
     if (e.kind === 'delete') {          // ↶ מחיקת ליד → מחזיר את הליד
@@ -215,8 +218,10 @@ function undoRedo_(req, ctx, from, to, verb) {
     if (extra) message += ' · ' + extra;
     out = { done: true, message: message, warning: warning };
   });
+  if (dup) return opDupOut_(dup, ctx);
   if (out.done && loc) out.lead = loc.out || leadAfterWrite_(ctx.cfg, loc);
   if (out.done && out.restoredRow) out.lead = rereadLead_(ctx.cfg, out.leadId, out.restoredRow);
+  opMark_(req, { done: out.done, message: out.message, lead: out.lead || null });   // התוצאה האמיתית – לשליחה חוזרת
   out.undoCount = undoCount_(ctx.email);   // מהזיכרון של הבקשה – בלי קריאה נוספת
   out.redoCount = redoCount_(ctx.email);
   phase_('build');

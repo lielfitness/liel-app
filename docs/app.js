@@ -138,7 +138,7 @@
     fetch('index.html?_=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((html) => {
       const m = html.match(/app\.js\?v=(\d+)/);
       if (!m || Number(m[1]) <= Number(APP_VERSION)) return;
-      const busy = Object.keys(pendingByLead).length || isEditing() || document.querySelector('.sheet-backdrop, .booking-overlay');
+      const busy = Object.keys(pendingByLead).length || syncN > 0 || obAll().length || isEditing() || document.querySelector('.sheet-backdrop, .booking-overlay');
       if (!busy) { location.reload(); return; }
       if (newVersionShown) return;
       newVersionShown = true;
@@ -745,6 +745,61 @@
     persistLeads();
   }
 
+  // ---------- תור שמירות שנשמר במכשיר (עד שהשרת מאשר) ----------
+  // כל שינוי (שמירה / ↶ / ↷) נרשם כאן עם מזהה ייחודי לפני שהוא נשלח, ונמחק רק כשהשרת ענה.
+  // אם האפליקציה נסגרה באמצע: ביציאה – נשלח מיד (keepalive), ובפתיחה הבאה – נשלח שוב לפי הסדר.
+  // השרת מזהה שינוי שכבר הגיע (לפי המזהה) ולא מחיל אותו פעמיים.
+  function newOpId() { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9); }
+  function obAll() { return store.get('outbox') || []; }
+  function obAdd(item) { const l = obAll(); l.push(item); store.set('outbox', l.slice(-60)); }
+  function obRemove(opId) { const l = obAll(); const n = l.filter((x) => x.opId !== opId); if (n.length !== l.length) store.set('outbox', n); }
+  const OP_LABELS = { status: 'סטטוס', summary: 'עיקרי שיחה', shaiNotes: 'הערות של שי', notes: 'פירוט תוצאת זום', zoomDate: 'תאריך זום', zoomResult: 'תוצאת זום', callResult: 'תוצאת שיחה' };
+  function opDesc(action, params, lead) {
+    const who = lead && lead.name ? ' – ' + lead.name : '';
+    if (action === 'updateLead') return Object.keys(params.fields || {}).map((k) => OP_LABELS[k] || k).join(', ') + who;
+    if (action === 'markAttempt') return (params.kind === 'wa' ? 'WA ' : 'ניסיון שיחה ') + (params.attempt || '') + (params.clear ? ' (ביטול)' : '') + who;
+    if (action === 'undo') return '↶ ביטול פעולה' + who;
+    if (action === 'redo') return '↷ ביצוע שוב' + who;
+    return action;
+  }
+  let flushingOnExit = false;
+  /** יוצאים מהאפליקציה: שולחים מיד את כל מה שבתור, בבקשה אחת לפי הסדר (בלי לחכות לתשובה) */
+  function flushOutboxOnExit() {
+    const items = obAll();
+    if (!items.length || !state.session || !CFG.apiUrl || flushingOnExit) return;
+    flushingOnExit = true; setTimeout(() => { flushingOnExit = false; }, 3000);
+    const body = { action: 'batch', session: state.session, v: APP_VERSION, ops: items.map((x) => ({ action: x.action, params: x.params })) };
+    if (state.viewAs) body.viewAs = state.viewAs;
+    try { fetch(CFG.apiUrl, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) }).catch(() => {}); } catch (e) { /* */ }
+  }
+  /** בפתיחה: שולח את מה שנשאר בתור מהפעם הקודמת, לפי הסדר; מה שהשרת דחה – מוצג בהודעה */
+  let replayP = null;
+  function replayOutbox() {
+    const items = obAll();
+    if (!items.length || replayP) return replayP || Promise.resolve();
+    syncStart();
+    replayP = api('batch', { ops: items.map((x) => ({ action: x.action, params: x.params })) }).then((d) => {
+      const failed = [];
+      (d.results || []).forEach((r, i) => {
+        const it = items[i];
+        obRemove(it.opId);
+        if (!r.ok || (r.data && r.data.done === false)) failed.push({ desc: it.desc, why: r.ok ? (r.data && r.data.message) : r.error });
+      });
+      if (failed.length) {
+        openSheet(`<div class="row"><b class="grow">⚠️ שינויים שלא נשמרו</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+          <div class="small">האפליקציה נסגרה לפני שהשינויים האלה אושרו. שלחתי אותם שוב – והגיליון לא קיבל אותם:</div>
+          <ul class="small">${failed.map((f) => `<li><b>${esc(f.desc)}</b> – ${esc(f.why || 'נדחה')}</li>`).join('')}</ul>
+          <div class="muted small">בדקו את הלידים האלה ושמרו שוב אם צריך.</div>
+          <button class="btn" data-x>הבנתי</button>`);
+      } else toast('✓ נשמרו ' + items.length + ' שינויים שחיכו מהפעם הקודמת');
+      leadsFetchedAt = 0; softRefresh(); refetchUndoCounts();
+    }).catch(() => { /* אין חיבור – נשאר בתור, ננסה שוב בחזרה לאפליקציה */ })
+      .finally(() => { syncEnd(); replayP = null; });
+    return replayP;
+  }
+  window.addEventListener('pagehide', flushOutboxOnExit);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushOutboxOnExit(); });
+
   /**
    * שמירה אופטימית: מעדכן מיד, שולח ברקע (לפי הסדר לכל ליד), ובכישלון – מחזיר למצב הקודם ומודיע.
    * hooks.onChange(lead) – לצייר מחדש; hooks.okMsg – הודעת הצלחה.
@@ -752,6 +807,10 @@
   function optimistic(lead, action, params, hooks) {
     hooks = hooks || {};
     lead = findLead(lead.id) || lead;   // תמיד על הגרסה העדכנית שבזיכרון
+    if (action === 'markAttempt' && params.kind === 'wa' && !params.attempt && !params.clear) {
+      const n = [1, 2, 3].find((i) => !String(lead['wa' + i] || '').trim());
+      if (n) params = Object.assign({}, params, { attempt: n });   // מספר מפורש – שליחה חוזרת לא תסמן WA נוסף
+    }
     const before = lead;
     const tLocal = performance.now();
     const local = applyLocal(lead, action, params);
@@ -762,6 +821,8 @@
     const id = lead.id;
     const ver = bumpLocal(id);
     syncStart();
+    const opId = newOpId();
+    if (!String(id).startsWith('tmp-')) obAdd({ opId, action, desc: opDesc(action, params, lead), at: Date.now(), params: Object.assign({}, params, { row: lead.row, id: lead.id, opId }) });
     const seq = (seqByLead[id] = (seqByLead[id] || 0) + 1);
     pendingByLead[id] = (pendingByLead[id] || 0) + 1;
     const undoEntry = { leadId: id, before: before };
@@ -770,11 +831,12 @@
     const run = () => {
       const cur = findLead(id) || lead;
       if (String(cur.id).startsWith('tmp-')) return Promise.reject(new Error('הליד עוד לא נשמר בגיליון'));
-      return api(action, Object.assign({}, params, { row: cur.row, id: cur.id, _lt: lt, _qw: Math.round(performance.now() - tQueued) }));
+      return api(action, Object.assign({}, params, { row: cur.row, id: cur.id, opId, _lt: lt, _qw: Math.round(performance.now() - tQueued) }));
     };
     const p = (queueByLead[id] || Promise.resolve()).catch(() => {}).then(run);
     queueByLead[id] = p;
     p.then((d) => {
+      obRemove(opId);
       markDerivedStale();
       if (d.undoCount != null) { state.undoCount = d.undoCount; state.redoCount = d.redoCount || 0; updateUndoBtn(); }
       if (seq === seqByLead[realId(id)] && ver === localVer[realId(id)] && d.lead) { setLead(d.lead); hooks.onChange && hooks.onChange(d.lead, 'server'); }
@@ -782,6 +844,7 @@
       if (d.ghost) toast(d.ghost.copied ? 'הועתק ללשונית הגוסטינג ✓' : d.ghost.reason, !d.ghost.copied && !/כבר קיים/.test(d.ghost.reason));
       if (d.reward && d.reward.warning) toast('⚠️ ' + d.reward.warning, true);
     }).catch((e) => {
+      obRemove(opId);
       if (e.code === 'AUTH') return;
       state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
       dropUndoLocal(undoEntry);
@@ -889,6 +952,8 @@
     if (isUndo) { state.undoCount = Math.max(0, state.undoCount - 1); state.redoCount++; }
     else { state.redoCount = Math.max(0, state.redoCount - 1); state.undoCount++; }
     updateUndoBtn();
+    const opId = newOpId();
+    obAdd({ opId, action: isUndo ? 'undo' : 'redo', desc: opDesc(isUndo ? 'undo' : 'redo', {}, current), at: Date.now(), params: { opId } });
     if (!entry) toast(isUndo ? 'מבטל…' : 'מבצע שוב…');
     const revert = () => {
       if (current && ver === localVer[realId(current.id)]) { setLead(current); showLead(current, true); }
@@ -901,9 +966,10 @@
     const lt = entry && (current || reinserted || removed) ? Math.round(performance.now() - tLocal) : -1;
     const tQueued = performance.now();
     undoChain = undoChain.then(async () => {
-      await Promise.allSettled(Object.values(queueByLead));
+      await Promise.allSettled(Object.values(queueByLead).concat(replayP ? [replayP] : []));
       try {
-        const d = await api(isUndo ? 'undo' : 'redo', { _lt: lt, _qw: Math.round(performance.now() - tQueued) });
+        const d = await api(isUndo ? 'undo' : 'redo', { opId, _lt: lt, _qw: Math.round(performance.now() - tQueued) });
+        obRemove(opId);
         syncUndoCounts(d);
         if (d.done) {
           // תשובה מהשרת מוחלת רק אם לא נעשה מאז שינוי מקומי חדש יותר באותו ליד
@@ -918,6 +984,7 @@
           softRefresh();
         }
       } catch (e) {
+        obRemove(opId);
         revert();
         if (e.code !== 'AUTH') toast('השמירה נכשלה – נסה שוב · ' + e.message, true);
         refetchUndoCounts();
@@ -2790,6 +2857,7 @@
     const openedFrom = new URLSearchParams(location.search).get('n');
     if (openedFrom) history.replaceState(null, '', location.pathname + location.hash);
     route();
+    setTimeout(replayOutbox, 300);   // שינויים שלא אושרו מהפעם הקודמת
     refreshAlerts();
     const nc = store.get('notifs'); if (nc) applyNotifs(nc);
     refreshNotifs().then(() => { if (openedFrom && openedFrom !== 'test') markNotifsRead([openedFrom]); });
@@ -2801,6 +2869,7 @@
       if (document.visibilityState === 'visible' && state.session) {
         if (pendingBooking && Date.now() - pendingBooking.at < 30 * 60000) { watchBooking(pendingBooking.lead); pendingBooking = null; }
         refreshAlerts(); refreshNotifs(); softRefresh();
+        if (obAll().length && !syncN) replayOutbox();
         setTimeout(() => prefetchAll(false), 1500);
       }
     });

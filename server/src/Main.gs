@@ -29,6 +29,7 @@ const ACTIONS = {
   cancelZoom:   { roles: ['admin', 'leads'], fn: actionCancelZoom_ },
   deleteLead:   { roles: ['admin'],          fn: actionDeleteLead_ },
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
+  batch:        { roles: ['admin', 'leads'], fn: actionBatch_ },
   perfLog:      { roles: ['admin'], fn: actionPerfLog_ },
   notifications:  { roles: ['admin', 'leads'], fn: actionNotifications_ },
   notifRead:      { roles: ['admin', 'leads'], fn: actionNotifRead_ },
@@ -176,3 +177,31 @@ function flushPerf_() {
   }));
 }
 function actionPerfLog_(req, ctx) { return { log: readJsonProp_('PERF_LOG', []).slice().reverse() }; }
+
+// ---------- שמירות מהמכשיר: כל שינוי עם מזהה ייחודי (opId), כדי ששליחה חוזרת לא תוחל פעמיים ----------
+function opSeen_(req) {
+  if (!req || !req.opId) return null;
+  const v = CacheService.getScriptCache().get('op:' + req.opId);
+  if (!v) return null;
+  try { return JSON.parse(v); } catch (e) { return { r: null }; }
+}
+function opMark_(req, result) {
+  if (!req || !req.opId) return;
+  try { CacheService.getScriptCache().put('op:' + req.opId, JSON.stringify({ r: result || null }), 21600); } catch (e) { /* */ }
+}
+function opDupOut_(dup, ctx) {
+  return Object.assign({ duplicate: true, done: true }, (dup && dup.r) || {}, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
+}
+
+/** כמה שינויים ברצף, לפי הסדר (כשיוצאים מהאפליקציה / בפתיחה הבאה). שינוי שכבר הוחל – מדולג. */
+const BATCH_OK_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
+function actionBatch_(req, ctx) {
+  const results = [];
+  (req.ops || []).slice(0, 40).forEach(function (op) {
+    const p = Object.assign({}, op.params || {}, { action: op.action });
+    if (!BATCH_OK_[op.action]) { results.push({ ok: false, opId: p.opId, error: 'פעולה לא מותרת' }); return; }
+    try { results.push({ ok: true, opId: p.opId, data: ACTIONS[op.action].fn(p, ctx) }); }
+    catch (e) { results.push({ ok: false, opId: p.opId, code: e.code || 'ERROR', error: String(e.message || e) }); }
+  });
+  return { results: results };
+}
