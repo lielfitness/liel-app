@@ -51,6 +51,9 @@ const ACTIONS = {
   lateClear:      { roles: ['admin'], fn: actionLateClear_ },
   anomClear:      { roles: ['admin'], fn: actionAnomClear_ },
   online:         { roles: ['admin'], fn: actionOnline_ },
+  onboard:        { roles: ['admin'], fn: actionOnboard_ },
+  onboardList:    { roles: ['admin'], fn: actionOnboardList_ },
+  onboardRerun:   { roles: ['admin'], fn: actionOnboardRerun_ },
 };
 
 function doGet() {

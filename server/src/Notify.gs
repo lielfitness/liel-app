@@ -25,6 +25,7 @@ const NOTIF_TYPES_ = {
   debt_new:       { label: 'חיוב נכשל / הוראת קבע',   icon: '💳', roles: ['admin'], quiet: true },
   coach_ending:   { label: 'ליווי מסתיים',            icon: '🏁', roles: ['admin'], quiet: true },
   fin_summary:    { label: 'הסיכום הפיננסי השבועי',   icon: '📊', roles: ['admin'], quiet: true },
+  onboard:        { label: 'קליטת מאמן',              icon: '✅', roles: ['admin'] },
   system:         { label: 'מערכת',    icon: 'ℹ️', roles: ['admin'] },   // לסקריפטים האחרים (בהמשך)
 };
 const SYS_TABS_ = {
@@ -346,6 +347,7 @@ function watchNewLeads() {
   try {
     try { flushQuiet_(); } catch (e) { console.warn('quiet: ' + e); }
     try { dailyCoachCheck_(); } catch (e) { console.warn('coaches: ' + e); }
+    try { pollOnboard_(); } catch (e) { console.warn('onboard: ' + e); }
     return watchNewLeadsCore_(t0);
   } finally { trackRun_('watch', t0); }
 }

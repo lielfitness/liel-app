@@ -466,3 +466,13 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .mtable th { text-align: start; font-size: 12px; color: var(--muted, #667); padding: 4px; }
 .mtable tr.total td { border-top: 2px solid var(--line); }
 .debts .debt-note { font-weight: 400; }
+
+/* קליטת מאמן */
+.onb.failed { border-inline-start: 4px solid #b10202; }
+.onb.done { border-inline-start: 4px solid #1e8e3e; }
+.onb.pending { opacity: .85; }
+.onb-steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.onb-steps .step { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: #eef1f5; }
+.onb-steps .step.ok { background: #d4edda; color: #155724; }
+.onb-steps .step.bad { background: #fdecea; color: #b10202; }
+.small.ok { color: #1e8e3e; } .small.bad { color: #b10202; }

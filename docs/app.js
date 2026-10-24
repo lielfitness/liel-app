@@ -1758,6 +1758,10 @@
     const online = d.online || [];
     const total = online.reduce((a, o) => a + (Number(o.amount) || 0), 0);
     shell('מאמנים ופגישות', `
+      <div class="row" style="gap:8px;margin-bottom:10px">
+        <button class="btn grow" data-act="onboard">＋ קליטת מאמן</button>
+        <a class="btn secondary" href="#/onboard">קליטות אחרונות</a>
+      </div>
       <div class="card row" style="align-items:center">
         <div class="grow small">הורדת פגישות אחרונה: <b>${esc(d.lastRun || '—')}</b></div>
         <button class="btn small secondary" data-act="run-meetings">▶️ הרץ עכשיו</button>
@@ -1796,6 +1800,7 @@
       </div>`);
     $app.querySelectorAll('[data-cf]').forEach((b) => { b.onclick = () => { coachFilter = b.dataset.cf; renderCoaches(d); }; });
     $app.querySelector('[data-act="run-meetings"]').onclick = (ev) => runMeetings(ev.currentTarget);
+    $app.querySelector('[data-act="onboard"]').onclick = openOnboard;
     $app.querySelectorAll('[data-late]').forEach((row) => {
       const m = late.find((x) => x.id === row.dataset.late);
       row.querySelectorAll('[data-charge]').forEach((b) => { b.onclick = () => chargeLate(m, b.dataset.charge === '1'); });
@@ -1913,7 +1918,7 @@
         </div>
         <div class="row renew-row">
           <label for="rn" class="small">חידוש חבילה ל-</label>
-          <input id="rn" type="number" min="1" max="100" inputmode="numeric" value="${esc(c.pkg || 12)}" style="width:72px">
+          <input id="rn" type="number" min="1" max="100" inputmode="numeric" value="${esc(renewDefault(d, c))}" placeholder="מספר" style="width:72px">
           <span class="small">פגישות</span>
           <button class="btn small" data-act="renew">חידוש</button>
         </div>
@@ -1928,6 +1933,13 @@
     $app.querySelector('[data-act="renew"]').onclick = () => renewCoach(c);
   }
 
+  const TRACK_DEFAULT = { 'פרימיום': 12, 'בייסיק': 6 };
+  /** ברירת מחדל לחידוש: לפי המסלול של המאמן (מטופס הקליטה), ואם לא ידוע – בלי ברירת מחדל */
+  function renewDefault(d, c) {
+    const tracks = d.tracks || {};
+    const t = String(c.email || '').toLowerCase().split(/[,;\s]+/).map((e) => tracks[e]).find(Boolean);
+    return t ? TRACK_DEFAULT[t] : '';
+  }
   function renewCoach(c) {
     const n = Math.round(Number(document.getElementById('rn').value));
     if (!(n > 0 && n <= 100)) return toast('מספר פגישות לא תקין', true);
@@ -2183,6 +2195,115 @@
     redrawStage2();
     api('finRemoveManual', { id, desc: a.desc, amount: a.amount }).then(() => { toast('↶ נמחק מ"תנועות"'); markDerivedStale(); })
       .catch((e) => { store.set('finAdded', snapAdded); store.set('finance', JSON.parse(snapFin)); redrawStage2(); toast('לא נמחק: ' + e.message, true); });
+  }
+
+  // ---------- שלב 3: קליטת מאמן ----------
+  function openOnboard() {
+    const sh = openSheet(`
+      <div class="row"><b class="grow">קליטת מאמן חדש</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="field"><label>מסלול</label>
+        <div class="seg"><button type="button" class="chip on" data-track="פרימיום">פרימיום</button><button type="button" class="chip" data-track="בייסיק">בייסיק</button></div></div>
+      <div class="field"><label for="ob-name">שם מלא</label><input id="ob-name" autocomplete="off"></div>
+      <div class="field"><label for="ob-email">מייל</label><input id="ob-email" type="email" inputmode="email" class="ltr-input" autocomplete="off"></div>
+      <div class="field"><label for="ob-phone">טלפון</label><input id="ob-phone" type="tel" inputmode="tel" class="ltr-input" autocomplete="off"></div>
+      <div class="field"><label for="ob-n">פגישות בחבילה</label><input id="ob-n" type="number" min="1" max="50" step="1" inputmode="numeric" value="12" style="width:90px"></div>
+      <div class="notice small" id="ob-warn" hidden></div>
+      <button class="btn" data-save>המשך</button>`);
+    const $ = (q) => sh.el.querySelector(q);
+    let track = 'פרימיום';
+    sh.el.querySelectorAll('[data-track]').forEach((b) => {
+      b.onclick = () => {
+        track = b.dataset.track;
+        sh.el.querySelectorAll('[data-track]').forEach((x) => x.classList.toggle('on', x === b));
+        $('#ob-n').value = TRACK_DEFAULT[track];   // שינוי מסלול מחזיר את ברירת המחדל שלו
+      };
+    });
+    setTimeout(() => $('#ob-name').focus(), 50);
+    $('[data-save]').onclick = () => {
+      const f = { track, name: $('#ob-name').value.trim(), email: $('#ob-email').value.trim().toLowerCase(), phone: $('#ob-phone').value.trim(), n: Number($('#ob-n').value) };
+      const warn = $('#ob-warn');
+      const bad = (m) => { warn.hidden = false; warn.textContent = m; };
+      const d = f.phone.replace(/\D/g, ''); const local = d.indexOf('972') === 0 ? '0' + d.slice(3) : d;
+      if (f.name.length < 2) return bad('חסר שם מלא');
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) return bad('מייל לא תקין');
+      if (!/^05\d{8}$/.test(local) && !/^0[2-9]\d{7}$/.test(local)) return bad('טלפון ישראלי לא תקין');
+      if (!(Number.isInteger(f.n) && f.n >= 1 && f.n <= 50)) return bad('מספר פגישות צריך להיות שלם בין 1 ל-50');
+      const cs = store.get('coaches');
+      if (cs && cs.coaches.some((c) => String(c.email).toLowerCase().split(/[,;\s]+/).includes(f.email))) return bad(`${f.name} כבר ברשימת המאמנים (לפי המייל)`);
+      sh.close();
+      confirmSheet('אישור קליטה', `<div>לקלוט את <b>${esc(f.name)}</b> – ${esc(f.track)} – <b>${f.n}</b> פגישות?</div>
+        <div class="muted small ltr-text">${esc(f.email)} · ${esc(f.phone)}</div>
+        <div class="muted small">ייפתח משתמש באתר, ייפתחו התכניות, ייווצר ויישותף קובץ הלימוד, והמאמן יתווסף לתפעול. ההודעה בווטסאפ – רק כשתלחץ.</div>`,
+      'לקלוט', () => submitOnboard(f));
+    };
+  }
+
+  // קליטות שנשלחו מהמסך הזה ועוד לא מופיעות ברשימה מהשרת – נשארות גלויות ("רץ…")
+  let onbLocal = [];
+  function submitOnboard(f, extra) {
+    const tmp = { rid: 'tmp-' + Date.now(), name: f.name, email: f.email, track: f.track, test: !!(extra && extra.test), pending: true, at: 'עכשיו' };
+    onbLocal.unshift(tmp);
+    if (location.hash === '#/onboard') redrawOnboard(); else location.hash = '#/onboard';
+    api(extra && extra.rerun ? 'onboardRerun' : 'onboard', extra && extra.rerun ? { rid: extra.rerun } : (extra && extra.test ? { test: true } : f)).then((r) => {
+      if (r.exists) { onbLocal = onbLocal.filter((x) => x !== tmp); redrawOnboard(); return toast(r.message, true); }
+      tmp.rid = r.rid;
+      redrawOnboard();
+      toast('נשלח ✓ – הקליטה רצה (כדקה). תקבל התראה כשהיא מסתיימת');
+      pollOnboardList(0);
+    }).catch((e) => {
+      onbLocal = onbLocal.filter((x) => x !== tmp); redrawOnboard();
+      toast('הקליטה לא נשלחה: ' + e.message, true);
+    });
+  }
+  function redrawOnboard() { if (location.hash === '#/onboard') renderOnboard(store.get('onboard') || { items: [] }); }
+  // בזמן שקליטה רצה – מרעננים את הרשימה כל 15 שניות (עד 5 דקות)
+  function pollOnboardList(i) {
+    if (i > 20) return;
+    setTimeout(() => {
+      api('onboardList').then((d) => {
+        store.set('onboard', d); redrawOnboard();
+        if ((d.items || []).some((x) => x.pending)) pollOnboardList(i + 1);
+        else { refreshNotifs(); refreshStage2('coaches'); }
+      }).catch(() => pollOnboardList(i + 1));
+    }, 15000);
+  }
+
+  function viewOnboard() { return swr('onboard', 'onboardList', {}, 'קליטות אחרונות', renderOnboard); }
+
+  function renderOnboard(d) {
+    const server = d.items || [];
+    onbLocal = onbLocal.filter((x) => !server.some((y) => y.rid === x.rid));   // השרת כבר מכיר אותה
+    const items = onbLocal.concat(server);
+    const stepCls = (v) => (/נכשל/.test(v) ? 'bad' : /^OK|^נוסף|כבר קיים|כבר היה/.test(v) ? 'ok' : '');
+    shell('קליטות אחרונות', `
+      <div class="row" style="gap:8px;margin-bottom:10px">
+        <button class="btn grow" data-act="onboard">＋ קליטת מאמן</button>
+        <button class="btn secondary" data-act="onboard-test" title="בלי Wix ובלי קבצים">🧪 בדיקה</button>
+      </div>
+      ${items.length ? `<div class="mlist">${items.map((x) => `
+        <div class="card onb ${x.pending ? 'pending' : x.failed && x.failed.length ? 'failed' : 'done'}">
+          <div class="row" style="align-items:center">
+            <div class="grow"><b>${esc(x.name)}</b>${x.test ? ' <span class="pill warn">בדיקה</span>' : ''}<div class="muted small">${esc(x.track || '')} · ${esc(x.at || '')}</div></div>
+            ${x.pending ? '<span class="small">⏳ רץ…</span>' : x.failed && x.failed.length ? '<span class="small bad">⚠️ נכשל</span>' : '<span class="small ok">✅ הושלם</span>'}
+          </div>
+          ${x.steps ? `<div class="onb-steps">${x.steps.map((s) => `<span class="step ${stepCls(s.value)}" title="${esc(s.value)}">${esc(s.label)}: ${esc(s.value || '—')}</span>`).join('')}</div>` : ''}
+          ${x.errors ? `<div class="notice small">${esc(x.errors)}</div>` : ''}
+          ${!x.pending && !x.test ? `<div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px">
+            ${x.wa ? `<a class="btn green small" href="${esc(x.wa)}" target="_blank" rel="noopener">📲 שליחת הודעה בווטסאפ</a>` : ''}
+            ${x.fileUrl ? `<a class="btn secondary small" href="${esc(x.fileUrl)}" target="_blank" rel="noopener">📄 הקובץ</a>` : ''}
+            ${x.failed && x.failed.length ? `<button class="btn small" data-rerun="${esc(x.rid)}">🔁 הרץ שוב</button>` : ''}
+          </div>` : ''}
+        </div>`).join('')}</div>` : '<div class="card muted">עוד אין קליטות מהאפליקציה</div>'}`, { back: true });
+    $app.querySelector('[data-act="onboard"]').onclick = openOnboard;
+    $app.querySelector('[data-act="onboard-test"]').onclick = () => confirmSheet('בדיקת קליטה',
+      '<div class="small">שולח לטופס קליטה של "בדיקת אפליקציה". הסקריפט מזהה שזו בדיקה: <b>לא נוגע ב-Wix, לא יוצר קבצים, לא כותב לתפעול ולא שולח טלגרם</b> – רק מחזיר סטטוס. בסוף תגיע התראה, והתגובה נמחקת מהטופס (בגיליון התשובות תישאר שורת בדיקה).</div>',
+      'לשלוח בדיקה', () => submitOnboard({ name: 'בדיקת אפליקציה', track: 'בייסיק', email: 'app-test@example.com' }, { test: true }));
+    $app.querySelectorAll('[data-rerun]').forEach((b) => {
+      const x = items.find((y) => y.rid === b.dataset.rerun);
+      b.onclick = () => confirmSheet('הרצה חוזרת', `<div>להריץ שוב את הקליטה של <b>${esc(x.name)}</b>?</div><div class="muted small">מה שכבר נוצר (חבר באתר, תכניות, קובץ, שורה בתפעול) לא ייווצר שוב.</div>`,
+        'להריץ שוב', () => submitOnboard({ name: x.name, email: x.email, track: x.track }, { rerun: x.rid }));
+    });
+    if (items.some((x) => x.pending)) pollOnboardList(0);
   }
 
   function viewMore() {
@@ -2457,6 +2578,7 @@
       }
       if (page === 'more') return viewMore();
       if (page === 'settings') return viewSettings();
+      if (page === 'onboard') return viewOnboard();
     }
     location.replace(isAdmin() ? '#/home' : '#/leads');
   }
