@@ -275,6 +275,7 @@ function actionFinance_(req, ctx) {
       debts: parts['🔴'] ? { title: parts['🔴'].title, items: debts } : null,
       anomalies: parts['⚠️'] ? { title: parts['⚠️'].title, items: anomalyItems_(parts['⚠️'].body) } : null,
       invoices: parts['🧾'] || null },
+    reminders: (function () { try { return remList_(); } catch (e) { console.warn('reminders: ' + e); return []; } })(),
   };
 }
 

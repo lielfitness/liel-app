@@ -26,6 +26,7 @@ const NOTIF_TYPES_ = {
   coach_ending:   { label: 'ליווי מסתיים',            icon: '🏁', roles: ['admin'], quiet: true },
   fin_summary:    { label: 'הסיכום הפיננסי השבועי',   icon: '📊', roles: ['admin'], quiet: true },
   meetings_run:   { label: 'הורדת פגישות (דוח)',      icon: '📋', roles: ['admin'], quiet: true },
+  reminder:       { label: 'תזכורות',                 icon: '⏰', roles: ['admin'] },
   onboard:        { label: 'קליטת מאמן',              icon: '✅', roles: ['admin'] },
   system:         { label: 'מערכת',    icon: 'ℹ️', roles: ['admin'] },   // לסקריפטים האחרים (בהמשך)
 };
@@ -376,6 +377,7 @@ function watchNewLeads() {
     try { runRewardQueue_(); } catch (e) { console.warn('rewards: ' + e); }
     try { computeCoachGap_(false); } catch (e) { console.warn('gap: ' + e); }
     try { ghostReconcile_(false); } catch (e) { console.warn('ghost sync: ' + e); }
+    try { remWatch_(); } catch (e) { console.warn('reminders: ' + e); }
     return watchNewLeadsCore_(t0);
   } finally { trackRun_('watch', t0); }
 }

@@ -131,6 +131,11 @@ function undoRedo_(req, ctx, from, to, verb) {
       if (out.done && verb !== 'בוטל') out.message = out.message.replace(/^בוטל:/, verb + ':');
       return;
     }
+    if (e.kind === 'rem') {              // תזכורות (פיננסים)
+      try { out = remUndoRedo_(e, to, verb, ctx); } catch (err) { out = { done: false, message: 'אי אפשר: ' + (err.message || err) }; }
+      CACHE_PATCH_ = 'skip';
+      return;
+    }
     if (/^coach/.test(e.kind || '')) {   // הוספת מאמן / הורדת פגישה ידנית
       out = coachUndoRedo_(e, to, verb, ctx) || { done: false, message: 'פעולה לא מוכרת' };
       CACHE_PATCH_ = 'skip';

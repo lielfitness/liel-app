@@ -523,3 +523,29 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .mrun-report summary::-webkit-details-marker { display: none; }
 .mrun-text { white-space: pre-wrap; font-size: 14px; line-height: 1.55; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .last-report { margin: 4px 2px 0; }
+/* תזכורות (פיננסים) – כחול המותג בשקיפות + פס צד דק; קצת צרות מהחריגים */
+.rem-list { display: flex; flex-direction: column; gap: 6px; }
+.rem-swipe { position: relative; overflow: hidden; border-radius: 10px; }
+.rem-del-bg {
+  position: absolute; inset-block: 0; left: 0; width: 84px; border: 0; border-radius: 10px 0 0 10px;
+  background: var(--danger); color: #fff; font: inherit; font-weight: 700; cursor: pointer;
+}
+.rem-row {
+  position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px;
+  background: #fff; background-image: linear-gradient(rgba(0, 79, 153, .12), rgba(0, 79, 153, .12));
+  border-inline-start: 3px solid var(--brand); border-radius: 10px; color: var(--ink);
+  touch-action: pan-y; will-change: transform;
+}
+.rem-main { min-width: 0; }
+.rem-text { font-size: 14px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rem-date { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.rem-date.past { color: #a15c00; }
+.rem-btn {
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 7px; border: 1px solid rgba(0, 79, 153, .25);
+  background: rgba(255, 255, 255, .7); color: var(--brand); font-size: 13px; cursor: pointer; padding: 0;
+}
+.rem-hover-del { display: none; color: var(--danger); border-color: rgba(200, 40, 40, .3); }
+@media (hover: hover) and (pointer: fine) {
+  .rem-swipe:hover .rem-hover-del { display: inline-block; }
+  .rem-del-bg { display: none; }
+}

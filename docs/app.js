@@ -1011,9 +1011,9 @@
         back = { kind: 'delete', leadId: removed.id, before: removed, at: removedAt };
         if (onLeadCard(removed.id)) location.hash = '#/leads'; else updateLeadsView();
       }
-    } else if (entry && /^coach/.test(entry.kind || '')) {
+    } else if (entry && (entry.kind === 'rem' || /^coach/.test(entry.kind || ''))) {
       // הוספת מאמן / הורדת פגישה: מיד במסך המאמנים, בשרת ברקע
-      coachBack = coachLocal(entry);
+      coachBack = stage2Local(entry);
       back = coachBack.back;
       redrawStage2();
     } else if (entry && state.leads) {
@@ -1038,7 +1038,7 @@
     obAdd({ opId, action: isUndo ? 'undo' : 'redo', desc: opDesc(isUndo ? 'undo' : 'redo', {}, current), at: Date.now(), params: { opId } });
     if (!entry) toast(isUndo ? 'מבטל…' : 'מבצע שוב…');
     const revert = () => {
-      if (coachBack) { coachLocal(coachBack.back); redrawStage2(); }
+      if (coachBack) { stage2Local(coachBack.back); redrawStage2(); }
       if (current && ver === localVer[realId(current.id)]) { setLead(current); showLead(current, true); }
       if (reinserted) { state.leads = state.leads.filter((l) => l.id !== entry.leadId); persistLeads(); updateLeadsView(); }
       if (removed) { state.leads.splice(Math.max(0, removedAt), 0, removed); persistLeads(); updateLeadsView(); }
@@ -2379,12 +2379,13 @@
         <a class="btn small secondary" href="${FIN_TASK_URL}" target="_blank" rel="noopener">🔄 עדכון פיננסים עכשיו</a>
       </div>
       ${isPrev ? `<div class="notice info small" style="margin-top:12px">"לבדיקה", דוח החייבים, החריגים והסיכום השבועי מגיעים מהעדכון השבועי האחרון, ולכן מוצגים בחודש הנוכחי.</div>` : `
-      <div class="row" style="margin:14px 0 6px;align-items:center;flex-wrap:wrap;gap:6px">
-        <div class="section-title grow" style="margin:0">לבדיקה (${review.length})</div>
+      <div class="row" style="margin:14px 0 6px;align-items:center;flex-wrap:wrap;gap:6px;justify-content:flex-end">
         <button class="btn small secondary" data-act="add-income">＋ הכנסה ידנית</button>
         <button class="btn small secondary" data-act="add-expense">＋ הוצאה ידנית</button>
       </div>
       ${added.length ? `<div class="mlist">${added.map((a) => `<div class="card mrow decided"><div class="grow small">נוספה ${a.kind === 'exp' ? 'הוצאה' : 'הכנסה'} ידנית: <b>${esc(a.desc)}</b> · ${money(a.amount)}${a.pending ? ' · שומר…' : ''}</div>${a.pending ? '' : `<button class="btn small ghost" data-unadd="${esc(a.id)}">↶ ביטול</button>`}</div>`).join('')}</div>` : ''}
+      ${remSectionHtml(d)}
+      <div class="section-title" style="margin:14px 0 6px">לבדיקה (${review.length})</div>
       ${(d.review || []).length ? `<div class="mlist">${(d.review || []).map((r) => {
         const dc = decided[r.id];
         return `<div class="card tx-row ${dc ? 'decided' : ''}" data-rid="${esc(r.id)}">
@@ -2430,6 +2431,7 @@
     });
     const ai = $app.querySelector('[data-act="add-income"]'); if (ai) ai.onclick = () => openManualTx('inc');
     const ae = $app.querySelector('[data-act="add-expense"]'); if (ae) ae.onclick = () => openManualTx('exp');
+    bindReminders();
     $app.querySelectorAll('[data-rid]').forEach((row) => {
       const r = (d.review || []).find((x) => x.id === row.dataset.rid);
       row.querySelectorAll('[data-biz]').forEach((b) => { b.onclick = () => decideTx(r, b.dataset.biz === '1'); });
@@ -2487,6 +2489,144 @@
     delete debtUndo[key]; setDebtCleared(key, false); redrawStage2();
     sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date, undo: true }).then(() => toast('↶ חזר לדוח'))
       .catch((e) => { debtUndo[key] = it; setDebtCleared(key, true); redrawStage2(); toast('לא בוצע: ' + e.message, true); });
+  }
+
+  // ---------- תזכורות (ליאל בלבד, בפיננסים) ----------
+  // ידניות בלבד. נשמרות בלשונית מערכת מוסתרת. כל פעולה – בתור השמירות וב-↶/↷.
+  const REM_ACTIVE = 'פעיל';
+  function remSorted(list) {
+    const withD = list.filter((r) => r.date).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (b.created || 0) - (a.created || 0)));
+    const noD = list.filter((r) => !r.date).sort((a, b) => (b.created || 0) - (a.created || 0));
+    return withD.concat(noD);
+  }
+  function remSectionHtml(d) {
+    const list = remSorted(d.reminders || []);
+    const today = isoToday();
+    return `<div class="row" style="margin:14px 0 6px;align-items:center">
+        <div class="section-title grow" style="margin:0">תזכורות${list.length ? ` (${list.length})` : ''}</div>
+        <button class="btn small secondary" data-act="rem-add">＋ תזכורת</button>
+      </div>
+      <div class="rem-list">${list.length ? list.map((r) => `
+        <div class="rem-swipe" data-rem="${esc(r.id)}">
+          <button type="button" class="rem-del-bg" data-rem-del tabindex="-1">מחק</button>
+          <div class="rem-row">
+            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${r.date < today ? 'past' : ''}">${esc(fmtIso(r.date))}${r.date < today ? ' · עבר' : ''}</div>` : ''}</div>
+            <button type="button" class="rem-btn rem-hover-del" data-rem-del aria-label="מחיקה" title="מחיקה">🗑</button>
+            <button type="button" class="rem-btn" data-rem-edit aria-label="עריכה" title="עריכה">✎</button>
+            <button type="button" class="rem-btn" data-rem-done aria-label="בוצע" title="בוצע">✓</button>
+          </div>
+        </div>`).join('') : '<div class="muted small">אין תזכורות</div>'}</div>`;
+  }
+  function remFind(id) { const d = store.get('finance'); return d && (d.reminders || []).find((r) => r.id === id); }
+  function remStateOf(r) { return r ? { text: r.text, date: r.date || '', status: REM_ACTIVE } : null; }
+  /** מחיל מצב של תזכורת במסך (null / לא פעיל = יורדת מהרשימה) */
+  function remApply(id, st) {
+    patchStore('finance', (d) => {
+      d.reminders = d.reminders || [];
+      const i = d.reminders.findIndex((r) => r.id === id);
+      if (!st || st.status !== REM_ACTIVE) { if (i >= 0) d.reminders.splice(i, 1); return; }
+      if (i >= 0) Object.assign(d.reminders[i], { text: st.text, date: st.date });
+      else d.reminders.push({ id, text: st.text, date: st.date, created: Date.now() });
+    });
+  }
+  function remLocal(e) {
+    remApply(e.id, e.before);
+    return { back: { kind: 'rem', id: e.id, before: e.after, after: e.before, desc: e.desc } };
+  }
+  /** פעולה על תזכורת: מיד במסך, ↶ מקומי, ובשרת דרך התור (לפי הסדר, כמו ↶/↷) */
+  function remOp(action, params, id, before, after, desc) {
+    const entry = { kind: 'rem', id, before, after, desc };
+    remApply(id, after); redrawStage2();
+    pushUndoLocal(entry); clearRedoLocal();
+    state.undoCount++; state.redoCount = 0; updateUndoBtn();
+    const opId = newOpId();
+    obAdd({ opId, action, desc: desc + ' – ' + String((after || before || {}).text || '').slice(0, 40), at: Date.now(), params: Object.assign({}, params, { opId }) });
+    syncStart();
+    undoChain = undoChain.then(async () => {
+      try {
+        const d = await api(action, Object.assign({}, params, { opId }));
+        obRemove(opId); syncUndoCounts(d);
+      } catch (e) {
+        if (e.code !== 'AUTH') obRemove(opId);
+        dropUndoLocal(entry); state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
+        remApply(id, before); redrawStage2();
+        if (e.code !== 'AUTH') toast('לא נשמר – ' + e.message, true);
+      } finally { syncEnd(); }
+    });
+  }
+  function remDelete(id) {
+    const r = remFind(id); if (!r) return;
+    remOp('reminderSet', { id, op: 'delete' }, id, remStateOf(r), Object.assign(remStateOf(r), { status: 'נמחק' }), 'מחיקת תזכורת');
+    toast('נמחק · ↶ לביטול');
+  }
+  function remDone(id) {
+    const r = remFind(id); if (!r) return;
+    remOp('reminderSet', { id, op: 'done' }, id, remStateOf(r), Object.assign(remStateOf(r), { status: 'בוצע' }), 'תזכורת בוצעה');
+    toast('✓ בוצע · ↶ לביטול');
+  }
+  function openReminder(id) {
+    const r = id ? remFind(id) : null;
+    const sh = openSheet(`
+      <div class="row"><b class="grow">${r ? 'עריכת תזכורת' : 'תזכורת חדשה'}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="field"><label for="rm-text">מה לזכור</label><textarea id="rm-text" rows="3" placeholder="למשל: לגבות מדנה את התשלום השני">${r ? esc(r.text) : ''}</textarea></div>
+      <div class="field"><label for="rm-date">תאריך (רשות)</label><input id="rm-date" type="date" value="${r ? esc(r.date || '') : ''}"></div>
+      <div class="muted small">עם תאריך – תגיע התראה יום לפני ב-18:00.</div>
+      <div class="notice small" id="rm-warn" hidden></div>
+      <button class="btn" data-save>${r ? 'שמירה' : 'הוספה'}</button>`);
+    const $ = (q) => sh.el.querySelector(q);
+    setTimeout(() => $('#rm-text').focus(), 50);
+    $('[data-save]').onclick = () => {
+      const text = $('#rm-text').value.trim(), date = $('#rm-date').value;
+      if (!text) { const w = $('#rm-warn'); w.hidden = false; w.textContent = 'חסר טקסט'; return; }
+      sh.close();
+      if (r) {
+        if (text === r.text && date === (r.date || '')) return;
+        remOp('reminderSave', { id: r.id, text, date }, r.id, remStateOf(r), { text, date, status: REM_ACTIVE }, 'עריכת תזכורת');
+      } else {
+        const nid = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+        remOp('reminderSave', { newId: nid, text, date }, nid, null, { text, date, status: REM_ACTIVE }, 'תזכורת חדשה');
+      }
+    };
+  }
+  /** החלקה למחיקה (כמו בתזכורות של האייפון): החלקה חושפת "מחק"; החלקה מלאה מוחקת; החלקה חזרה / נגיעה במקום אחר סוגרת */
+  const REM_BTN_W = 84;
+  let remOpenEl = null;
+  function remClose(el) { if (!el) return; const row = el.querySelector('.rem-row'); row.style.transition = 'transform .2s'; row.style.transform = ''; el.classList.remove('open'); if (remOpenEl === el) remOpenEl = null; }
+  document.addEventListener('touchstart', (e) => { if (remOpenEl && !remOpenEl.contains(e.target)) remClose(remOpenEl); }, { passive: true });
+  function bindReminders() {
+    const add = $app.querySelector('[data-act="rem-add"]'); if (add) add.onclick = () => openReminder(null);
+    $app.querySelectorAll('.rem-swipe').forEach((el) => {
+      const id = el.dataset.rem;
+      const row = el.querySelector('.rem-row');
+      el.querySelector('[data-rem-edit]').onclick = () => openReminder(id);
+      el.querySelector('[data-rem-done]').onclick = () => remDone(id);
+      el.querySelectorAll('[data-rem-del]').forEach((b) => { b.onclick = () => remDelete(id); });
+      // בעברית "מחק" בצד שמאל → גוררים ימינה (כמו באייפון בעברית)
+      let x0 = 0, y0 = 0, base = 0, dx = 0, mode = '';
+      row.addEventListener('touchstart', (e) => {
+        const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; mode = ''; dx = 0;
+        base = el.classList.contains('open') ? REM_BTN_W : 0;
+        row.style.transition = 'none';
+      }, { passive: true });
+      row.addEventListener('touchmove', (e) => {
+        const t = e.touches[0]; const mx = t.clientX - x0, my = t.clientY - y0;
+        if (!mode) { if (Math.abs(mx) > 8 && Math.abs(mx) > Math.abs(my) * 1.3) mode = 'h'; else if (Math.abs(my) > 8) mode = 'v'; }
+        if (mode !== 'h') return;   // גלילה רגילה של המסך
+        dx = Math.max(0, Math.min(el.offsetWidth, base + mx));
+        row.style.transform = `translateX(${dx}px)`;
+      }, { passive: true });
+      row.addEventListener('touchend', () => {
+        if (mode !== 'h') return;
+        row.style.transition = 'transform .2s';
+        if (dx > el.offsetWidth * 0.6) {   // החלקה מלאה – מוחק מיד
+          row.style.transform = `translateX(${el.offsetWidth}px)`;
+          setTimeout(() => remDelete(id), 160);
+        } else if (dx > REM_BTN_W / 2) {
+          if (remOpenEl && remOpenEl !== el) remClose(remOpenEl);
+          row.style.transform = `translateX(${REM_BTN_W}px)`; el.classList.add('open'); remOpenEl = el;
+        } else remClose(el);
+      });
+    });
   }
 
   /** הכנסה / הוצאה ידנית ל"תנועות" */
@@ -2741,6 +2881,8 @@
 
   // ---------- הוספת מאמן ידנית / הורדת פגישה ידנית – מיד במסך, ברקע בשרת (תור + ↶/↷) ----------
   /** מחיל במסך פעולת מאמן ומחזיר את ההפוכה (ל-↶/↷) */
+  /** ↶/↷ במסכים של ליאל: מאמנים או תזכורות */
+  function stage2Local(e) { return e.kind === 'rem' ? remLocal(e) : coachLocal(e); }
   function coachLocal(e) {
     let back = null;
     patchStore('coaches', (d) => {
