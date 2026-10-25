@@ -517,3 +517,11 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .onb-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .notif-onb { cursor: default; }
 .coach-hits .section-title:first-child { margin-top: 4px; }
+/* "נוקו לאחרונה": שורה אפורה מקופלת בתחתית הסעיף – לא נראית כמו כרטיס */
+.recent-cleared { margin: 8px 2px 4px; font-size: 13px; color: var(--muted, #777); }
+.recent-cleared summary { cursor: pointer; list-style: none; display: inline-flex; gap: 4px; align-items: center; padding: 4px 0; user-select: none; }
+.recent-cleared summary::-webkit-details-marker { display: none; }
+.recent-cleared[open] .rc-arrow { display: inline-block; transform: rotate(180deg); }
+.recent-cleared .rc-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px dashed #ddd; }
+.recent-cleared .rc-row .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-cleared .rc-undo { flex: 0 0 auto; background: none; border: 0; color: var(--brand); font: inherit; font-size: 13px; cursor: pointer; padding: 4px 6px; }

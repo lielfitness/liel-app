@@ -84,6 +84,33 @@
     clearTimeout(toast._t);
     toast._t = setTimeout(() => { t.className = ''; }, isError ? 4500 : 2200);
   }
+  /**
+   * "נוקו לאחרונה": מה שניקיתי בסעיף – שורה אפורה מקופלת בתחתית הסעיף, ולכל פריט "↶ החזר".
+   * נשאר עד 🔄 או יציאה מהאפליקציה (רק בזיכרון). הניקוי עצמו נשאר.
+   */
+  const recentCleared = { late: new Set(), gap: new Set(), debt: new Set(), anom: new Set() };
+  const recentOpen = { late: false, gap: false, debt: false, anom: false };
+  function recentHtml(kind, items) {
+    if (!items.length) return '';
+    return `<details class="recent-cleared" data-recent="${kind}" ${recentOpen[kind] ? 'open' : ''}>
+      <summary>נוקו לאחרונה (${items.length}) <span class="rc-arrow">▾</span></summary>
+      ${items.map((it) => `<div class="rc-row"><span class="grow">${esc(it.label)}</span><button type="button" class="rc-undo" data-rc="${kind}" data-key="${esc(it.key)}">↶ החזר</button></div>`).join('')}
+    </details>`;
+  }
+  document.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (d && d.matches && d.matches('details[data-recent]')) recentOpen[d.dataset.recent] = d.open;
+  }, true);
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('.rc-undo');
+    if (!b) return;
+    const k = b.dataset.key, kind = b.dataset.rc;
+    recentCleared[kind].delete(k);
+    if (kind === 'late') unclearLate(k);
+    else if (kind === 'gap') clearGap(k, false);
+    else if (kind === 'debt') unclearDebt(k);
+    else if (kind === 'anom') clearAnom(anomUndo[k], false);
+  });
   function telHref(phone) {
     const d = String(phone || '').replace(/[^\d+]/g, '');
     return d ? 'tel:' + d : '';
@@ -962,6 +989,7 @@
    */
   function hardRefresh() {
     if (hardRefreshing) return hardRefreshing;
+    Object.values(recentCleared).forEach((x) => x.clear());   // "נוקו לאחרונה" נעלם – הניקוי נשאר
     toast('מרענן…');
     const waitFor = [...opsInFlight, undoChain].concat(Object.values(queueByLead), replayP ? [replayP] : []);
     hardRefreshing = Promise.allSettled(waitFor)
@@ -2094,7 +2122,6 @@
         <button class="btn small secondary" data-act="run-meetings">▶️ הרץ עכשיו</button>
       </div>
       <div class="section-title">ביטולים מאוחרים${open.length ? ` – ${open.length} לא חויבו` : ''}</div>
-      ${Object.keys(lateUndo).map((id) => `<div class="card mrow decided"><div class="grow small">נוקה: <b>${esc(lateUndo[id].coach)}</b> · ${esc(lateUndo[id].date)}</div><button class="btn small ghost" data-unclear="${esc(id)}">↶ ביטול</button></div>`).join('')}
       ${late.length ? `<div class="mlist">${late.map((m) => `
         <div class="card mrow ${m.charged === 'לא' ? 'late-open' : ''}" data-late="${esc(m.id)}">
           <div class="grow">
@@ -2103,7 +2130,8 @@
             <div class="small">${m.charged === 'כן' ? '💳 חויב – ירדה פגישה' : 'לא חויב'}</div>
           </div>
           ${m.charged === 'לא' ? '<button class="btn small danger" data-charge="1">לחייב</button><button class="btn small ghost" data-clear>נקה</button>' : '<button class="btn small ghost" data-charge="0">לבטל חיוב</button>'}
-        </div>`).join('')}</div>` : (Object.keys(lateUndo).length ? '' : '<div class="card muted">אין ביטולים מאוחרים</div>')}
+        </div>`).join('')}</div>` : '<div class="card muted">אין ביטולים מאוחרים</div>'}
+      ${recentHtml('late', [...recentCleared.late].filter((id) => lateUndo[id]).map((id) => ({ key: id, label: lateUndo[id].coach + ' · ' + lateUndo[id].date + ' ' + lateUndo[id].time })))}
       ${gapSectionHtml(d)}
       <div class="row" style="margin:16px 0 6px;align-items:center;flex-wrap:wrap;gap:6px">
         <div class="grow"><div class="section-title" style="margin:0">מאמנים בליווי</div>${d.count ? `<div class="muted small coach-count">מאמנים ובוגרי ליווי – <b>${d.count.total}</b></div>` : ''}</div>
@@ -2139,14 +2167,12 @@
     $app.querySelector('[data-act="onboard"]').onclick = openOnboard;
     $app.querySelector('[data-act="coach-add"]').onclick = openCoachAdd;
     $app.querySelectorAll('[data-gap] [data-clear]').forEach((b) => { b.onclick = () => clearGap(b.closest('[data-gap]').dataset.gap, true); });
-    $app.querySelectorAll('[data-ungap]').forEach((b) => { b.onclick = () => clearGap(b.dataset.ungap, false); });
     $app.querySelectorAll('[data-late]').forEach((row) => {
       const m = late.find((x) => x.id === row.dataset.late);
       row.querySelectorAll('[data-charge]').forEach((b) => { b.onclick = () => chargeLate(m, b.dataset.charge === '1'); });
       const c = row.querySelector('[data-clear]');
       if (c) c.onclick = () => clearLate(m);
     });
-    $app.querySelectorAll('[data-unclear]').forEach((b) => { b.onclick = () => unclearLate(b.dataset.unclear); });
     $app.querySelectorAll('[data-orm]').forEach((b) => { b.onclick = () => onlineRemove(online[Number(b.dataset.orm)]); });
     $app.querySelector('[data-act="online-add"]').onclick = onlineAdd;
   }
@@ -2193,10 +2219,11 @@
   /** נקה: ראיתי, לא מחייבים – יורד מהרשימה (D לא משתנה). ↶ מחזיר. */
   function clearLate(m) {
     lateUndo[m.id] = m;
+    recentCleared.late.add(m.id);
     patchStore('coaches', (dd) => { dd.late = dd.late.filter((x) => x.id !== m.id); });
     redrawStage2();
-    sendWrite('lateClear', { id: m.id, coach: m.coach, date: m.date + ' ' + m.time }).then(() => { toast('נוקה ✓'); markDerivedStale(); })
-      .catch((e) => { delete lateUndo[m.id]; patchStore('coaches', (dd) => { dd.late.push(m); dd.late.sort((a, b) => b.at - a.at); }); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
+    sendWrite('lateClear', { id: m.id, coach: m.coach, date: m.date + ' ' + m.time }).then(() => { markDerivedStale(); })
+      .catch((e) => { recentCleared.late.delete(m.id); delete lateUndo[m.id]; patchStore('coaches', (dd) => { dd.late.push(m); dd.late.sort((a, b) => b.at - a.at); }); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function unclearLate(id) {
     const m = lateUndo[id];
@@ -2386,14 +2413,14 @@
         </div>`;
       }).join('')}</div>` : '<div class="card muted">אין תנועות לבדיקה 🎉</div>'}
       ${debts ? `<div class="section-title">🔴 ${esc(debts.title)}</div><div class="card debts">
-        ${Object.keys(debtUndo).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(debtUndo[k].name)} · ${money(debtUndo[k].amount)}</span><button class="btn small ghost" data-undebt="${esc(k)}">↶ ביטול</button></div>`).join('')}
         ${debtItems.map((it) => it.head ? `<div class="debt-head">${esc(it.head)}${it.note ? ` <span class="debt-note">${esc(it.note)}</span>` : ''}</div>`
           : it.key ? `<div class="debt-row" data-debt="${esc(it.key)}"><span class="grow"><b>${esc(it.name)}</b> · ${money(it.amount)} · ${esc(it.date)}${it.extra ? `<div class="muted small">${esc(it.extra)}</div>` : ''}</span><button class="btn small ghost" data-clear>נקה</button></div>`
           : `<div class="small">${esc(it.text)}</div>`).join('')}
+        ${recentHtml('debt', [...recentCleared.debt].filter((k) => debtUndo[k]).map((k) => ({ key: k, label: debtUndo[k].name + ' · ' + money(debtUndo[k].amount) + ' · ' + debtUndo[k].date })))}
       </div>` : ''}
       ${anom ? `<div class="section-title">⚠️ ${esc(anom.title)}</div><div class="card debts">
-        ${Object.keys(anomUndo).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(anomUndo[k].text)}</span><button class="btn small ghost" data-unanom="${esc(k)}">↶ ביטול</button></div>`).join('')}
-        ${anomItems.length ? anomItems.map((it) => `<div class="debt-row" data-anom="${esc(it.key)}"><span class="grow small">${esc(it.text)}</span><button class="btn small ghost" data-clear>נקה</button></div>`).join('') : (Object.keys(anomUndo).length ? '' : '<div class="muted small">אין חריגים</div>')}
+        ${anomItems.length ? anomItems.map((it) => `<div class="debt-row" data-anom="${esc(it.key)}"><span class="grow small">${esc(it.text)}</span><button class="btn small ghost" data-clear>נקה</button></div>`).join('') : '<div class="muted small">אין חריגים</div>'}
+        ${recentHtml('anom', [...recentCleared.anom].filter((k) => anomUndo[k]).map((k) => ({ key: k, label: anomUndo[k].text })))}
       </div>` : ''}
       ${d.summary && d.summary.invoices ? `<div class="section-title">🧾 ${esc(d.summary.invoices.title)}</div><div class="card">${pre(d.summary.invoices.body)}</div>` : ''}`}
       <div class="section-title">${isPrev ? esc(cur.label) : 'החודש'}</div>
@@ -2428,9 +2455,7 @@
     $app.querySelectorAll('[data-debt] [data-clear]').forEach((b) => {
       b.onclick = () => clearDebt(debtItems.find((x) => x.key === b.closest('[data-debt]').dataset.debt));
     });
-    $app.querySelectorAll('[data-undebt]').forEach((b) => { b.onclick = () => unclearDebt(b.dataset.undebt); });
     $app.querySelectorAll('[data-anom] [data-clear]').forEach((b) => { b.onclick = () => clearAnom(anomItems.find((x) => x.key === b.closest('[data-anom]').dataset.anom), true); });
-    $app.querySelectorAll('[data-unanom]').forEach((b) => { b.onclick = () => clearAnom(anomUndo[b.dataset.unanom], false); });
     $app.querySelectorAll('[data-unadd]').forEach((b) => { b.onclick = () => undoManualTx(b.dataset.unadd); });
   }
 
@@ -2457,18 +2482,19 @@
     if (!it) return;
     const set = (v) => patchStore('finance', (dd) => { const x = dd.summary && dd.summary.anomalies && (dd.summary.anomalies.items || []).find((y) => y.key === it.key); if (x) x.cleared = v; });
     if (clear) anomUndo[it.key] = it; else delete anomUndo[it.key];
+    if (clear) recentCleared.anom.add(it.key); else recentCleared.anom.delete(it.key);
     set(clear); redrawStage2();
-    sendWrite('anomClear', { key: it.key, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – לא יוצג שוב' : '↶ חזר לרשימה'))
-      .catch((e) => { if (clear) delete anomUndo[it.key]; else anomUndo[it.key] = it; set(!clear); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
+    sendWrite('anomClear', { key: it.key, undo: !clear }).then(() => { if (!clear) toast('↶ חזר לרשימה'); })
+      .catch((e) => { if (clear) recentCleared.anom.delete(it.key); else recentCleared.anom.add(it.key); if (clear) delete anomUndo[it.key]; else anomUndo[it.key] = it; set(!clear); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function setDebtCleared(key, val) {
     patchStore('finance', (dd) => { const it = dd.summary && dd.summary.debts && dd.summary.debts.items.find((x) => x.key === key); if (it) it.cleared = val; });
   }
   function clearDebt(it) {
     if (!it) return;
-    debtUndo[it.key] = it; setDebtCleared(it.key, true); redrawStage2();
-    sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date }).then(() => toast('נוקה ✓ – לא יופיע שוב בסיכום'))
-      .catch((e) => { delete debtUndo[it.key]; setDebtCleared(it.key, false); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
+    debtUndo[it.key] = it; recentCleared.debt.add(it.key); setDebtCleared(it.key, true); redrawStage2();
+    sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date }).then(() => {})
+      .catch((e) => { recentCleared.debt.delete(it.key); delete debtUndo[it.key]; setDebtCleared(it.key, false); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function unclearDebt(key) {
     const it = debtUndo[key];
@@ -2707,7 +2733,6 @@
     if (!g) return '<div class="section-title">לא בוצעה פגישה 3 שבועות</div><div class="card muted small">מחושב ברקע מהיומן – יופיע תוך כמה דקות</div>';
     const rows = g.rows.filter((r) => !gapUndo[gapKeyOf(r)]);
     return `<div class="section-title">לא בוצעה פגישה 3 שבועות${rows.length ? ` (${rows.length})` : ''}</div>
-      ${Object.keys(gapUndo).map((k) => `<div class="card mrow decided"><div class="grow small">נוקה: <b>${esc(gapUndo[k].name)}</b></div><button class="btn small ghost" data-ungap="${esc(k)}">↶ ביטול</button></div>`).join('')}
       ${rows.length ? `<div class="mlist">${rows.map((r) => `
         <div class="card mrow late-open" data-gap="${esc(gapKeyOf(r))}">
           <div class="grow">
@@ -2716,16 +2741,18 @@
             ${r.next ? `<div class="small">📅 יש פגישה ב-${ddmm(r.next)}</div>` : ''}
           </div>
           <button class="btn small ghost" data-clear>נקה</button>
-        </div>`).join('')}</div>` : (Object.keys(gapUndo).length ? '' : '<div class="card muted">כל המאמנים נפגשו ב-3 השבועות האחרונים 👏</div>')}`;
+        </div>`).join('')}</div>` : '<div class="card muted">כל המאמנים נפגשו ב-3 השבועות האחרונים 👏</div>'}
+      ${recentHtml('gap', [...recentCleared.gap].filter((k) => gapUndo[k]).map((k) => ({ key: k, label: gapUndo[k].name })))}`;
   }
   function clearGap(key, clear) {
     const d = store.get('coaches');
     const r = clear ? d && d.gap && d.gap.rows.find((x) => gapKeyOf(x) === key) : gapUndo[key];
     if (!r) return;
     if (clear) gapUndo[key] = r; else delete gapUndo[key];
+    if (clear) recentCleared.gap.add(key); else recentCleared.gap.delete(key);
     redrawStage2();
-    sendWrite('gapClear', { name: r.name, last: r.last, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – יחזור אם לא תהיה פגישה 3 שבועות אחרי הפגישה הבאה' : '↶ חזר לרשימה'))
-      .catch((e) => { if (clear) delete gapUndo[key]; else gapUndo[key] = r; redrawStage2(); toast('לא נשמר: ' + e.message, true); });
+    sendWrite('gapClear', { name: r.name, last: r.last, undo: !clear }).then(() => { if (!clear) toast('↶ חזר לרשימה'); })
+      .catch((e) => { if (clear) recentCleared.gap.delete(key); else recentCleared.gap.add(key); if (clear) delete gapUndo[key]; else gapUndo[key] = r; redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
 
   // ---------- הוספת מאמן ידנית / הורדת פגישה ידנית – מיד במסך, ברקע בשרת (תור + ↶/↷) ----------
