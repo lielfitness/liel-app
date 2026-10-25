@@ -522,3 +522,4 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .mrun-report summary { cursor: pointer; color: var(--brand); font-size: 14px; list-style: none; }
 .mrun-report summary::-webkit-details-marker { display: none; }
 .mrun-text { white-space: pre-wrap; font-size: 14px; line-height: 1.55; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.last-report { margin: 4px 2px 0; }

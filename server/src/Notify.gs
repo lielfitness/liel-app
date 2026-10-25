@@ -555,6 +555,8 @@ function externalNotify_(req) {
     if (req.type === 'meetings_run') {
       // הדוח המלא (כמו בטלגרם) נשמר בפעמון; לפוש – הכותרת בלבד
       n = notify_(req.type, { title: String(req.title || '').slice(0, 160), text: String(req.report || '').slice(0, 4000), pushBody: '', link: String(req.link || '').slice(0, 200) });
+      // הדוח האחרון – למסך המאמנים ("דוח פגישות אחרון")
+      try { writeJsonProp_('MEET_REPORT', { at: Date.now(), title: String(req.title || '').slice(0, 160), report: String(req.report || '').slice(0, 3000) }); } catch (e) { console.warn('meet report: ' + e); }
       return { ok: true, notified: n };
     }
     n = notify_(req.type, { title: String(req.title || '').slice(0, 120), text: String(req.text || '').slice(0, 300), link: String(req.link || '').slice(0, 200) });

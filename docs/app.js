@@ -2077,6 +2077,7 @@
       <div class="card">${online.length ? `<div class="online-list">${online.map((o) => `<div class="online-row"><span class="grow">${esc(o.name)}</span><b>${ils(o.amount)}</b></div>`).join('')}</div>` : '<div class="muted small">לא נמצא מתאמן אונליין</div>'}</div>
     </div>`;
   }
+  let lastReportOpen = false;   // "דוח פגישות אחרון" – נשאר פתוח כשהמסך מתעדכן
   function renderCoaches(d) {
     const late = (d.late || []).filter((m) => !lateUndo[m.id]);   // מה שנוקה כאן – לא חוזר גם אם הגיעה רשימה ישנה
     const open = late.filter((m) => m.charged === 'לא');
@@ -2096,6 +2097,11 @@
         <div class="grow small">הורדת פגישות אחרונה: <b>${esc(d.lastRun || '—')}</b></div>
         <button class="btn small secondary" data-act="run-meetings">▶️ הרץ עכשיו</button>
       </div>
+      <details class="mrun-report last-report" ${lastReportOpen ? 'open' : ''}>
+        <summary>דוח פגישות אחרון ▾</summary>
+        ${d.lastReport ? `<div class="mrun-text"><b>${esc(d.lastReport.title)}</b> · <span class="muted small">${esc(fmtTs(d.lastReport.at))}</span>\n\n${esc(d.lastReport.report)}</div>`
+          : '<div class="mrun-text muted">עוד אין דוח – יופיע אחרי ההורדה הבאה</div>'}
+      </details>
       <div class="section-title">ביטולים מאוחרים${open.length ? ` – ${open.length} לא חויבו` : ''}</div>
       ${Object.keys(lateUndo).map((id) => `<div class="card mrow decided"><div class="grow small">נוקה: <b>${esc(lateUndo[id].coach)}</b> · ${esc(lateUndo[id].date)}</div><button class="btn small ghost" data-unclear="${esc(id)}">↶ ביטול</button></div>`).join('')}
       ${late.length ? `<div class="mlist">${late.map((m) => `
@@ -2139,6 +2145,8 @@
     };
     $app.querySelectorAll('[data-cf]').forEach((b) => { b.onclick = () => { coachFilter = b.dataset.cf; renderCoaches(d); }; });
     $app.querySelector('[data-act="run-meetings"]').onclick = (ev) => runMeetings(ev.currentTarget);
+    const lr = $app.querySelector('.last-report');
+    if (lr) lr.addEventListener('toggle', () => { lastReportOpen = lr.open; });
     $app.querySelector('[data-act="onboard"]').onclick = openOnboard;
     $app.querySelector('[data-act="coach-add"]').onclick = openCoachAdd;
     $app.querySelectorAll('[data-gap] [data-clear]').forEach((b) => { b.onclick = () => clearGap(b.closest('[data-gap]').dataset.gap, true); });

@@ -100,6 +100,7 @@ function actionCoaches_(req, ctx) {
     gap: coachGapView_(),
     count: coachCount_(),
     lastRun: d.lastRun,
+    lastReport: readJsonProp_('MEET_REPORT', null),
   };
 }
 
