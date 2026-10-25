@@ -385,7 +385,8 @@ function scanZoomBookingsCore_(via) {
           emails: info.emails, phones: info.phones, reason: reason,
           leadId: lead ? lead.id : '', leadRow: lead ? lead.row : 0, createdAt: Date.now(),
         });
-        notify_('zoom_booked', { name: info.name || ev.getTitle(), when: start, text: 'צריך שיוך ידני', link: '#/zooms' });
+        // כותרת נפרדת מ"זום נקבע" רגיל – שיהיה ברור מהפוש שצריך לשייך
+        notify_('zoom_booked', { title: '📅 זום לשיוך – ' + shortName_(info.name || ev.getTitle()) + ' · ' + whenText_(start), text: reason, link: '#/zooms' });
         sendTelegramLiel_('📅 <b>זום חדש נקבע – צריך שיוך ידני</b>\n' + esc_(info.name || ev.getTitle()) + '\n' + fmtWhen_(start) + '\n' + esc_(reason),
           [{ text: 'פתח באפליקציה', url: appUrl + '#/zooms' }]);
       }

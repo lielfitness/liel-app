@@ -25,6 +25,7 @@ const NOTIF_TYPES_ = {
   debt_new:       { label: 'חיוב נכשל / הוראת קבע',   icon: '💳', roles: ['admin'], quiet: true },
   coach_ending:   { label: 'ליווי מסתיים',            icon: '🏁', roles: ['admin'], quiet: true },
   fin_summary:    { label: 'הסיכום הפיננסי השבועי',   icon: '📊', roles: ['admin'], quiet: true },
+  meetings_run:   { label: 'הורדת פגישות (דוח)',      icon: '📋', roles: ['admin'], quiet: true },
   onboard:        { label: 'קליטת מאמן',              icon: '✅', roles: ['admin'] },
   system:         { label: 'מערכת',    icon: 'ℹ️', roles: ['admin'] },   // לסקריפטים האחרים (בהמשך)
 };
@@ -135,7 +136,8 @@ function notify_(type, p, opts) {
       const row = [id, String(now.getTime()), Utilities.formatDate(now, TZ_, 'dd/MM/yyyy HH:mm'), e, type, title, body, p.link || '', ''];
       if (at >= 0) sh.getRange(at + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
       dropNotifCache_(e);
-      const n = { id: id, type: type, title: title, body: body, link: p.link || '' };
+      // לפוש: גוף קצר אם יש (למשל דוח הורדת הפגישות – בפוש רק הכותרת, הדוח המלא בפעמון)
+      const n = { id: id, type: type, title: title, body: p.pushBody != null ? String(p.pushBody) : body, link: p.link || '' };
       if (opts.noPush) return;
       if (hold) { queueQuiet_(e, n); return; }
       try { pushToUser_(e, n); } catch (err) { console.warn('push: ' + err); }
@@ -540,7 +542,7 @@ function externalNotify_(req) {
   const keys = readJsonProp_('NOTIFY_KEYS', {});
   const src = Object.keys(keys).filter(function (k) { return keys[k] && keys[k] === req.key; })[0];
   if (!src) throw apiError_('FORBIDDEN', 'מפתח לא תקין');
-  if (['late_cancel', 'debt_new', 'fin_summary'].indexOf(req.type) >= 0) {
+  if (['late_cancel', 'debt_new', 'fin_summary', 'meetings_run'].indexOf(req.type) >= 0) {
     const dedup = String(req.dedup || '').slice(0, 200);
     let n = 0;
     const lock = LockService.getScriptLock();
@@ -550,6 +552,11 @@ function externalNotify_(req) {
       if (dedup) markSent_(dedup);
     } finally { if (got) lock.releaseLock(); }
     if (req.seed) return { ok: true, notified: 0, seeded: true };   // הפעלה ראשונה: רק רושמים, בלי לשלוח
+    if (req.type === 'meetings_run') {
+      // הדוח המלא (כמו בטלגרם) נשמר בפעמון; לפוש – הכותרת בלבד
+      n = notify_(req.type, { title: String(req.title || '').slice(0, 160), text: String(req.report || '').slice(0, 4000), pushBody: '', link: String(req.link || '').slice(0, 200) });
+      return { ok: true, notified: n };
+    }
     n = notify_(req.type, { title: String(req.title || '').slice(0, 120), text: String(req.text || '').slice(0, 300), link: String(req.link || '').slice(0, 200) });
     return { ok: true, notified: n };
   }

@@ -2891,7 +2891,7 @@
         <div class="section-title grow" style="margin:0">התראות אחרונות</div>
         ${d.unread ? '<button class="btn small secondary" data-act="read-all">סימון הכל כנקרא</button>' : ''}
       </div>
-      ${items.length ? `<div class="mlist">${items.map((n) => n.type === 'onboard' ? onbNotifHtml(n) : `
+      ${items.length ? `<div class="mlist">${items.map((n) => n.type === 'onboard' ? onbNotifHtml(n) : n.type === 'meetings_run' ? meetingsNotifHtml(n) : `
         <a class="card mrow notif ${n.read ? '' : 'unread'}" href="${esc(n.link || '#/notifs')}" data-nid="${esc(n.id)}">
           <div class="grow"><b>${esc(n.title)}</b><div>${esc(n.body)}</div></div>
           <span class="muted small">${esc(relTime(n.at))}</span>
@@ -2899,6 +2899,13 @@
       <a class="card mrow more-row" href="#/settings" style="margin-top:14px"><span class="ico">⚙️</span><div class="grow"><b>הגדרות התראות</b><div class="muted small">התראות לטלפון ואילו סוגים לקבל</div></div></a>`);
     $app.querySelectorAll('[data-nid]').forEach((a) => {
       a.addEventListener('click', () => { const n = items.find((x) => x.id === a.dataset.nid); if (n && !n.read) markNotifsRead([n.id]); });
+    });
+    // דוח הורדת פגישות: פתיחת הדוח = נקרא
+    $app.querySelectorAll('details[data-mrun]').forEach((d) => {
+      d.addEventListener('toggle', () => {
+        if (d.open) mrunOpen.add(d.dataset.mrun); else mrunOpen.delete(d.dataset.mrun);
+        const n = items.find((x) => x.id === d.dataset.mrun); if (d.open && n && !n.read) markNotifsRead([n.id]);
+      });
     });
     $app.querySelectorAll('[data-onb-rerun]').forEach((b) => {
       const n = items.find((x) => x.onb && x.onb.rid === b.dataset.onbRerun);
@@ -2914,6 +2921,15 @@
     if (ra) ra.onclick = () => { markNotifsRead([], true); renderNotifs(store.get('notifs')); };
   }
 
+  /** הורדת פגישות בפעמון: הכותרת (כמו בפוש), ובלחיצה – הדוח המלא כמו בטלגרם */
+  const mrunOpen = new Set();   // דוחות שפתוחים – נשארים פתוחים כשהפעמון מתרענן ברקע
+  function meetingsNotifHtml(n) {
+    return `<div class="card notif ${n.read ? '' : 'unread'}">
+      <div class="row" style="align-items:flex-start"><div class="grow"><b>${esc(n.title)}</b></div>
+        <span class="muted small">${esc(relTime(n.at))}</span></div>
+      ${n.body ? `<details class="mrun-report" data-mrun="${esc(n.id)}" ${mrunOpen.has(n.id) ? 'open' : ''}><summary>הדוח המלא ▾</summary><div class="mrun-text">${esc(n.body)}</div></details>` : ''}
+    </div>`;
+  }
   /** קליטה בפעמון: הצלחה – ווטסאפ + קובץ; כישלון – השגיאה + הרצה חוזרת; בתהליך – ⏳ */
   function onbNotifHtml(n) {
     const o = n.onb;
