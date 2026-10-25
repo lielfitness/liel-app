@@ -157,7 +157,31 @@
   // הגרסה שרצה עכשיו (מתוך app.js?v=N) – נשלחת לשרת, כדי לזהות גרסה ישנה מהזיכרון של הדפדפן
   const APP_VERSION = (() => { try { return (document.currentScript.src.match(/[?&]v=(\d+)/) || [])[1] || ''; } catch (e) { return ''; } })();
   const PERF_LOCAL = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
-  async function api(action, params) {
+  // פעולות שכותבות לשרת: בזמן שהן בדרך מופיע "שומר…", האפליקציה לא נטענת מחדש לגרסה חדשה, ו-🔄 מחכה להן.
+  // (שמירות של לידים, ↶/↷ ומאמנים – מסומנות כבר במקום אחר)
+  const WRITE_ACTIONS = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+    finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1,
+    addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1 };
+  function api(action, params) {
+    const p = apiRaw(action, params);
+    if (!WRITE_ACTIONS[action]) return p;
+    syncStart();
+    if (action !== 'runMeetings' && action !== 'onboard' && action !== 'onboardRerun') trackOp(p);   // 🔄 לא מחכה לפעולות הארוכות
+    p.then(syncEnd, syncEnd);
+    return p;
+  }
+  const WRITE_LABELS = { lateClear: 'נקה – ביטול מאוחר', gapClear: 'נקה – 3 שבועות בלי פגישה', debtClear: 'נקה – חייבים', anomClear: 'נקה – חריג',
+    lateCharge: 'לחייב / לבטל חיוב', coachRenew: 'חידוש חבילה', finDecide: 'עסקי / פרטי', finAddIncome: 'הכנסה ידנית', finAddExpense: 'הוצאה ידנית',
+    finRemoveManual: 'מחיקת תנועה ידנית', online: 'מתאמני אונליין', assignZoom: 'שיוך זום', dismissZoom: 'התעלמות מזום' };
+  /** פעולה שכותבת לשרת (לא שמירת ליד): נכנסת לתור – נשלחת גם אם האפליקציה נסגרת, ומבוצעת בשרת פעם אחת (opId) */
+  function sendWrite(action, params) {
+    const opId = newOpId();
+    const p = Object.assign({}, params, { opId });
+    const who = params.coach || params.name || params.desc || '';
+    obAdd({ opId, action, desc: (WRITE_LABELS[action] || action) + (params.undo ? ' (↶)' : '') + (who ? ' – ' + who : ''), at: Date.now(), params: p });
+    return api(action, p).then((d) => { obRemove(opId); return d; }, (e) => { if (e.code !== 'AUTH') obRemove(opId); throw e; });
+  }
+  async function apiRaw(action, params) {
     if (!CFG.apiUrl) throw new Error('האתר עוד לא מחובר לשרת (חסר apiUrl ב-config.js)');
     const body = Object.assign({ action, session: state.session, v: APP_VERSION }, params || {});
     if (state.viewAs && action !== 'login') body.viewAs = state.viewAs;
@@ -1908,7 +1932,7 @@
         if (!l || !confirm(`לשייך את הזום ל${l.name}?`)) return;
         const before = removeLocal();
         toast('שויך ✓');
-        api('assignZoom', { key, row: l.row, id: l.id }).then((r) => {
+        sendWrite('assignZoom', { key, row: l.row, id: l.id }).then((r) => {
           leadsFetchedAt = 0; refreshLeads(true).catch(() => {}); markDerivedStale();
           if (r && r.warning) toast('⚠️ ' + r.warning, true);
         }).catch((e) => { store.set('zooms', before); if (location.hash === '#/zooms') renderZooms(before); toast('השיוך לא נשמר: ' + e.message, true); });
@@ -1927,7 +1951,7 @@
         if (!confirm('להתעלם מהזום הזה? הוא לא ישויך לאף ליד.')) return;
         const before = removeLocal();
         toast('הוסר');
-        api('dismissZoom', { key }).catch((e) => { store.set('zooms', before); if (location.hash === '#/zooms') renderZooms(before); toast('לא הוסר: ' + e.message, true); });
+        sendWrite('dismissZoom', { key }).catch((e) => { store.set('zooms', before); if (location.hash === '#/zooms') renderZooms(before); toast('לא הוסר: ' + e.message, true); });
       };
     });
   }
@@ -2158,7 +2182,7 @@
           const hm = (dd.meetings || []).find((x) => x.id === m.id); if (hm) hm.charged = want ? 'כן' : 'לא';
         });
         redrawStage2();
-        api('lateCharge', { id: m.id, want }).then((r) => {
+        sendWrite('lateCharge', { id: m.id, want }).then((r) => {
           toast(want ? `חויב ✓ – נשארו ל${m.coach} ${r.left}` : `החיוב בוטל ✓ – נשארו ל${m.coach} ${r.left}`);
           patchStore('coaches', (dd) => { const cc = dd.coaches.find((x) => x.name === m.coach); if (cc && r.left != null) cc.left = r.left; });
           redrawStage2(); markDerivedStale();
@@ -2171,7 +2195,7 @@
     lateUndo[m.id] = m;
     patchStore('coaches', (dd) => { dd.late = dd.late.filter((x) => x.id !== m.id); });
     redrawStage2();
-    trackOp(api('lateClear', { id: m.id, coach: m.coach, date: m.date + ' ' + m.time })).then(() => { toast('נוקה ✓'); markDerivedStale(); })
+    sendWrite('lateClear', { id: m.id, coach: m.coach, date: m.date + ' ' + m.time }).then(() => { toast('נוקה ✓'); markDerivedStale(); })
       .catch((e) => { delete lateUndo[m.id]; patchStore('coaches', (dd) => { dd.late.push(m); dd.late.sort((a, b) => b.at - a.at); }); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function unclearLate(id) {
@@ -2180,7 +2204,7 @@
     delete lateUndo[id];
     patchStore('coaches', (dd) => { if (!dd.late.some((x) => x.id === id)) dd.late.push(m); dd.late.sort((a, b) => b.at - a.at); });
     redrawStage2();
-    trackOp(api('lateClear', { id, undo: true })).then(() => { toast('↶ חזר לרשימה'); markDerivedStale(); })
+    sendWrite('lateClear', { id, undo: true }).then(() => { toast('↶ חזר לרשימה'); markDerivedStale(); })
       .catch((e) => { lateUndo[id] = m; patchStore('coaches', (dd) => { dd.late = dd.late.filter((x) => x.id !== id); }); redrawStage2(); toast('לא בוצע: ' + e.message, true); });
   }
 
@@ -2192,7 +2216,7 @@
     const item = { name, amount };
     patchStore('coaches', (dd) => { dd.online = (dd.online || []).concat([item]); });
     redrawStage2();
-    api('online', { op: 'add', name, amount }).then((r) => { patchStore('coaches', (dd) => { dd.online = r.online; }); toast('נוסף ✓'); })
+    sendWrite('online', { op: 'add', name, amount }).then((r) => { patchStore('coaches', (dd) => { dd.online = r.online; }); toast('נוסף ✓'); })
       .catch((e) => { patchStore('coaches', (dd) => { dd.online = (dd.online || []).filter((x) => x !== item && !(x.name === name && x.amount === amount)); }); redrawStage2(); toast('לא נוסף: ' + e.message, true); });
   }
   function onlineRemove(o) {
@@ -2200,7 +2224,7 @@
     const snap = JSON.stringify(store.get('coaches'));
     patchStore('coaches', (dd) => { const i = dd.online.findIndex((x) => x.name === o.name && x.amount === o.amount); if (i >= 0) dd.online.splice(i, 1); });
     redrawStage2();
-    api('online', { op: 'remove', name: o.name, amount: o.amount }).then((r) => { patchStore('coaches', (dd) => { dd.online = r.online; }); toast('הוסר ✓'); })
+    sendWrite('online', { op: 'remove', name: o.name, amount: o.amount }).then((r) => { patchStore('coaches', (dd) => { dd.online = r.online; }); toast('הוסר ✓'); })
       .catch((e) => { store.set('coaches', JSON.parse(snap)); redrawStage2(); toast('לא הוסר: ' + e.message, true); });
   }
 
@@ -2269,7 +2293,7 @@
       const snap = JSON.stringify(store.get('coaches'));
       patchStore('coaches', (dd) => { const cc = dd.coaches.find((x) => x.name === c.name); if (cc) { cc.pkg = n; cc.left = left + n; } });
       redrawStage2();
-      api('coachRenew', { name: c.name, email: c.email, n }).then((r) => {
+      sendWrite('coachRenew', { name: c.name, email: c.email, n }).then((r) => {
         patchStore('coaches', (dd) => { const cc = dd.coaches.find((x) => x.name === c.name); if (cc) { cc.pkg = r.after.pkg; cc.left = r.after.left; } });
         redrawStage2(); toast(`החבילה חודשה ✓ – ${r.after.left} פגישות`); markDerivedStale();
       }).catch((e) => { store.set('coaches', JSON.parse(snap)); redrawStage2(); toast('החידוש לא בוצע: ' + e.message, true); });
@@ -2413,7 +2437,7 @@
   function decideTx(r, business) {
     decided[r.id] = { business, pending: true };
     redrawStage2();
-    api('finDecide', { id: r.id, business }).then((res) => {
+    sendWrite('finDecide', { id: r.id, business }).then((res) => {
       decided[r.id] = { business, undo: res.undo };
       toast(business ? `✅ עסקי – ${r.desc}` : `❌ פרטי – ${r.desc}`);
       markDerivedStale();
@@ -2424,7 +2448,7 @@
     if (!dc || !dc.undo) return toast('רגע, עוד נשמר…');
     delete decided[r.id];
     redrawStage2();
-    api('finDecide', { id: r.id, undo: dc.undo }).then(() => { toast('בוטל ✓ – חזר ל"לבדיקה"'); markDerivedStale(); })
+    sendWrite('finDecide', { id: r.id, undo: dc.undo }).then(() => { toast('בוטל ✓ – חזר ל"לבדיקה"'); markDerivedStale(); })
       .catch((e) => { decided[r.id] = dc; redrawStage2(); toast('הביטול לא בוצע: ' + e.message, true); });
   }
 
@@ -2434,7 +2458,7 @@
     const set = (v) => patchStore('finance', (dd) => { const x = dd.summary && dd.summary.anomalies && (dd.summary.anomalies.items || []).find((y) => y.key === it.key); if (x) x.cleared = v; });
     if (clear) anomUndo[it.key] = it; else delete anomUndo[it.key];
     set(clear); redrawStage2();
-    trackOp(api('anomClear', { key: it.key, undo: !clear })).then(() => toast(clear ? 'נוקה ✓ – לא יוצג שוב' : '↶ חזר לרשימה'))
+    sendWrite('anomClear', { key: it.key, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – לא יוצג שוב' : '↶ חזר לרשימה'))
       .catch((e) => { if (clear) delete anomUndo[it.key]; else anomUndo[it.key] = it; set(!clear); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function setDebtCleared(key, val) {
@@ -2443,14 +2467,14 @@
   function clearDebt(it) {
     if (!it) return;
     debtUndo[it.key] = it; setDebtCleared(it.key, true); redrawStage2();
-    trackOp(api('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date })).then(() => toast('נוקה ✓ – לא יופיע שוב בסיכום'))
+    sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date }).then(() => toast('נוקה ✓ – לא יופיע שוב בסיכום'))
       .catch((e) => { delete debtUndo[it.key]; setDebtCleared(it.key, false); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function unclearDebt(key) {
     const it = debtUndo[key];
     if (!it) return;
     delete debtUndo[key]; setDebtCleared(key, false); redrawStage2();
-    trackOp(api('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date, undo: true })).then(() => toast('↶ חזר לדוח'))
+    sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date, undo: true }).then(() => toast('↶ חזר לדוח'))
       .catch((e) => { debtUndo[key] = it; setDebtCleared(key, true); redrawStage2(); toast('לא בוצע: ' + e.message, true); });
   }
 
@@ -2489,7 +2513,7 @@
       const row = { id: tmp.id, date: `${dd}/${m}/${y}`, day: Number(dd), name: f.desc, amount: Number(f.amount), source: exp ? '' : { bit: 'ביט', bank: 'העברה בנקאית', cash: 'מזומן' }[f.source] };
       if (inMonth) patchStore('finance', (d) => { d.month = d.month || { income: [], expenses: [] }; d.month[exp ? 'expenses' : 'income'].push(row); d.month[exp ? 'expenses' : 'income'].sort((a, b) => a.day - b.day); });
       redrawStage2();
-      api(exp ? 'finAddExpense' : 'finAddIncome', f).then((r) => {
+      sendWrite(exp ? 'finAddExpense' : 'finAddIncome', f).then((r) => {
         store.set('finAdded', finAdded().map((a) => (a.id === tmp.id ? { id: r.id, kind, desc: r.desc, amount: r.amount } : a)));
         patchStore('finance', (d) => { const it = d.month && d.month[exp ? 'expenses' : 'income'].find((x) => x.id === tmp.id); if (it) it.id = r.id; });
         redrawStage2();
@@ -2510,7 +2534,7 @@
     store.set('finAdded', snapAdded.filter((x) => x.id !== id));
     patchStore('finance', (d) => { if (d.month) ['income', 'expenses'].forEach((k) => { d.month[k] = d.month[k].filter((x) => x.id !== id); }); });
     redrawStage2();
-    api('finRemoveManual', { id, desc: a.desc, amount: a.amount }).then(() => { toast('↶ נמחק מ"תנועות"'); markDerivedStale(); })
+    sendWrite('finRemoveManual', { id, desc: a.desc, amount: a.amount }).then(() => { toast('↶ נמחק מ"תנועות"'); markDerivedStale(); })
       .catch((e) => { store.set('finAdded', snapAdded); store.set('finance', JSON.parse(snapFin)); redrawStage2(); toast('לא נמחק: ' + e.message, true); });
   }
 
@@ -2700,7 +2724,7 @@
     if (!r) return;
     if (clear) gapUndo[key] = r; else delete gapUndo[key];
     redrawStage2();
-    trackOp(api('gapClear', { name: r.name, last: r.last, undo: !clear })).then(() => toast(clear ? 'נוקה ✓ – יחזור אם לא תהיה פגישה 3 שבועות אחרי הפגישה הבאה' : '↶ חזר לרשימה'))
+    sendWrite('gapClear', { name: r.name, last: r.last, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – יחזור אם לא תהיה פגישה 3 שבועות אחרי הפגישה הבאה' : '↶ חזר לרשימה'))
       .catch((e) => { if (clear) delete gapUndo[key]; else gapUndo[key] = r; redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
 

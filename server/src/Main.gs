@@ -114,7 +114,7 @@ function handle_(req) {
   if (!a) throw apiError_('BAD_REQUEST', 'פעולה לא מוכרת');
   if (a.roles.indexOf(role) < 0) throw apiError_('FORBIDDEN', 'אין לך הרשאה לפעולה הזו');
 
-  const data = a.fn(req, { email: email, role: role, realRole: realRole, cfg: cfg });
+  const data = runAction_(req.action, req, { email: email, role: role, realRole: realRole, cfg: cfg });
   return { ok: true, data: data };
 }
 
@@ -162,12 +162,18 @@ function roleOf_(email, cfg) {
 }
 
 // ---------- מדידת זמני שמירה (לבדיקת מהירות) ----------
-const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
+const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1,
+  lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1,
+  addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1 };
 function logPerf_(e, out) {
   const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
   const entry = function (p, ok, ms, via) {
-    return { t: Date.now(), a: p.action + (via ? ' (' + via + ')' : ''), ms: ms, v: req.v || '', ok: ok, f: p.fields ? Object.keys(p.fields).join(',') : (p.kind || ''),
-      ph: !via && PHASES_ ? PHASES_.join(' · ') : '', lt: p._lt != null ? p._lt : '', qw: p._qw != null ? p._qw : '' };
+    // מה נוגע: שדות, או המזהה / השם (למשל איזה ביטול נוקה)
+    const what = p.fields ? Object.keys(p.fields).join(',') : (p.kind || [p.op, p.id, p.key, p.name, p.undo ? '↶' : ''].filter(Boolean).join(' ').slice(0, 120));
+    return { t: Date.now(), a: p.action + (via ? ' (' + via + ')' : ''), ms: ms, v: req.v || '', ok: ok, f: what,
+      ph: (p.opId ? 'op ' + p.opId + ' · ' : '') + (!via && !ok && out.error ? 'שגיאה: ' + out.error + ' · ' : '') + (!via && PHASES_ ? PHASES_.join(' · ') : ''),
+      lt: p._lt != null ? p._lt : '', qw: p._qw != null ? p._qw : '' };
   };
   let add = [];
   if (PERF_ACTIONS_[req.action]) add.push(entry(req, !!out.ok, out.ms, ''));
@@ -221,13 +227,43 @@ function opDupOut_(dup, ctx) {
 }
 
 /** כמה שינויים ברצף, לפי הסדר (כשיוצאים מהאפליקציה / בפתיחה הבאה). שינוי שכבר הוחל – מדולג. */
-const BATCH_OK_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1 };
+const BATCH_OK_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1,
+  lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1 };
+/**
+ * פעולות שנכנסו לתור במכשיר (גרסה 48): אותה פעולה (אותו opId) מבוצעת פעם אחת בלבד –
+ * גם אם הגיעה פעמיים (שליחה ביציאה מהאפליקציה בזמן שהבקשה המקורית עוד רצה, או שליחה חוזרת בפתיחה).
+ * לפעולות שהיו בתור קודם (updateLead וכו') יש בדיקה משלהן, בתוך הנעילה.
+ */
+const OP_ONCE_ = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1 };
+function runAction_(action, req, ctx) {
+  const fn = ACTIONS[action].fn;
+  if (!OP_ONCE_[action] || !req.opId) return fn(req, ctx);
+  const cache = CacheService.getScriptCache();
+  const lock = LockService.getUserLock();
+  const got = lock.tryLock(5000);
+  try {
+    const seen = opSeen_(req);
+    if (seen) return Object.assign({ duplicate: true }, seen.r || {});
+    if (cache.get('oprun:' + req.opId)) return { duplicate: true, running: true };
+    cache.put('oprun:' + req.opId, '1', 600);
+  } finally { if (got) lock.releaseLock(); }
+  try {
+    const out = fn(req, ctx);
+    const s = JSON.stringify(out || {});
+    opMark_(req, s.length < 90000 ? out : {});
+    return out;
+  } finally { cache.remove('oprun:' + req.opId); }
+}
 function actionBatch_(req, ctx) {
   const results = [];
   (req.ops || []).slice(0, 40).forEach(function (op) {
     const p = Object.assign({}, op.params || {}, { action: op.action });
     if (!BATCH_OK_[op.action]) { results.push({ ok: false, opId: p.opId, error: 'פעולה לא מותרת' }); return; }
-    try { results.push({ ok: true, opId: p.opId, data: ACTIONS[op.action].fn(p, ctx) }); }
+    // אותן הרשאות כמו בבקשה רגילה (שי – רק פעולות של לידים)
+    if (ACTIONS[op.action].roles.indexOf(ctx.role) < 0) { results.push({ ok: false, opId: p.opId, code: 'FORBIDDEN', error: 'אין לך הרשאה לפעולה הזו' }); return; }
+    try { results.push({ ok: true, opId: p.opId, data: runAction_(op.action, p, ctx) }); }
     catch (e) { results.push({ ok: false, opId: p.opId, code: e.code || 'ERROR', error: String(e.message || e) }); }
   });
   return { results: results };

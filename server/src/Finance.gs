@@ -529,19 +529,22 @@ function finLock_(fn) {
 
 // ---------- ⚠️ חריגים: "נקה" לכל פריט (נשמר במערכת של האפליקציה) ----------
 function anomalyKey_(t) { return String(t || '').replace(/\s+/g, ' ').trim(); }
+/** השוואה יציבה: בלי מספרים, ₪, אחוזים ופסיקים – כך שאותו חריג עם סכום מעודכן נשאר "נוקה" (חודש אחר = טקסט אחר) */
+function anomalyStable_(t) { return anomalyKey_(t).replace(/[0-9₪%,.+\-]/g, '').replace(/\s+/g, ' ').trim(); }
 function anomalyItems_(body) {
   const cleared = {};
-  sysRows_('anomClear').rows.forEach(function (r) { if (r[0]) cleared[r[0]] = 1; });
+  sysRows_('anomClear').rows.forEach(function (r) { if (r[0]) cleared[anomalyStable_(r[0])] = 1; });
   return String(body || '').split('\n').map(function (t) { return t.trim(); }).filter(Boolean)
-    .map(function (t) { const k = anomalyKey_(t); return { text: t, key: k, cleared: !!cleared[k] }; });
+    .map(function (t) { const k = anomalyKey_(t); return { text: t, key: k, cleared: !!cleared[anomalyStable_(k)] }; });
 }
 function actionAnomClear_(req, ctx) {
   const key = anomalyKey_(req.key);
   if (!key) throw apiError_('BAD_REQUEST', 'פריט לא תקין');
   const d = sysRows_('anomClear');
+  const st = anomalyStable_(key);
   if (req.undo) {
-    for (let i = d.rows.length - 1; i >= 0; i--) if (d.rows[i][0] === key) d.sh.deleteRow(i + 2);
-  } else if (!d.rows.some(function (r) { return r[0] === key; })) {
+    for (let i = d.rows.length - 1; i >= 0; i--) if (anomalyStable_(d.rows[i][0]) === st) d.sh.deleteRow(i + 2);
+  } else if (!d.rows.some(function (r) { return anomalyStable_(r[0]) === st; })) {
     d.sh.appendRow([key, Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]);
   }
   return { ok: true };
