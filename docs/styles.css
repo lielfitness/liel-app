@@ -523,7 +523,7 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .mrun-report summary::-webkit-details-marker { display: none; }
 .mrun-text { white-space: pre-wrap; font-size: 14px; line-height: 1.55; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .last-report { margin: 4px 2px 0; }
-/* תזכורות (פיננסים) – כחול המותג בשקיפות + פס צד דק; קצת צרות מהחריגים */
+/* תזכורות (פיננסים) – כחול המותג בשקיפות (~18%) + פס צד דק; קצת צרות מהחריגים */
 .rem-list { display: flex; flex-direction: column; gap: 6px; }
 .rem-swipe { position: relative; overflow: hidden; border-radius: 10px; }
 .rem-del-bg {
@@ -532,7 +532,7 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 }
 .rem-row {
   position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px;
-  background: #fff; background-image: linear-gradient(rgba(0, 79, 153, .12), rgba(0, 79, 153, .12));
+  background: #fff; background-image: linear-gradient(rgba(0, 79, 153, .18), rgba(0, 79, 153, .18));
   border-inline-start: 3px solid var(--brand); border-radius: 10px; color: var(--ink);
   touch-action: pan-y; will-change: transform;
 }
@@ -549,3 +549,6 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
   .rem-swipe:hover .rem-hover-del { display: inline-block; }
   .rem-del-bg { display: none; }
 }
+/* תזכורת שכבר נשלחה עליה התראה – אדום עדין עד ✓ / מחיקה / תאריך חדש */
+.rem-swipe.alerted .rem-row { background-image: linear-gradient(rgba(198, 40, 40, .18), rgba(198, 40, 40, .18)); border-inline-start-color: var(--danger); }
+.rem-swipe.alerted .rem-btn { border-color: rgba(198, 40, 40, .3); }

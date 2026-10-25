@@ -3,12 +3,12 @@
  * נשמר בלשונית מוסתרת "תזכורות (מערכת)" בגיליון המערכת של האפליקציה. לא נוגעים בשום לשונית קיימת.
  *   מזהה | טקסט | תאריך (yyyy-MM-dd) | נוצר | עודכן | מצב (פעיל / בוצע / נמחק) | התראה נשלחה לתאריך
  * מחיקה ו"בוצע" לא מוחקים שורה – רק משנים מצב (כך ↶ יכול להחזיר).
- * התראה: יום לפני התאריך ב-18:00 (או מיד, אם השעה הזו כבר עברה), פעם אחת לכל תאריך.
+ * התראה: יום לפני התאריך ב-15:00 (או מיד, אם השעה הזו כבר עברה), פעם אחת לכל תאריך.
  * רץ מתוך הבדיקה של כל דקה (watchNewLeads) – בלי טריגר נוסף. קריאה מהגיליון רק כשמגיע זמן של תזכורת.
  */
 const REM_TAB_ = { name: 'תזכורות (מערכת)', head: ['מזהה', 'טקסט', 'תאריך', 'נוצר', 'עודכן', 'מצב', 'התראה נשלחה לתאריך'] };
 const REM_ACTIVE_ = 'פעיל', REM_DONE_ = 'בוצע', REM_DELETED_ = 'נמחק';
-const REM_NEXT_KEY_ = 'REM_NEXT';   // מתי ההתראה הקרובה (ms) – כדי לא לקרוא את הגיליון כל דקה
+const REM_NEXT_KEY_ = 'REM_NEXT_15';   // (שם חדש כשהשעה עברה ל-15:00 – כך הלוח מחושב מחדש פעם אחת)   // מתי ההתראה הקרובה (ms) – כדי לא לקרוא את הגיליון כל דקה
 
 function remSheet_() {
   const ss = systemSs_();
@@ -30,7 +30,8 @@ function remRows_() {
     return { row: i + 2, id: r[0], text: r[1], date: r[2], created: Number(r[3]) || 0, updated: Number(r[4]) || 0, status: r[5] || REM_ACTIVE_, notified: r[6] };
   }) };
 }
-function remPublic_(x) { return { id: x.id, text: x.text, date: x.date, created: x.created }; }
+// alerted = כבר נשלחה התראה על התאריך הנוכחי (השורה מסומנת באדום עד ✓ / מחיקה / תאריך חדש)
+function remPublic_(x) { return { id: x.id, text: x.text, date: x.date, created: x.created, alerted: !!x.date && x.notified === x.date }; }
 function remWrite_(sh, x) {
   sh.getRange(x.row, 1, 1, 7).setValues([[x.id, x.text, x.date || '', String(x.created || ''), String(Date.now()), x.status, x.notified || '']]);
 }
@@ -67,7 +68,9 @@ function actionReminderSave_(req, ctx) {
     pushUndoEntry_(ctx.email, { kind: 'rem', id: x.id, before: before, after: remState_(x), desc: before ? 'עריכת תזכורת' : 'תזכורת חדשה', changes: [] });
     out = { reminder: remPublic_(x) };
   });
-  remSchedule_();
+  remSchedule_();   // אם זמן ההתראה כבר עבר – נשלחת עכשיו
+  const fresh = remRows_().list.filter(function (r) { return r.id === out.reminder.id; })[0];
+  if (fresh) out.reminder = remPublic_(fresh);
   return Object.assign(out, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
 }
 
@@ -104,12 +107,12 @@ function remUndoRedo_(e, to, verb, ctx) {
 }
 
 // ---------- התראות ----------
-/** מתי לשלוח: יום לפני, 18:00 (שעון ישראל) */
+/** מתי לשלוח: יום לפני, 15:00 (שעון ישראל) */
 function remFireAt_(date) {
   const p = date.split('-').map(Number);
   const dayBefore = new Date(p[0], p[1] - 1, p[2] - 1);
   const iso = Utilities.formatDate(dayBefore, TZ_, 'yyyy-MM-dd');
-  return parseIsoTz_(iso + 'T18:00:00');
+  return parseIsoTz_(iso + 'T15:00:00');
 }
 function parseIsoTz_(s) {
   // תאריך+שעה בשעון ישראל → Date (בלי תלות באזור הזמן של השרת)
@@ -129,7 +132,9 @@ function remSchedule_(noSend) {
 }
 /** מתוך הבדיקה של כל דקה */
 function remWatch_() {
-  const next = Number(PropertiesService.getScriptProperties().getProperty(REM_NEXT_KEY_) || 0);
+  const raw = PropertiesService.getScriptProperties().getProperty(REM_NEXT_KEY_);
+  if (raw === null) { remSchedule_(); return; }   // עוד לא חושב לפי הכלל הנוכחי
+  const next = Number(raw || 0);
   if (!next || next > Date.now()) return;
   remNotifyDue_();
 }

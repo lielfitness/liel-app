@@ -2507,10 +2507,10 @@
         <button class="btn small secondary" data-act="rem-add">＋ תזכורת</button>
       </div>
       <div class="rem-list">${list.length ? list.map((r) => `
-        <div class="rem-swipe" data-rem="${esc(r.id)}">
+        <div class="rem-swipe ${r.alerted ? 'alerted' : ''}" data-rem="${esc(r.id)}">
           <button type="button" class="rem-del-bg" data-rem-del tabindex="-1">מחק</button>
           <div class="rem-row">
-            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${r.date < today ? 'past' : ''}">${esc(fmtIso(r.date))}${r.date < today ? ' · עבר' : ''}</div>` : ''}</div>
+            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${r.date < today && !r.alerted ? 'past' : ''}">${esc(fmtIso(r.date))}${r.date < today && !r.alerted ? ' · עבר' : ''}</div>` : ''}</div>
             <button type="button" class="rem-btn rem-hover-del" data-rem-del aria-label="מחיקה" title="מחיקה">🗑</button>
             <button type="button" class="rem-btn" data-rem-edit aria-label="עריכה" title="עריכה">✎</button>
             <button type="button" class="rem-btn" data-rem-done aria-label="בוצע" title="בוצע">✓</button>
@@ -2525,7 +2525,7 @@
       d.reminders = d.reminders || [];
       const i = d.reminders.findIndex((r) => r.id === id);
       if (!st || st.status !== REM_ACTIVE) { if (i >= 0) d.reminders.splice(i, 1); return; }
-      if (i >= 0) Object.assign(d.reminders[i], { text: st.text, date: st.date });
+      if (i >= 0) { const r = d.reminders[i]; if (r.date !== st.date) r.alerted = false; Object.assign(r, { text: st.text, date: st.date }); }
       else d.reminders.push({ id, text: st.text, date: st.date, created: Date.now() });
     });
   }
@@ -2546,6 +2546,8 @@
       try {
         const d = await api(action, Object.assign({}, params, { opId }));
         obRemove(opId); syncUndoCounts(d);
+        // אם ההתראה יצאה כבר בשמירה (זמנה עבר) – השורה הופכת לאדומה
+        if (d.reminder && d.reminder.alerted) { patchStore('finance', (f) => { const r = (f.reminders || []).find((x) => x.id === d.reminder.id); if (r) r.alerted = true; }); redrawStage2(); }
       } catch (e) {
         if (e.code !== 'AUTH') obRemove(opId);
         dropUndoLocal(entry); state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
@@ -2570,7 +2572,7 @@
       <div class="row"><b class="grow">${r ? 'עריכת תזכורת' : 'תזכורת חדשה'}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
       <div class="field"><label for="rm-text">מה לזכור</label><textarea id="rm-text" rows="3" placeholder="למשל: לגבות מדנה את התשלום השני">${r ? esc(r.text) : ''}</textarea></div>
       <div class="field"><label for="rm-date">תאריך (רשות)</label><input id="rm-date" type="date" value="${r ? esc(r.date || '') : ''}"></div>
-      <div class="muted small">עם תאריך – תגיע התראה יום לפני ב-18:00.</div>
+      <div class="muted small">עם תאריך – תגיע התראה יום לפני ב-15:00.</div>
       <div class="notice small" id="rm-warn" hidden></div>
       <button class="btn" data-save>${r ? 'שמירה' : 'הוספה'}</button>`);
     const $ = (q) => sh.el.querySelector(q);
