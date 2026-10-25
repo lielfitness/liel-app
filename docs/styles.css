@@ -510,3 +510,10 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .ghost-sec { margin: 22px 0 4px; font-size: 16px; }
 .ghost-left td { color: #8a8a8a; }
 .ghost-left td:not(:first-child) { text-decoration: line-through; }
+/* "לא טופלו" בתוך הלידים (ליאל): המונה האדום מעל הכפתור */
+.chip.chip-alert { position: relative; }
+.chip.chip-alert .badge { position: absolute; top: -9px; inset-inline-end: -4px; height: 18px; line-height: 18px; min-width: 18px; padding: 0 5px; font-size: 11px; }
+.list-search { margin: 4px 0 10px; }
+.onb-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.notif-onb { cursor: default; }
+.coach-hits .section-title:first-child { margin-top: 4px; }

@@ -251,7 +251,7 @@
       items.push({ h: '#/leads', ico: '👥', t: 'לידים' });
       items.push({ h: '#/coaches', ico: '🏋️', t: 'מאמנים' });
       items.push({ h: '#/finance', ico: '📊', t: 'פיננסים' });
-      items.push({ h: '#/more', ico: '☰', t: 'עוד', badge: untreatedCount() });
+      items.push({ h: '#/more', ico: '☰', t: 'עוד' });
       return items;
     }
     items.push({ h: '#/leads', ico: '👥', t: 'לידים' });
@@ -293,7 +293,7 @@
       ${state.viewAs ? `<div class="viewas-bar"><span>👁 תצוגה כמו שי – כך היא רואה את האפליקציה. שמירות נכתבות באמת לגיליון.</span><button class="btn small secondary" data-act="viewas-off">חזרה לתצוגה שלי</button></div>` : ''}
       <main>${content}</main>
       <nav class="bottomnav">${nav.map(link).join('')}</nav>`;
-    $app.querySelector('[data-act="refresh"]').onclick = () => { state.forceFresh = true; softRefresh(); refreshAlerts(); toast('מרענן…'); };
+    $app.querySelector('[data-act="refresh"]').onclick = hardRefresh;
     $app.querySelector('[data-act="logout"]').onclick = () => { if (confirm('לצאת מהאפליקציה?')) logout(); };
     $app.querySelector('[data-act="undo"]').onclick = undoLast;
     $app.querySelector('[data-act="redo"]').onclick = redoLast;
@@ -336,8 +336,6 @@
       { h: '#/coaches', ico: '🏋️', t: 'מאמנים' },
       { h: '#/finance', ico: '📊', t: 'פיננסים' },
       { h: '#/onboard', act: 'onboard', ico: '＋', t: 'קליטת מאמן' },
-      { h: '#/untreated', ico: '⏰', t: 'לידים שלא טופלו', badge: untreatedCount() },
-      { h: '#/ghosting', ico: '👻', t: 'גוסטינג' },
       { h: '#/month', ico: '💰', t: 'שכר שי' },
       { h: '#/zooms', ico: '📅', t: 'זומים לשיוך', badge: state.alertsCount },
       { h: '#/notifs', ico: '🔔', t: 'התראות', badge: state.unread },
@@ -379,7 +377,7 @@
     const bb = $app.querySelector('[data-bell] .badge');
     if (bb) { bb.hidden = !state.unread; bb.textContent = state.unread > 99 ? '99+' : state.unread; }
     const n = untreatedCount();
-    $app.querySelectorAll('nav a[href="#/untreated"], nav a[href="#/more"], .nav-more-menu a[href="#/untreated"]').forEach((el) => {
+    $app.querySelectorAll('nav a[href="#/untreated"], .nav-more-menu a[href="#/untreated"], .chip[data-f="untreated"]').forEach((el) => {
       let b = el.querySelector('.badge');
       if (!n) { if (b) b.remove(); return; }
       if (!b) { b = document.createElement('span'); b.className = 'badge'; el.appendChild(b); }
@@ -491,6 +489,7 @@
   function matchesFilter(l, f) {
     if (!f || f === 'active' || f === 'all') return true;
     if (f === 'waiting') return String(l.zoomResult || '').trim() === 'ממתין';
+    if (f === 'untreated') return !!l.untreated;
     if (f === 'closed') return String(l.zoomResult || '').trim() === 'נסגר';   // "נסגר" = תוצאת זום (P), לא סטטוס
     if (!f.startsWith('s:')) return true;
     const st = f.slice(2);
@@ -572,7 +571,9 @@
     return state.leads.filter((l) => l.entry && l.entry >= from && l.entry <= to);
   }
   function leadsListNow() {
-    return baseLeads().filter((l) => stickyIds.has(l.id) || (matchesFilter(l, state.filter) && matchSearch(l, state.search))).sort(sortNewest);
+    const list = baseLeads().filter((l) => stickyIds.has(l.id) || (matchesFilter(l, state.filter) && matchSearch(l, state.search)));
+    // "לא טופלו": הוותיקים ראשונים – כמו במסך הקודם
+    return list.sort(state.filter === 'untreated' ? (a, b) => (a.lastActivity || 0) - (b.lastActivity || 0) : sortNewest);
   }
   function chipsHtml() {
     const statuses = state.meta.statuses;
@@ -582,9 +583,10 @@
     const waitingN = all.filter((l) => matchesFilter(l, 'waiting')).length;
     const chips = FILTERS.map((f) => ({ k: f.k, t: f.t, n: all.filter(f.f).length }))
       .concat(state.meta.waitingFilter ? [{ k: 'waiting', t: 'ממתינים', n: waitingN }] : [])
+      .concat(isAdmin() ? [{ k: 'untreated', t: '⏰ לא טופלו', n: all.filter((l) => l.untreated).length, top: untreatedCount() }] : [])
       .concat(state.meta.closedFilter ? [{ k: 'closed', t: 'נסגר', n: all.filter((l) => matchesFilter(l, 'closed')).length }] : [])
       .concat(statuses.filter((st) => counts[st]).map((st) => ({ k: 's:' + st, t: st, n: counts[st] })));
-    return chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span></button>`).join('');
+    return chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}${c.top != null ? ' chip-alert' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span>${c.top ? `<span class="badge">${c.top}</span>` : ''}</button>`).join('');
   }
   function rowFromHtml(l) {
     const t = document.createElement('div'); t.innerHTML = gridRowHtml(l).trim(); return t.firstChild;
@@ -618,6 +620,7 @@
     if (state.filter === 'all') state.filter = 'active';
     if (state.filter === 'waiting' && !state.meta.waitingFilter) state.filter = 'active';
     if (state.filter === 'closed' && !state.meta.closedFilter) state.filter = 'active';
+    if (state.filter === 'untreated' && !isAdmin()) state.filter = 'active';
     stickyIds = new Set();
 
     shell('לידים', `
@@ -920,6 +923,36 @@
     if (parts[0] === 'leads') updateLeadsView();
     else if (parts[0] === 'lead' && parts[1]) { const l = findLead(decodeURIComponent(parts[1])); if (l && !cardBusy()) renderLead(l); }
     else if (parts[0] === 'untreated' && !isEditing()) renderUntreated();
+  }
+  // פעולות "נקה" שעוד בדרך לשרת – 🔄 מחכה להן, כדי שהרשימה שתגיע כבר תכיר אותן
+  const opsInFlight = new Set();
+  function trackOp(p) {
+    opsInFlight.add(p);
+    p.catch(() => {}).finally(() => opsInFlight.delete(p));
+    return p;
+  }
+  let hardRefreshing = null;
+  /**
+   * 🔄 – כמו כניסה מחדש: מחכים שהשמירות והניקויים שבדרך יגיעו לשרת, מוחקים את המטמון בשרת,
+   * וטוענים הכל מחדש (לידים, מסכים מחושבים, התראות, זומים לשיוך). התור של השמירות לא נמחק.
+   */
+  function hardRefresh() {
+    if (hardRefreshing) return hardRefreshing;
+    toast('מרענן…');
+    const waitFor = [...opsInFlight, undoChain].concat(Object.values(queueByLead), replayP ? [replayP] : []);
+    hardRefreshing = Promise.allSettled(waitFor)
+      .then(() => (obAll().length ? replayOutbox() : null))
+      .then(() => api('flushCaches').catch(() => {}))
+      .then(() => { leadsFetchedAt = 0; return Promise.all([prefetchAll(false), refreshNotifs(), refreshAlerts()]); })
+      .then(() => {
+        refetchUndoCounts();
+        updateBadges();
+        if (!isEditing()) route();   // המסך הנוכחי מצויר מחדש מהנתונים הטריים
+        toast('✓ עודכן');
+      })
+      .catch((e) => toast('הרענון לא הושלם: ' + e.message, true))
+      .finally(() => { hardRefreshing = null; });
+    return hardRefreshing;
   }
   function softRefresh() {
     const page = location.hash.replace(/^#\/?/, '').split('/')[0];
@@ -1465,14 +1498,22 @@
     revalidateLeads(renderUntreated);
   }
 
+  let untreatedQ = '';
   function renderUntreated() {
-    const list = state.leads.filter((l) => l.untreated)
+    const all = state.leads.filter((l) => l.untreated)
       .sort((a, b) => (a.lastActivity || 0) - (b.lastActivity || 0));
+    const listHtml = () => {
+      const list = all.filter((l) => matchSearch(l, untreatedQ));
+      return leadCardsHtml(list, { idle: true, empty: untreatedQ ? 'לא נמצא ליד כזה ברשימה' : 'אין לידים שמחכים – כל הכבוד! 🎉' });
+    };
     shell(isAdmin() ? 'לידים שלא טופלו' : 'לא טופלו', `
+      <input class="search list-search" type="search" placeholder="חיפוש לפי שם, טלפון או מייל" value="${esc(untreatedQ)}" id="uq" autocomplete="off">
       <div class="notice info">לידים פעילים בלי שום עדכון יומיים ומעלה. הוותיקים ראשונים.</div>
       ${!state.meta.hasUpdatedCol ? '<div class="notice">עמודת "עודכן לאחרונה" עוד לא קיימת בגיליון, אז החישוב לפי תאריכי כניסה/שיחות בלבד.</div>' : ''}
-      ${leadCardsHtml(list, { idle: true, empty: 'אין לידים שמחכים – כל הכבוד! 🎉' })}`);
+      <div id="u-list">${listHtml()}</div>`);
     bindTableRows();
+    const q = document.getElementById('uq');
+    q.oninput = () => { untreatedQ = q.value.trim(); document.getElementById('u-list').innerHTML = listHtml(); bindTableRows(); };
   }
 
   // ---------- מסך: כרטיס ליד ----------
@@ -1728,19 +1769,37 @@
     return swr('ghosting', 'listGhosting', {}, 'גוסטינג', renderGhosting);
   }
 
+  let ghostQ = '';
+  /** חיפוש בגוסטינג: שם / טלפון / מייל (לפי הכותרות בלשונית) */
+  function ghostMatch(d, r, q) {
+    if (!q) return true;
+    const col = (name) => d.headers.findIndex((h) => String(h).includes(name));
+    const ql = q.toLowerCase(), digits = q.replace(/\D/g, '');
+    const iN = col('שם'), iP = col('טלפון'), iE = col('מייל');
+    const txt = [iN, iE].filter((i) => i >= 0).map((i) => String(r[i] || '').toLowerCase());
+    if (txt.some((x) => x.includes(ql))) return true;
+    return digits.length >= 3 && iP >= 0 && String(r[iP] || '').replace(/\D/g, '').includes(digits);
+  }
   function renderGhosting(d) {
+    shell('גוסטינג', `
+      <input class="search list-search" type="search" placeholder="חיפוש לפי שם, טלפון או מייל" value="${esc(ghostQ)}" id="gq" autocomplete="off">
+      <div id="g-list">${ghostListHtml(d)}</div>`);
+    const q = document.getElementById('gq');
+    q.oninput = () => { ghostQ = q.value.trim(); document.getElementById('g-list').innerHTML = ghostListHtml(d); };
+  }
+  function ghostListHtml(d) {
     const states = d.states || [];
-    const all = d.rows.map((r, i) => ({ r, st: states[i] || '' })).reverse();
+    const all = d.rows.map((r, i) => ({ r, st: states[i] || '' })).reverse().filter((x) => ghostMatch(d, x.r, ghostQ));
     const active = all.filter((x) => !x.st), left = all.filter((x) => x.st);
     const table = (list, withState) => `<div class="ghost-table${withState ? ' ghost-left' : ''}"><table>
         <thead><tr>${withState ? '<th>מצב</th>' : ''}${d.headers.map((h) => `<th>${esc(h || '—')}</th>`).join('')}</tr></thead>
         <tbody>${list.map(({ r, st }) => `<tr>${withState ? `<td>${esc(st)}</td>` : ''}${r.map((c, i) => `<td>${/טלפון/.test(d.headers[i]) ? `<a class="ltr" href="${esc(telHref(c))}">${esc(c)}</a>` : esc(c)}</td>`).join('')}</tr>`).join('')}</tbody>
       </table></div>`;
-    shell('גוסטינג', `
-      <div class="muted small">${active.length} לידים ב-Ghosting · החדשים למעלה</div>
-      ${active.length ? table(active, false) : '<div class="empty">אין כרגע לידים ב-Ghosting</div>'}
+    return `
+      <div class="muted small">${active.length} לידים ב-Ghosting${ghostQ ? ' שמתאימים לחיפוש' : ' · החדשים למעלה'}</div>
+      ${active.length ? table(active, false) : `<div class="empty">${ghostQ ? 'לא נמצא ליד כזה' : 'אין כרגע לידים ב-Ghosting'}</div>`}
       ${left.length ? `<h3 class="ghost-sec">יצאו מ-Ghosting (${left.length})</h3>
-      <div class="muted small">נשארים בלשונית לתיעוד – לא נמחקים</div>${table(left, true)}` : ''}`);
+      <div class="muted small">נשארים בלשונית לתיעוד – לא נמחקים</div>${table(left, true)}` : ''}`;
   }
 
   // ---------- מסך: החודש שלי ----------
@@ -1887,7 +1946,7 @@
       <div class="section-title" style="margin-top:4px">לידים</div>
       <div class="tiles">
         <a class="card tile" href="#/leads" data-filter="s:ליד חדש"><div class="num">${L.newStatus}</div><div class="lbl">בסטטוס "ליד חדש"</div></a>
-        <a class="card tile ${L.untreated ? 'alert' : ''}" href="#/untreated"><div class="num">${L.untreated}</div><div class="lbl">לא טופלו יומיים+</div></a>
+        <a class="card tile ${L.untreated ? 'alert' : ''}" href="#/leads" data-filter="untreated"><div class="num">${L.untreated}</div><div class="lbl">לא טופלו יומיים+</div></a>
       </div>
       ${d.stage2 ? `<div class="section-title">מאמנים ופיננסים</div>
       <div class="tiles">
@@ -1972,18 +2031,39 @@
 
   function viewCoaches() { return swr('coaches', 'coaches', {}, 'מאמנים ופגישות', renderCoaches); }
 
+  let coachQ = '';
+  /** חיפוש במאמנים: מאמנים בליווי (שם / מייל / טלפון) + מתאמני אונליין (שם) */
+  function coachHitsHtml(d) {
+    const q = coachQ.toLowerCase(), digits = coachQ.replace(/\D/g, '');
+    const phones = d.phones || {};
+    const coaches = (d.coaches || []).filter((c) => String(c.name).toLowerCase().includes(q) || String(c.email || '').toLowerCase().includes(q) ||
+      (digits.length >= 3 && String(phones[c.name] || '').replace(/\D/g, '').includes(digits)));
+    const online = (d.online || []).filter((o) => String(o.name).toLowerCase().includes(q));
+    return `<div class="coach-hits">
+      <div class="section-title">מאמנים (${coaches.length})</div>
+      <div class="mlist">${coaches.length ? coaches.map((c) => `
+        <a class="card mrow coach-row ${leftCls(c)}" href="#/coach/${encodeURIComponent(c.name)}">
+          <div class="grow"><b>${esc(c.name)}</b>${c.email ? `<div class="muted small ltr-text">${esc(c.email)}</div>` : ''}</div>
+          <span class="left-pill">${c.left == null ? '—' : c.left <= 0 ? 'הסתיימה' : c.left} <span class="muted">/ ${c.pkg == null ? '—' : c.pkg}</span></span>
+        </a>`).join('') : '<div class="card muted">לא נמצא מאמן</div>'}</div>
+      <div class="section-title">מתאמני אונליין (${online.length})</div>
+      <div class="card">${online.length ? `<div class="online-list">${online.map((o) => `<div class="online-row"><span class="grow">${esc(o.name)}</span><b>${ils(o.amount)}</b></div>`).join('')}</div>` : '<div class="muted small">לא נמצא מתאמן אונליין</div>'}</div>
+    </div>`;
+  }
   function renderCoaches(d) {
-    const late = (d.late || []);
+    const late = (d.late || []).filter((m) => !lateUndo[m.id]);   // מה שנוקה כאן – לא חוזר גם אם הגיעה רשימה ישנה
     const open = late.filter((m) => m.charged === 'לא');
     const cf = COACH_FILTERS.find((x) => x.k === coachFilter) || COACH_FILTERS[0];
     const list = (d.coaches || []).filter(cf.f);
     const online = d.online || [];
     const total = online.reduce((a, o) => a + (Number(o.amount) || 0), 0);
     shell('מאמנים ופגישות', `
+      <input class="search list-search" type="search" placeholder="חיפוש מאמן או מתאמן אונליין – שם, מייל או טלפון" value="${esc(coachQ)}" id="cq" autocomplete="off">
+      <div id="coach-hits" ${coachQ ? '' : 'hidden'}>${coachQ ? coachHitsHtml(d) : ''}</div>
+      <div id="coach-main" ${coachQ ? 'hidden' : ''}>
       <div class="row" style="gap:8px;margin-bottom:10px;flex-wrap:wrap">
         <button class="btn grow" data-act="onboard">＋ קליטת מאמן</button>
         <button class="btn secondary" data-act="coach-add">＋ הוספה ידנית</button>
-        <a class="btn secondary" href="#/onboard">קליטות אחרונות</a>
       </div>
       <div class="card row" style="align-items:center">
         <div class="grow small">הורדת פגישות אחרונה: <b>${esc(d.lastRun || '—')}</b></div>
@@ -2021,7 +2101,15 @@
           <button class="btn small" data-act="online-add">הוספה</button>
         </div>
         <div class="muted small">רק להצגה – לא נכנס ל"תנועות" ולא משפיע על הדוחות.</div>
+      </div>
       </div>`);
+    const cq = document.getElementById('cq');
+    cq.oninput = () => {
+      coachQ = cq.value.trim();
+      const hits = document.getElementById('coach-hits');
+      hits.innerHTML = coachQ ? coachHitsHtml(d) : '';
+      hits.hidden = !coachQ; document.getElementById('coach-main').hidden = !!coachQ;
+    };
     $app.querySelectorAll('[data-cf]').forEach((b) => { b.onclick = () => { coachFilter = b.dataset.cf; renderCoaches(d); }; });
     $app.querySelector('[data-act="run-meetings"]').onclick = (ev) => runMeetings(ev.currentTarget);
     $app.querySelector('[data-act="onboard"]').onclick = openOnboard;
@@ -2083,7 +2171,7 @@
     lateUndo[m.id] = m;
     patchStore('coaches', (dd) => { dd.late = dd.late.filter((x) => x.id !== m.id); });
     redrawStage2();
-    api('lateClear', { id: m.id, coach: m.coach, date: m.date + ' ' + m.time }).then(() => { toast('נוקה ✓'); markDerivedStale(); })
+    trackOp(api('lateClear', { id: m.id, coach: m.coach, date: m.date + ' ' + m.time })).then(() => { toast('נוקה ✓'); markDerivedStale(); })
       .catch((e) => { delete lateUndo[m.id]; patchStore('coaches', (dd) => { dd.late.push(m); dd.late.sort((a, b) => b.at - a.at); }); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function unclearLate(id) {
@@ -2092,7 +2180,7 @@
     delete lateUndo[id];
     patchStore('coaches', (dd) => { if (!dd.late.some((x) => x.id === id)) dd.late.push(m); dd.late.sort((a, b) => b.at - a.at); });
     redrawStage2();
-    api('lateClear', { id, undo: true }).then(() => { toast('↶ חזר לרשימה'); markDerivedStale(); })
+    trackOp(api('lateClear', { id, undo: true })).then(() => { toast('↶ חזר לרשימה'); markDerivedStale(); })
       .catch((e) => { lateUndo[id] = m; patchStore('coaches', (dd) => { dd.late = dd.late.filter((x) => x.id !== id); }); redrawStage2(); toast('לא בוצע: ' + e.message, true); });
   }
 
@@ -2235,10 +2323,10 @@
     const ml = (isPrev ? d.prevMonth : d.month) || { income: [], expenses: [] };
     const sumOf = (a) => a.reduce((s, x) => s + (Number(x.amount) || 0), 0);
     const debts = d.summary && d.summary.debts;
-    const debtItems = debts ? (debts.items || []).filter((it) => !it.key || !it.cleared) : [];
+    const debtItems = debts ? (debts.items || []).filter((it) => !it.key || (!it.cleared && !debtUndo[it.key])) : [];
     const added = finAdded();
     const anom = d.summary && d.summary.anomalies && d.summary.anomalies.items ? d.summary.anomalies : null;
-    const anomItems = anom ? anom.items.filter((it) => !it.cleared) : [];
+    const anomItems = anom ? anom.items.filter((it) => !it.cleared && !anomUndo[it.key]) : [];
     shell('פיננסים', `
       <div class="tiles">
         ${mo.map((m, i) => `<button type="button" class="card tile fin-month ${(i === 1) === isPrev ? 'sel' : ''}" data-fm="${i === 1 ? 'prev' : 'cur'}">
@@ -2346,7 +2434,7 @@
     const set = (v) => patchStore('finance', (dd) => { const x = dd.summary && dd.summary.anomalies && (dd.summary.anomalies.items || []).find((y) => y.key === it.key); if (x) x.cleared = v; });
     if (clear) anomUndo[it.key] = it; else delete anomUndo[it.key];
     set(clear); redrawStage2();
-    api('anomClear', { key: it.key, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – לא יוצג שוב' : '↶ חזר לרשימה'))
+    trackOp(api('anomClear', { key: it.key, undo: !clear })).then(() => toast(clear ? 'נוקה ✓ – לא יוצג שוב' : '↶ חזר לרשימה'))
       .catch((e) => { if (clear) delete anomUndo[it.key]; else anomUndo[it.key] = it; set(!clear); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function setDebtCleared(key, val) {
@@ -2355,14 +2443,14 @@
   function clearDebt(it) {
     if (!it) return;
     debtUndo[it.key] = it; setDebtCleared(it.key, true); redrawStage2();
-    api('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date }).then(() => toast('נוקה ✓ – לא יופיע שוב בסיכום'))
+    trackOp(api('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date })).then(() => toast('נוקה ✓ – לא יופיע שוב בסיכום'))
       .catch((e) => { delete debtUndo[it.key]; setDebtCleared(it.key, false); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function unclearDebt(key) {
     const it = debtUndo[key];
     if (!it) return;
     delete debtUndo[key]; setDebtCleared(key, false); redrawStage2();
-    api('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date, undo: true }).then(() => toast('↶ חזר לדוח'))
+    trackOp(api('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date, undo: true })).then(() => toast('↶ חזר לדוח'))
       .catch((e) => { debtUndo[key] = it; setDebtCleared(key, true); redrawStage2(); toast('לא בוצע: ' + e.message, true); });
   }
 
@@ -2507,13 +2595,13 @@
   function submitOnboard(f, extra) {
     const tmp = { rid: 'tmp-' + Date.now(), name: f.name, email: f.email, track: f.track, test: !!(extra && extra.test), pending: true, at: 'עכשיו' };
     onbLocal.unshift(tmp);
-    if (location.hash === '#/onboard') redrawOnboard(); else location.hash = '#/onboard';
+    redrawOnboard();
     api(extra && extra.rerun ? 'onboardRerun' : 'onboard', extra && extra.rerun ? { rid: extra.rerun } : (extra && extra.test ? { test: true } : f)).then((r) => {
       if (r.exists) { onbLocal = onbLocal.filter((x) => x !== tmp); redrawOnboard(); return toast(r.message, true); }
       tmp.rid = r.rid;
       redrawOnboard();
-      toast('נשלח ✓ – הקליטה רצה (כדקה). תקבל התראה כשהיא מסתיימת');
-      pollOnboardList(0);
+      toast('נשלח ✓ – הקליטה רצה (כדקה). המצב מופיע בפעמון 🔔');
+      pollOnboardNotifs(0);
     }).catch((e) => {
       onbLocal = onbLocal.filter((x) => x !== tmp); redrawOnboard();
       toast('הקליטה לא נשלחה: ' + e.message, true);
@@ -2529,6 +2617,22 @@
         if ((d.items || []).some((x) => x.pending)) pollOnboardList(i + 1);
         else { refreshNotifs(); refreshStage2('coaches'); }
       }).catch(() => pollOnboardList(i + 1));
+    }, 15000);
+  }
+
+  // הקליטה רצה – מרעננים את הפעמון כל 15 שניות עד שהיא מסתיימת (עד 5 דקות)
+  let onbNotifPoll = null;
+  function pollOnboardNotifs(i) {
+    clearTimeout(onbNotifPoll);
+    refreshNotifs();
+    if (i > 20) { onbNotifPoll = null; return; }
+    onbNotifPoll = setTimeout(() => {
+      Promise.resolve(refreshNotifs()).then(() => {
+        const d = store.get('notifs');
+        const busy = d && (d.items || []).some((n) => n.onb && n.onb.pending);
+        if (busy || i < 2) pollOnboardNotifs(i + 1);
+        else { onbNotifPoll = null; refreshStage2('coaches'); }
+      });
     }, 15000);
   }
 
@@ -2596,7 +2700,7 @@
     if (!r) return;
     if (clear) gapUndo[key] = r; else delete gapUndo[key];
     redrawStage2();
-    api('gapClear', { name: r.name, last: r.last, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – יחזור אם לא תהיה פגישה 3 שבועות אחרי הפגישה הבאה' : '↶ חזר לרשימה'))
+    trackOp(api('gapClear', { name: r.name, last: r.last, undo: !clear })).then(() => toast(clear ? 'נוקה ✓ – יחזור אם לא תהיה פגישה 3 שבועות אחרי הפגישה הבאה' : '↶ חזר לרשימה'))
       .catch((e) => { if (clear) delete gapUndo[key]; else gapUndo[key] = r; redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
 
@@ -2668,10 +2772,8 @@
   }
 
   function viewMore() {
-    const n = untreatedCount();
+    // "לידים שלא טופלו" ו"גוסטינג" – כפתורים בתוך מסך הלידים (לא כאן)
     shell('עוד', `<div class="mlist">
-      <a class="card mrow more-row" href="#/untreated"><span class="ico">⏰</span><div class="grow"><b>לידים שלא טופלו</b></div>${n ? `<span class="badge">${n}</span>` : ''}</a>
-      <a class="card mrow more-row" href="#/ghosting"><span class="ico">👻</span><div class="grow"><b>גוסטינג</b></div></a>
       <a class="card mrow more-row" href="#/month"><span class="ico">💰</span><div class="grow"><b>שכר שי</b></div></a>
       <a class="card mrow more-row" href="#/zooms"><span class="ico">📅</span><div class="grow"><b>זומים לשיוך</b></div>${state.alertsCount ? `<span class="badge">${state.alertsCount}</span>` : ''}</a>
       <a class="card mrow more-row" href="#/notifs"><span class="ico">🔔</span><div class="grow"><b>התראות</b></div>${state.unread ? `<span class="badge">${state.unread}</span>` : ''}</a>
@@ -2762,7 +2864,7 @@
         <div class="section-title grow" style="margin:0">התראות אחרונות</div>
         ${d.unread ? '<button class="btn small secondary" data-act="read-all">סימון הכל כנקרא</button>' : ''}
       </div>
-      ${items.length ? `<div class="mlist">${items.map((n) => `
+      ${items.length ? `<div class="mlist">${items.map((n) => n.type === 'onboard' ? onbNotifHtml(n) : `
         <a class="card mrow notif ${n.read ? '' : 'unread'}" href="${esc(n.link || '#/notifs')}" data-nid="${esc(n.id)}">
           <div class="grow"><b>${esc(n.title)}</b><div>${esc(n.body)}</div></div>
           <span class="muted small">${esc(relTime(n.at))}</span>
@@ -2771,8 +2873,34 @@
     $app.querySelectorAll('[data-nid]').forEach((a) => {
       a.addEventListener('click', () => { const n = items.find((x) => x.id === a.dataset.nid); if (n && !n.read) markNotifsRead([n.id]); });
     });
+    $app.querySelectorAll('[data-onb-rerun]').forEach((b) => {
+      const n = items.find((x) => x.onb && x.onb.rid === b.dataset.onbRerun);
+      b.onclick = (ev) => {
+        ev.stopPropagation();
+        const o = n.onb;
+        confirmSheet('הרצה חוזרת', `<div>להריץ שוב את הקליטה של <b>${esc(o.name)}</b>?</div><div class="muted small">מה שכבר נוצר (חבר באתר, תכניות, קובץ, שורה בתפעול) לא ייווצר שוב.</div>`,
+          'להריץ שוב', () => submitOnboard({ name: o.name }, { rerun: o.rid, test: o.test }));
+      };
+    });
+    if (items.some((n) => n.onb && n.onb.pending) && !onbNotifPoll) pollOnboardNotifs(0);
     const ra = $app.querySelector('[data-act="read-all"]');
     if (ra) ra.onclick = () => { markNotifsRead([], true); renderNotifs(store.get('notifs')); };
+  }
+
+  /** קליטה בפעמון: הצלחה – ווטסאפ + קובץ; כישלון – השגיאה + הרצה חוזרת; בתהליך – ⏳ */
+  function onbNotifHtml(n) {
+    const o = n.onb;
+    const failed = o && o.failed && o.failed.length;
+    return `<div class="card notif notif-onb ${n.read ? '' : 'unread'}" data-nid="${esc(n.id)}">
+      <div class="row" style="align-items:flex-start"><div class="grow"><b>${esc(n.title)}</b>${n.body ? `<div>${esc(n.body)}</div>` : ''}</div>
+        <span class="muted small">${esc(relTime(n.at))}</span></div>
+      ${o && failed && o.errors ? `<div class="notice small">${esc(o.errors)}</div>` : ''}
+      ${o && !o.pending && !o.test ? `<div class="onb-actions">
+        ${!failed && o.wa ? `<a class="btn green small" href="${esc(o.wa)}" target="_blank" rel="noopener">📲 שליחה בווטסאפ</a>` : ''}
+        ${!failed && o.fileUrl ? `<a class="btn secondary small" href="${esc(o.fileUrl)}" target="_blank" rel="noopener">📄 הקובץ</a>` : ''}
+        ${failed ? `<button class="btn small" data-onb-rerun="${esc(o.rid)}">🔁 הרץ שוב</button>` : ''}
+      </div>` : ''}
+    </div>`;
   }
 
   function viewSettings() {
@@ -2787,7 +2915,12 @@
         <div class="muted small">מה שמכובה – לא יופיע בפעמון ולא יגיע לטלפון.</div>
         ${isAdmin() && !state.viewAs ? '<div class="muted small" style="margin-top:6px">💳 📊 🏁 בשעות 23:00–07:00 נשמרים בפעמון ונשלחים לטלפון ב-07:00 (מאוחד). ⚠️ ביטול מאוחר – תמיד מיד.</div>' : ''}
       </div>
-      ${isAdmin() && !state.viewAs ? '<button class="btn secondary" data-act="notify-test" style="margin-top:12px;width:100%">🧪 שליחת התראות בדיקה (4 הסוגים)</button>' : ''}`, { back: true });
+      ${isAdmin() && !state.viewAs ? '<button class="btn secondary" data-act="notify-test" style="margin-top:12px;width:100%">🧪 שליחת התראות בדיקה (4 הסוגים)</button>' : ''}
+      ${isAdmin() && !state.viewAs ? '<button class="btn secondary" data-act="onboard-test" style="margin-top:8px;width:100%">🧪 בדיקת קליטה (בלי Wix ובלי קבצים)</button>' : ''}`, { back: true });
+    const ot = $app.querySelector('[data-act="onboard-test"]');
+    if (ot) ot.onclick = () => confirmSheet('בדיקת קליטה',
+      '<div class="small">שולח לטופס קליטה של "בדיקת אפליקציה". הסקריפט מזהה שזו בדיקה: <b>לא נוגע ב-Wix, לא יוצר קבצים, לא כותב לתפעול ולא שולח טלגרם</b> – רק מחזיר סטטוס. המצב מופיע בפעמון 🔔, והתגובה נמחקת מהטופס (בגיליון התשובות תישאר שורת בדיקה).</div>',
+      'לשלוח בדיקה', () => submitOnboard({ name: 'בדיקת אפליקציה', track: 'בייסיק', email: 'app-test@example.com' }, { test: true }));
     const nt = $app.querySelector('[data-act="notify-test"]');
     if (nt) nt.onclick = () => {
       nt.disabled = true;

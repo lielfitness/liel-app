@@ -34,6 +34,7 @@ const ACTIONS = {
   notifications:  { roles: ['admin', 'leads'], fn: actionNotifications_ },
   notifRead:      { roles: ['admin', 'leads'], fn: actionNotifRead_ },
   notifSeen:      { roles: ['admin', 'leads'], fn: actionNotifSeen_ },
+  flushCaches:    { roles: ['admin', 'leads'], fn: actionFlushCaches_ },
   notifSettings:  { roles: ['admin', 'leads'], fn: actionNotifSettings_ },
   pushRegister:   { roles: ['admin', 'leads'], fn: actionPushRegister_ },
   pushUnregister: { roles: ['admin', 'leads'], fn: actionPushUnregister_ },
@@ -115,6 +116,12 @@ function handle_(req) {
 
   const data = a.fn(req, { email: email, role: role, realRole: realRole, cfg: cfg });
   return { ok: true, data: data };
+}
+
+/** 🔄 באפליקציה = כמו כניסה מחדש: מוחקים את המטמון בשרת, כדי שכל מה שנטען אחר כך ייקרא מהגיליונות */
+function actionFlushCaches_(req, ctx) {
+  CacheService.getScriptCache().removeAll([LEADS_CACHE_KEY_, GHOST_CACHE_KEY_, 'coach_v1', 'finrev_v1', 'nl1:' + ctx.email, ONB_INFO_CACHE_]);
+  return { ok: true };
 }
 
 function actionMe_(req, ctx) {

@@ -102,7 +102,7 @@ function typesForRole_(role) {
 // ---------- שליחת התראה ----------
 /**
  * יוצר התראה לכל מי שמורשה לסוג הזה (ולא כיבה אותו בהגדרות), ושולח Push לטלפונים שלו.
- * p: { name, text?, link }   opts: { exclude: email, only: email }
+ * p: { name, text?, link }   opts: { exclude: email, only: email, noPush: רק בפעמון, replaceLink: מעדכן את ההתראה עם אותו קישור במקום להוסיף חדשה }
  * לא זורק שגיאות – התראה שנכשלה לא מפילה את הפעולה שקראה לה.
  */
 function notify_(type, p, opts) {
@@ -127,11 +127,16 @@ function notify_(type, p, opts) {
     const body = p.text ? String(p.text) : '';
     // שעות שקט (23:00–07:00) לסוגים שמסומנים quiet: נשמר בפעמון עכשיו, ה-Push יוצא ב-07:00 (מאוחד)
     const hold = t.quiet && !opts.noQuiet && isQuietHour_(now);
+    const old = opts.replaceLink && p.link ? sysRows_('notif').rows : null;
     users.forEach(function (e) {
-      const id = Utilities.getUuid().replace(/-/g, '').slice(0, 12);
-      sh.appendRow([id, String(now.getTime()), Utilities.formatDate(now, TZ_, 'dd/MM/yyyy HH:mm'), e, type, title, body, p.link || '', '']);
+      // אותו אירוע (למשל קליטה: ⏳ → ✅) – מעדכנים את השורה הקיימת, והיא חוזרת להיות "לא נקראה"
+      const at = old ? old.findIndex(function (r) { return String(r[3]).toLowerCase() === e && r[4] === type && r[7] === p.link; }) : -1;
+      const id = at >= 0 ? old[at][0] : Utilities.getUuid().replace(/-/g, '').slice(0, 12);
+      const row = [id, String(now.getTime()), Utilities.formatDate(now, TZ_, 'dd/MM/yyyy HH:mm'), e, type, title, body, p.link || '', ''];
+      if (at >= 0) sh.getRange(at + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
       dropNotifCache_(e);
       const n = { id: id, type: type, title: title, body: body, link: p.link || '' };
+      if (opts.noPush) return;
       if (hold) { queueQuiet_(e, n); return; }
       try { pushToUser_(e, n); } catch (err) { console.warn('push: ' + err); }
     });
@@ -181,7 +186,8 @@ function dropNotifCache_(email) {
 
 // ---------- פעולות לאפליקציה ----------
 function actionNotifications_(req, ctx) {
-  const role = ctx.realRole;
+  // שי: רק הסוגים של התפקיד שלה, ורק השורות שלה. "תצוגה כמו שי" – אותו סינון בדיוק.
+  const role = ctx.role;
   const types = typesForRole_(role);
   const cache = CacheService.getScriptCache();
   let list = null;
@@ -198,6 +204,7 @@ function actionNotifications_(req, ctx) {
   const mine = readNotifSettings_()[ctx.email] || {};
   const settings = {};
   types.forEach(function (k) { settings[k] = mine[k] !== false; });
+  if (role === 'admin') { try { list = onbNotifInfo_(list); } catch (e) { console.warn('onb notif: ' + e); } }
   return {
     items: list,
     unread: list.filter(function (n) { return !n.read; }).length,

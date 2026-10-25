@@ -64,6 +64,9 @@ function actionOnboard_(req, ctx) {
   const pend = onbPending_();
   pend.push(Object.assign({ rid: rid, at: Date.now(), rerun: !!req.rerun }, v));
   onbSavePending_(pend);
+  notify_('onboard', { title: '⏳ קליטה של ' + v.name + ' בתהליך' + (v.test ? ' (בדיקה)' : ''), text: v.test ? 'מצב בדיקה – בלי Wix ובלי קבצים' : v.track, link: onbLink_(rid) },
+    { noQuiet: true, noPush: true, replaceLink: true });
+  CacheService.getScriptCache().remove(ONB_INFO_CACHE_);
   return { rid: rid };
 }
 
@@ -105,7 +108,7 @@ function pollOnboard_() {
     const r = rows.filter(function (x) { return x.rid === p.rid; })[0];
     if (!r) {
       if (Date.now() - p.at < 15 * 60000) { keep.push(p); return; }
-      notify_('onboard', { title: '⚠️ קליטה של ' + p.name + ' – לא התקבלה תשובה מהטופס', text: 'בדקו בטלגרם / בגיליון התשובות', link: '#/onboard' }, { noQuiet: true });
+      notify_('onboard', { title: '⚠️ קליטה של ' + p.name + ' – לא התקבלה תשובה מהטופס', text: 'בדקו בטלגרם / בגיליון התשובות', link: onbLink_(p.rid) }, { noQuiet: true, noPush: true, replaceLink: true });
       return;
     }
     // מספר פגישות שונה מברירת המחדל של המסלול → מעדכנים C ו-D בתפעול (רק אם הסקריפט הוסיף עכשיו שורה חדשה)
@@ -114,10 +117,44 @@ function pollOnboard_() {
       try { note = onbSetPackage_(p.email, p.n); } catch (e) { note = ' · ⚠️ לא עדכנתי את מספר הפגישות: ' + e.message; }
     }
     const title = r.failed.length ? '⚠️ קליטה של ' + r.name + ' נכשלה בשלב ' + r.failed.join(', ') : '✅ ' + r.name + ' נקלט/ה' + (r.test ? ' (בדיקה)' : '');
-    notify_('onboard', { title: title, text: r.test ? 'מצב בדיקה – בלי Wix ובלי קבצים' : (r.track + note), link: '#/onboard' }, { noQuiet: true });
+    notify_('onboard', { title: title, text: r.test ? 'מצב בדיקה – בלי Wix ובלי קבצים' : (r.track + note), link: onbLink_(p.rid) }, { noQuiet: true, noPush: true, replaceLink: true });
     if (r.test) { try { FormApp.openById(getConfig_().onboardFormId).deleteResponse(p.rid); } catch (e) { /* */ } }
   });
   onbSavePending_(keep);
+  CacheService.getScriptCache().remove(ONB_INFO_CACHE_);
+}
+
+// ---------- קליטות בפעמון (ליאל בלבד): כל קליטה = פריט אחד, עם כפתור ווטסאפ / קובץ / הרצה חוזרת ----------
+const ONB_INFO_CACHE_ = 'onb_info_v1';
+function onbLink_(rid) { return '#/onb/' + rid; }
+/** מוסיף לכל התראת קליטה את מצב הקליטה מגיליון התשובות (נקרא פעם בדקה לכל היותר) */
+function onbNotifInfo_(list) {
+  if (!list.some(function (n) { return n.type === 'onboard'; })) return list;
+  const cache = CacheService.getScriptCache();
+  let rows = null;
+  const hit = cache.get(ONB_INFO_CACHE_);
+  if (hit) rows = JSON.parse(hit);
+  else {
+    rows = onbRows_().map(function (r) { return { rid: r.rid, name: r.name, email: r.email, track: r.track, test: r.test, failed: r.failed, wa: r.wa, fileUrl: r.fileUrl, errors: r.errors }; });
+    try { cache.put(ONB_INFO_CACHE_, JSON.stringify(rows), 60); } catch (e) { /* */ }
+  }
+  const pend = onbPending_();
+  return list.map(function (n) {
+    if (n.type !== 'onboard') return n;
+    const m = /^#\/onb\/(.+)$/.exec(n.link || '');
+    let r = null, p = null;
+    if (m) {
+      r = rows.filter(function (x) { return x.rid === m[1]; })[0] || null;
+      p = r ? null : pend.filter(function (x) { return x.rid === m[1]; })[0] || null;
+    } else {
+      // התראות מלפני השינוי (בלי מזהה): לפי השם שבכותרת – הקליטה האחרונה של אותו שם
+      r = rows.filter(function (x) { return x.name && String(n.title).indexOf(x.name) >= 0; })[0] || null;
+    }
+    if (!r && !p) return n;
+    const onb = r ? { rid: r.rid, name: r.name, test: r.test, failed: r.failed, wa: r.wa, fileUrl: r.fileUrl, errors: r.errors }
+      : { rid: p.rid, name: p.name, test: !!p.test, pending: true };
+    return Object.assign({}, n, { onb: onb });
+  });
 }
 
 function onbSetPackage_(email, n) {
