@@ -1970,16 +1970,7 @@
     const issues = (d.health && d.health.issues) || [];
     shell('תמונת מצב', `
       ${issues.map((x) => `<div class="health-warn">⚠️ ${esc(x)}</div>`).join('')}
-      <div class="section-title" style="margin-top:4px">לידים</div>
-      <div class="tiles">
-        <a class="card tile" href="#/leads" data-filter="s:ליד חדש"><div class="num">${L.newStatus}</div><div class="lbl">בסטטוס "ליד חדש"</div></a>
-        <a class="card tile ${L.untreated ? 'alert' : ''}" href="#/leads" data-filter="untreated"><div class="num">${L.untreated}</div><div class="lbl">לא טופלו יומיים+</div></a>
-      </div>
-      ${d.stage2 ? `<div class="section-title">מאמנים ופיננסים</div>
-      <div class="tiles">
-        <a class="card tile ${d.stage2.lowCoaches ? 'alert' : ''}" href="#/coaches" data-low="1"><div class="num">${d.stage2.lowCoaches}</div><div class="lbl">מאמנים עם 2 פגישות או פחות</div></a>
-        <a class="card tile ${d.stage2.review ? 'alert' : ''}" href="#/finance"><div class="num">${d.stage2.review}</div><div class="lbl">תנועות "לבדיקה"</div></a>
-      </div>` : ''}
+      ${remSectionHtml(d, 'home')}
 
       <div class="section-title">ממתינים – לחזור אליהם אחרי פגישה (${(L.waiting || []).length})</div>
       ${(L.waiting || []).length ? `<div class="mlist">${L.waiting.map((w) => `
@@ -2010,6 +2001,7 @@
           <div class="muted small">${ils(Math.round(F.month.expensesNet))} אחרי מע״מ · עד העדכון האחרון</div></div>` : ''}
       </div>`}
     `);
+    bindReminders();
     // לחיצה ארוכה על הכותרת → מסך בדיקות נסתר
     const h1 = $app.querySelector('.topbar h1');
     let lp = null;
@@ -2491,102 +2483,147 @@
       .catch((e) => { debtUndo[key] = it; setDebtCleared(key, true); redrawStage2(); toast('לא בוצע: ' + e.message, true); });
   }
 
-  // ---------- תזכורות (ליאל בלבד, בפיננסים) ----------
+  // ---------- תזכורות: בפיננסים (ליאל) ובבית (אישית לכל משתמש) ----------
   // ידניות בלבד. נשמרות בלשונית מערכת מוסתרת. כל פעולה – בתור השמירות וב-↶/↷.
+  // scope: 'fin' = פיננסים (תאריך; התראה יום לפני ב-15:00) · 'home' = בית (תאריך ו/או שעה)
   const REM_ACTIVE = 'פעיל';
-  function remSorted(list) {
+  const REM_STORE = { fin: 'finance', home: 'home' };
+  const remIso = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  /** מתי ההתראה (כמו בשרת) – למיון ולסימון אדום מיידי */
+  function remFireLocal(r, scope) {
+    if (!r.date) return null;
+    const [y, m, d] = r.date.split('-').map(Number);
+    if (scope === 'home' && r.time) { const [hh, mm] = r.time.split(':').map(Number); return new Date(y, m - 1, d, hh, mm).getTime(); }
+    return new Date(y, m - 1, d - 1, scope === 'home' ? 18 : 15, 0).getTime();
+  }
+  function remSorted(list, scope) {
+    if (scope === 'home') {   // הקרוב ביותר בזמן למעלה; בלי מועד – בסוף (החדשה ראשונה)
+      const t = (r) => (r.fireAt != null ? r.fireAt : remFireLocal(r, scope));
+      const withT = list.filter((r) => t(r) != null).sort((a, b) => t(a) - t(b));
+      const noT = list.filter((r) => t(r) == null).sort((a, b) => (b.created || 0) - (a.created || 0));
+      return withT.concat(noT);
+    }
     const withD = list.filter((r) => r.date).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (b.created || 0) - (a.created || 0)));
     const noD = list.filter((r) => !r.date).sort((a, b) => (b.created || 0) - (a.created || 0));
     return withD.concat(noD);
   }
-  function remSectionHtml(d) {
-    const list = remSorted(d.reminders || []);
+  function remSectionHtml(d, scope) {
+    scope = scope || 'fin';
+    const list = remSorted(d.reminders || [], scope);
     const today = isoToday();
     return `<div class="row" style="margin:14px 0 6px;align-items:center">
         <div class="section-title grow" style="margin:0">תזכורות${list.length ? ` (${list.length})` : ''}</div>
-        <button class="btn small secondary" data-act="rem-add">＋ תזכורת</button>
+        <button class="btn small secondary" data-act="rem-add" data-scope="${scope}">＋ תזכורת</button>
       </div>
-      <div class="rem-list">${list.length ? list.map((r) => `
-        <div class="rem-swipe ${r.alerted ? 'alerted' : ''}" data-rem="${esc(r.id)}">
+      <div class="rem-list">${list.length ? list.map((r) => {
+        const past = r.date && r.date < today && !r.alerted;
+        return `
+        <div class="rem-swipe ${r.alerted ? 'alerted' : ''}" data-rem="${esc(r.id)}" data-scope="${scope}">
           <button type="button" class="rem-del-bg" data-rem-del tabindex="-1">מחק</button>
           <div class="rem-row">
-            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${r.date < today && !r.alerted ? 'past' : ''}">${esc(fmtIso(r.date))}${r.date < today && !r.alerted ? ' · עבר' : ''}</div>` : ''}</div>
+            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${past ? 'past' : ''}">${esc(fmtIso(r.date))}${r.time ? ' · ' + esc(r.time) : ''}${past ? ' · עבר' : ''}</div>` : ''}</div>
             <button type="button" class="rem-btn rem-hover-del" data-rem-del aria-label="מחיקה" title="מחיקה">🗑</button>
             <button type="button" class="rem-btn" data-rem-edit aria-label="עריכה" title="עריכה">✎</button>
             <button type="button" class="rem-btn" data-rem-done aria-label="בוצע" title="בוצע">✓</button>
           </div>
-        </div>`).join('') : '<div class="muted small">אין תזכורות</div>'}</div>`;
+        </div>`;
+      }).join('') : '<div class="muted small">אין תזכורות</div>'}</div>`;
   }
-  function remFind(id) { const d = store.get('finance'); return d && (d.reminders || []).find((r) => r.id === id); }
-  function remStateOf(r) { return r ? { text: r.text, date: r.date || '', status: REM_ACTIVE } : null; }
+  function remFind(id, scope) { const d = store.get(REM_STORE[scope || 'fin']); return d && (d.reminders || []).find((r) => r.id === id); }
+  function remStateOf(r) { return r ? { text: r.text, date: r.date || '', time: r.time || '', status: REM_ACTIVE } : null; }
   /** מחיל מצב של תזכורת במסך (null / לא פעיל = יורדת מהרשימה) */
-  function remApply(id, st) {
-    patchStore('finance', (d) => {
+  function remApply(id, st, scope) {
+    scope = scope || 'fin';
+    patchStore(REM_STORE[scope], (d) => {
       d.reminders = d.reminders || [];
       const i = d.reminders.findIndex((r) => r.id === id);
       if (!st || st.status !== REM_ACTIVE) { if (i >= 0) d.reminders.splice(i, 1); return; }
-      if (i >= 0) { const r = d.reminders[i]; if (r.date !== st.date) r.alerted = false; Object.assign(r, { text: st.text, date: st.date }); }
-      else d.reminders.push({ id, text: st.text, date: st.date, created: Date.now() });
+      let r = d.reminders[i];
+      if (!r) { r = { id, created: Date.now() }; d.reminders.push(r); }
+      if (r.date !== st.date || (r.time || '') !== (st.time || '')) r.alerted = false;
+      Object.assign(r, { text: st.text, date: st.date, time: st.time || '' });
+      r.fireAt = remFireLocal(r, scope);
+      // בבית: תזכורת שזמנה כבר עבר – אדומה מיד (בלי Push)
+      if (scope === 'home' && r.fireAt != null && r.fireAt <= Date.now()) r.alerted = true;
     });
   }
   function remLocal(e) {
-    remApply(e.id, e.before);
-    return { back: { kind: 'rem', id: e.id, before: e.after, after: e.before, desc: e.desc } };
+    remApply(e.id, e.before, e.scope);
+    return { back: { kind: 'rem', id: e.id, scope: e.scope, before: e.after, after: e.before, desc: e.desc } };
   }
   /** פעולה על תזכורת: מיד במסך, ↶ מקומי, ובשרת דרך התור (לפי הסדר, כמו ↶/↷) */
-  function remOp(action, params, id, before, after, desc) {
-    const entry = { kind: 'rem', id, before, after, desc };
-    remApply(id, after); redrawStage2();
+  function remOp(action, params, id, before, after, desc, scope) {
+    scope = scope || 'fin';
+    const entry = { kind: 'rem', id, scope, before, after, desc };
+    remApply(id, after, scope); redrawStage2(); if (scope === 'home') redrawHome();
     pushUndoLocal(entry); clearRedoLocal();
     state.undoCount++; state.redoCount = 0; updateUndoBtn();
     const opId = newOpId();
-    obAdd({ opId, action, desc: desc + ' – ' + String((after || before || {}).text || '').slice(0, 40), at: Date.now(), params: Object.assign({}, params, { opId }) });
+    const p = Object.assign({}, params, { opId }, scope === 'home' ? { list: 'home' } : {});
+    obAdd({ opId, action, desc: desc + ' – ' + String((after || before || {}).text || '').slice(0, 40), at: Date.now(), params: p });
     syncStart();
     undoChain = undoChain.then(async () => {
       try {
-        const d = await api(action, Object.assign({}, params, { opId }));
+        const d = await api(action, p);
         obRemove(opId); syncUndoCounts(d);
-        // אם ההתראה יצאה כבר בשמירה (זמנה עבר) – השורה הופכת לאדומה
-        if (d.reminder && d.reminder.alerted) { patchStore('finance', (f) => { const r = (f.reminders || []).find((x) => x.id === d.reminder.id); if (r) r.alerted = true; }); redrawStage2(); }
+        // התשובה מהשרת: התאריך שחושב (שעה בלי תאריך) ואם ההתראה כבר יצאה/עבר הזמן – אדום
+        if (d.reminder) {
+          patchStore(REM_STORE[scope], (f) => { const r = (f.reminders || []).find((x) => x.id === d.reminder.id); if (r) Object.assign(r, { date: d.reminder.date, time: d.reminder.time || '', fireAt: d.reminder.fireAt, alerted: !!d.reminder.alerted }); });
+          redrawStage2(); if (scope === 'home') redrawHome();
+        }
       } catch (e) {
         if (e.code !== 'AUTH') obRemove(opId);
         dropUndoLocal(entry); state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
-        remApply(id, before); redrawStage2();
+        remApply(id, before, scope); redrawStage2(); if (scope === 'home') redrawHome();
         if (e.code !== 'AUTH') toast('לא נשמר – ' + e.message, true);
       } finally { syncEnd(); }
     });
   }
-  function remDelete(id) {
-    const r = remFind(id); if (!r) return;
-    remOp('reminderSet', { id, op: 'delete' }, id, remStateOf(r), Object.assign(remStateOf(r), { status: 'נמחק' }), 'מחיקת תזכורת');
+  function redrawHome() { if (location.hash === '#/home' && store.get('home') && !isEditing()) renderHome(store.get('home')); }
+  function remDelete(id, scope) {
+    const r = remFind(id, scope); if (!r) return;
+    remOp('reminderSet', { id, op: 'delete' }, id, remStateOf(r), Object.assign(remStateOf(r), { status: 'נמחק' }), 'מחיקת תזכורת', scope);
     toast('נמחק · ↶ לביטול');
   }
-  function remDone(id) {
-    const r = remFind(id); if (!r) return;
-    remOp('reminderSet', { id, op: 'done' }, id, remStateOf(r), Object.assign(remStateOf(r), { status: 'בוצע' }), 'תזכורת בוצעה');
+  function remDone(id, scope) {
+    const r = remFind(id, scope); if (!r) return;
+    remOp('reminderSet', { id, op: 'done' }, id, remStateOf(r), Object.assign(remStateOf(r), { status: 'בוצע' }), 'תזכורת בוצעה', scope);
     toast('✓ בוצע · ↶ לביטול');
   }
-  function openReminder(id) {
-    const r = id ? remFind(id) : null;
+  function openReminder(id, scope) {
+    scope = scope || 'fin';
+    const home = scope === 'home';
+    const r = id ? remFind(id, scope) : null;
     const sh = openSheet(`
       <div class="row"><b class="grow">${r ? 'עריכת תזכורת' : 'תזכורת חדשה'}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
-      <div class="field"><label for="rm-text">מה לזכור</label><textarea id="rm-text" rows="3" placeholder="למשל: לגבות מדנה את התשלום השני">${r ? esc(r.text) : ''}</textarea></div>
-      <div class="field"><label for="rm-date">תאריך (רשות)</label><input id="rm-date" type="date" value="${r ? esc(r.date || '') : ''}"></div>
-      <div class="muted small">עם תאריך – תגיע התראה יום לפני ב-15:00.</div>
+      <div class="field"><label for="rm-text">מה לזכור</label><textarea id="rm-text" rows="3" placeholder="${home ? 'למשל: להתקשר לרון' : 'למשל: לגבות מדנה את התשלום השני'}">${r ? esc(r.text) : ''}</textarea></div>
+      <div class="row">
+        <div class="field grow"><label for="rm-date">תאריך (רשות)</label><input id="rm-date" type="date" value="${r ? esc(r.date || '') : ''}"></div>
+        ${home ? `<div class="field grow"><label for="rm-time">שעה (רשות)</label><input id="rm-time" type="time" value="${r ? esc(r.time || '') : ''}"></div>` : ''}
+      </div>
+      <div class="muted small">${home ? 'עם שעה – התראה בדיוק בשעה הזו (גם בלילה). שעה בלי תאריך – הפעם הבאה שהשעה מגיעה. תאריך בלי שעה – ערב לפני ב-18:00.' : 'עם תאריך – תגיע התראה יום לפני ב-15:00.'}</div>
       <div class="notice small" id="rm-warn" hidden></div>
       <button class="btn" data-save>${r ? 'שמירה' : 'הוספה'}</button>`);
     const $ = (q) => sh.el.querySelector(q);
     setTimeout(() => $('#rm-text').focus(), 50);
     $('[data-save]').onclick = () => {
-      const text = $('#rm-text').value.trim(), date = $('#rm-date').value;
+      const text = $('#rm-text').value.trim();
+      let date = $('#rm-date').value;
+      const time = home ? $('#rm-time').value : '';
       if (!text) { const w = $('#rm-warn'); w.hidden = false; w.textContent = 'חסר טקסט'; return; }
+      // שעה בלי תאריך: היום אם השעה עוד לא עברה, אחרת מחר (כמו בשרת)
+      if (time && !date) {
+        const [hh, mm] = time.split(':').map(Number);
+        const t = new Date(); t.setHours(hh, mm, 0, 0);
+        date = remIso(t.getTime() > Date.now() ? t : new Date(t.getTime() + 864e5));
+      }
       sh.close();
       if (r) {
-        if (text === r.text && date === (r.date || '')) return;
-        remOp('reminderSave', { id: r.id, text, date }, r.id, remStateOf(r), { text, date, status: REM_ACTIVE }, 'עריכת תזכורת');
+        if (text === r.text && date === (r.date || '') && time === (r.time || '')) return;
+        remOp('reminderSave', { id: r.id, text, date, time }, r.id, remStateOf(r), { text, date, time, status: REM_ACTIVE }, 'עריכת תזכורת', scope);
       } else {
         const nid = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-        remOp('reminderSave', { newId: nid, text, date }, nid, null, { text, date, status: REM_ACTIVE }, 'תזכורת חדשה');
+        remOp('reminderSave', { newId: nid, text, date, time }, nid, null, { text, date, time, status: REM_ACTIVE }, 'תזכורת חדשה', scope);
       }
     };
   }
@@ -2596,13 +2633,13 @@
   function remClose(el) { if (!el) return; const row = el.querySelector('.rem-row'); row.style.transition = 'transform .2s'; row.style.transform = ''; el.classList.remove('open'); if (remOpenEl === el) remOpenEl = null; }
   document.addEventListener('touchstart', (e) => { if (remOpenEl && !remOpenEl.contains(e.target)) remClose(remOpenEl); }, { passive: true });
   function bindReminders() {
-    const add = $app.querySelector('[data-act="rem-add"]'); if (add) add.onclick = () => openReminder(null);
+    $app.querySelectorAll('[data-act="rem-add"]').forEach((b) => { b.onclick = () => openReminder(null, b.dataset.scope); });
     $app.querySelectorAll('.rem-swipe').forEach((el) => {
-      const id = el.dataset.rem;
+      const id = el.dataset.rem, scope = el.dataset.scope || 'fin';
       const row = el.querySelector('.rem-row');
-      el.querySelector('[data-rem-edit]').onclick = () => openReminder(id);
-      el.querySelector('[data-rem-done]').onclick = () => remDone(id);
-      el.querySelectorAll('[data-rem-del]').forEach((b) => { b.onclick = () => remDelete(id); });
+      el.querySelector('[data-rem-edit]').onclick = () => openReminder(id, scope);
+      el.querySelector('[data-rem-done]').onclick = () => remDone(id, scope);
+      el.querySelectorAll('[data-rem-del]').forEach((b) => { b.onclick = () => remDelete(id, scope); });
       // בעברית "מחק" בצד שמאל → גוררים ימינה (כמו באייפון בעברית)
       let x0 = 0, y0 = 0, base = 0, dx = 0, mode = '';
       row.addEventListener('touchstart', (e) => {
@@ -2622,7 +2659,7 @@
         row.style.transition = 'transform .2s';
         if (dx > el.offsetWidth * 0.6) {   // החלקה מלאה – מוחק מיד
           row.style.transform = `translateX(${el.offsetWidth}px)`;
-          setTimeout(() => remDelete(id), 160);
+          setTimeout(() => remDelete(id, scope), 160);
         } else if (dx > REM_BTN_W / 2) {
           if (remOpenEl && remOpenEl !== el) remClose(remOpenEl);
           row.style.transform = `translateX(${REM_BTN_W}px)`; el.classList.add('open'); remOpenEl = el;

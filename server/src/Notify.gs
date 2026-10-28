@@ -375,6 +375,8 @@ function watchNewLeads() {
   const h = Number(Utilities.formatDate(new Date(), TZ_, 'H'));
   if (h >= 23 || h < 7) {
     const c = CacheService.getScriptCache();
+    // תזכורות עם שעה – גם בלילה, בתוך דקה (בדיקה זולה מהזיכרון)
+    try { remWatch_(); } catch (e) { console.warn('reminders: ' + e); }
     if (Number(c.get('watch_night') || 0) > Date.now() - 9.5 * 60000) return;
     c.put('watch_night', String(Date.now()), 1800);
   }

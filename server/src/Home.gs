@@ -26,6 +26,7 @@ function actionHome_(req, ctx) {
         .sort(function (a, b) { return (a.date || '9999') < (b.date || '9999') ? -1 : 1; }),
     },
     zoomAlerts: readJsonProp_(ZOOM_ALERTS_KEY_, []).length,
+    reminders: (function () { try { return remList_('home', ctx.email); } catch (e) { console.warn('home reminders: ' + e); return []; } })(),
     health: healthCheck_(),
     stage2: finHomeCounts_(),
     fin: null,
