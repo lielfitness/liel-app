@@ -114,5 +114,6 @@ function usageDump_() {
   const finMs = fin && fin.day === s.day ? fin.ms || 0 : 0;
   sysTab_('usage').appendRow([Utilities.formatDate(new Date(), TZ_, 'dd/MM HH:mm'), Math.round((s.ms || 0) / 6000) / 10, Math.round(finMs / 6000) / 10,
     fmt(by.watch), (s.quick || 0) + ' יצאו מוקדם', fmt(by.zoom), fmt(by.edit), ph,
-    Object.keys(finBy).map(function (k) { return k + ': ' + fmt(finBy[k]); }).join(' | '), s.prev ? s.prev.day + ': ' + Math.round(s.prev.ms / 6000) / 10 + ' דק׳' : '']);
+    Object.keys(finBy).map(function (k) { return k + ': ' + fmt(finBy[k]); }).join(' | '), (s.prev ? s.prev.day + ': אפליקציה ' + Math.round(s.prev.ms / 6000) / 10 + ' דק׳' : '') +
+      (fin && fin.prev ? ' · פיננסים ' + fin.prev.day + ': ' + Math.round(fin.prev.ms / 6000) / 10 + ' דק׳' : '')]);
 }
