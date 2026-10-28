@@ -67,6 +67,7 @@ function actionOnboard_(req, ctx) {
   notify_('onboard', { title: '⏳ קליטה של ' + v.name + ' בתהליך' + (v.test ? ' (בדיקה)' : ''), text: v.test ? 'מצב בדיקה – בלי Wix ובלי קבצים' : v.track, link: onbLink_(rid) },
     { noQuiet: true, noPush: true, replaceLink: true });
   CacheService.getScriptCache().remove(ONB_INFO_CACHE_);
+  CacheService.getScriptCache().put('onb_hot', '1', 1800);   // בזמן שהקליטה רצה – הבדיקה של כל דקה מושכת את הסטטוס כל דקה
   return { rid: rid };
 }
 
@@ -121,6 +122,7 @@ function pollOnboard_() {
     if (r.test) { try { FormApp.openById(getConfig_().onboardFormId).deleteResponse(p.rid); } catch (e) { /* */ } }
   });
   onbSavePending_(keep);
+  if (!keep.length) CacheService.getScriptCache().remove('onb_hot');
   CacheService.getScriptCache().remove(ONB_INFO_CACHE_);
 }
 

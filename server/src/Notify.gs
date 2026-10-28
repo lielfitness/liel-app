@@ -381,17 +381,34 @@ function watchNewLeads() {
     c.put('watch_night', String(Date.now()), 1800);
   }
   try {
-    step_('quiet', flushQuiet_);
-    step_('coachDaily', dailyCoachCheck_);
-    step_('onboard', pollOnboard_);
-    step_('perf', flushPerf_);
-    step_('rewards', runRewardQueue_);
-    step_('gap', function () { computeCoachGap_(false); });
-    step_('ghost', function () { ghostReconcile_(false); });
+    // כל דקה: לידים חדשים ותזכורות. קליטות – כל דקה רק בזמן שקליטה רצה. השאר – כל 5 דקות (גיבוי), המדידות – כל 10.
+    const due = watchDue_();
+    if (due.five) {
+      step_('quiet', flushQuiet_);
+      step_('coachDaily', dailyCoachCheck_);
+      step_('rewards', runRewardQueue_);   // גיבוי בלבד – הבונוס מחושב כבר בשמירה עצמה ובעריכה בגיליון
+      step_('gap', function () { computeCoachGap_(false); });
+      step_('ghost', function () { ghostReconcile_(false); });
+      step_('usage', usageDump_);
+    }
+    if (due.five || due.onb) step_('onboard', pollOnboard_);
+    if (due.ten) step_('perf', flushPerf_);
     step_('reminders', remWatch_);
-    step_('usage', usageDump_);
     return step_('leads', function () { return watchNewLeadsCore_(t0); });
   } finally { trackRun_('watch', t0); }
+}
+
+/** מה הגיע הזמן להריץ בבדיקה הזו (לפי זמנים ב-cache – לא תלוי בדקה המדויקת שבה הטריגר רץ) */
+function watchDue_() {
+  const c = CacheService.getScriptCache();
+  const v = c.getAll(['wd_5', 'wd_10', 'onb_hot']);
+  const now = Date.now();
+  const out = { five: !(Number(v.wd_5 || 0) > now - 4.5 * 60000), ten: !(Number(v.wd_10 || 0) > now - 9.5 * 60000), onb: !!v.onb_hot };
+  const put = {};
+  if (out.five) put.wd_5 = String(now);
+  if (out.ten) put.wd_10 = String(now);
+  if (Object.keys(put).length) c.putAll(put, 1800);
+  return out;
 }
 
 /** פעם ביום מ-09:00: מאמן שנשארה לו פגישה אחרונה / שהליווי שלו הסתיים מאז הבדיקה הקודמת */

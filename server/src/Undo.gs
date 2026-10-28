@@ -237,6 +237,7 @@ function undoRedo_(req, ctx, from, to, verb) {
   opMark_(req, { done: out.done, message: out.message, lead: out.lead || null });   // התוצאה האמיתית – לשליחה חוזרת
   out.undoCount = undoCount_(ctx.email);   // מהזיכרון של הבקשה – בלי קריאה נוספת
   out.redoCount = redoCount_(ctx.email);
+  try { runRewardQueue_(); } catch (e) { console.warn('rewards: ' + e); }   // הבונוס – מיד, גם ב-↶/↷
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;

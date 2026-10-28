@@ -470,6 +470,8 @@ function actionUpdateLead_(req, ctx) {
   if (dup) return opDupOut_(dup, ctx);
   const out = { lead: result.out, ghost: ghost, reward: reward, undoCount: result.undoCount != null ? result.undoCount : undoCount_(ctx.email), redoCount: 0 };
   opMark_(req, { lead: out.lead });
+  // הבונוס (S) – מחושב עכשיו, באותה שמירה (הבדיקה של כל 5 דקות היא רק גיבוי)
+  try { runRewardQueue_(); phase_('rewards'); } catch (e) { console.warn('rewards: ' + e); }
   phase_('build');
   if (req.debug) out.phases = PHASES_;
   return out;
