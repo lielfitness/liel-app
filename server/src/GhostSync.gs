@@ -65,7 +65,7 @@ function ghostSyncLead_(cfg, lead) {
 function ghostReconcile_(force) {
   const props = PropertiesService.getScriptProperties();
   const lastRun = Number(props.getProperty('GHOST_SYNC_AT') || 0);
-  if (!force && Date.now() - lastRun < 60 * 60000) return null;
+  if (!force && Date.now() - lastRun < 6 * 60 * 60000) return null;   // גיבוי כל 6 שעות – בזמן אמת זה קורה בעריכה ובאפליקציה
   props.setProperty('GHOST_SYNC_AT', String(Date.now()));
   const cfg = getConfig_();
   const res = { added: 0, marked: 0, unmarked: 0 };

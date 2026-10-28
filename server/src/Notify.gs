@@ -38,6 +38,7 @@ const SYS_TABS_ = {
   anomClear: { name: 'חריגים שנוקו', head: ['פריט', 'נוקה בתאריך'] },
   gapClear:  { name: 'מאמנים שנוקו (3 שבועות)', head: ['מאמן|פגישה אחרונה', 'נוקה בתאריך', 'מאמן'] },
   sent:      { name: 'התראות שנשלחו', head: ['מזהה', 'נשלח בתאריך'] },
+  usage:     { name: 'שימוש טריגרים', head: ['שעה', 'אפליקציה היום (דק׳)', 'פיננסים היום (דק׳)', 'בדיקת לידים (כל דקה)', 'יציאה מוקדמת', 'סריקת זומים', 'עריכה בגיליון', 'פילוח הבדיקה של כל דקה', 'פיננסים – פילוח', 'יום קודם'] },
 };
 const NOTIF_KEEP_DAYS_ = 60;
 const NOTIF_LIST_MAX_ = 60;
@@ -369,16 +370,24 @@ function watchKey_(l) {
 
 function watchNewLeads() {
   const t0 = Date.now();
+  // שעות שקט (23:00–07:00): בודקים פעם ב-10 דקות במקום כל דקה (חוסך מכסת טריגרים). הלידים מהלילה נכנסים כרגיל.
+  const h = Number(Utilities.formatDate(new Date(), TZ_, 'H'));
+  if (h >= 23 || h < 7) {
+    const c = CacheService.getScriptCache();
+    if (Number(c.get('watch_night') || 0) > Date.now() - 9.5 * 60000) return;
+    c.put('watch_night', String(Date.now()), 1800);
+  }
   try {
-    try { flushQuiet_(); } catch (e) { console.warn('quiet: ' + e); }
-    try { dailyCoachCheck_(); } catch (e) { console.warn('coaches: ' + e); }
-    try { pollOnboard_(); } catch (e) { console.warn('onboard: ' + e); }
-    try { flushPerf_(); } catch (e) { console.warn('perf: ' + e); }
-    try { runRewardQueue_(); } catch (e) { console.warn('rewards: ' + e); }
-    try { computeCoachGap_(false); } catch (e) { console.warn('gap: ' + e); }
-    try { ghostReconcile_(false); } catch (e) { console.warn('ghost sync: ' + e); }
-    try { remWatch_(); } catch (e) { console.warn('reminders: ' + e); }
-    return watchNewLeadsCore_(t0);
+    step_('quiet', flushQuiet_);
+    step_('coachDaily', dailyCoachCheck_);
+    step_('onboard', pollOnboard_);
+    step_('perf', flushPerf_);
+    step_('rewards', runRewardQueue_);
+    step_('gap', function () { computeCoachGap_(false); });
+    step_('ghost', function () { ghostReconcile_(false); });
+    step_('reminders', remWatch_);
+    step_('usage', usageDump_);
+    return step_('leads', function () { return watchNewLeadsCore_(t0); });
   } finally { trackRun_('watch', t0); }
 }
 
@@ -433,19 +442,24 @@ function watchNewLeadsCore_(t0) {
   const cfg = getConfig_();
   const props = PropertiesService.getScriptProperties();
   // בדיקה קלה: רק עמודות שם+טלפון. אם לא השתנה כלום – יוצאים.
+  // רק סוף הגיליון (לידים חדשים נוספים בסוף): השורה האחרונה הידועה ועוד 30 אחריה. השתנה משהו – קריאה מלאה.
   let sig = null;
-  try {
-    const v = Sheets.Spreadsheets.Values.get(cfg.leadsSheetId, "'" + LEADS_TAB_ + "'!B2:C").values || [];
-    sig = v.length + '|' + JSON.stringify(v[v.length - 1] || []);
-  } catch (e) { /* בלי Sheets API – קוראים הכל */ }
   const st = readJsonProp_(WATCH_PROP_, null);
-  if (st && sig && st.sig === sig) { watchStats_(t0, false); return; }
+  const lastRow = st && st.lastRow ? st.lastRow : 0;
+  try {
+    const from = lastRow ? Math.max(2, lastRow - 1) : 2;
+    const v = Sheets.Spreadsheets.Values.get(cfg.leadsSheetId, "'" + LEADS_TAB_ + "'!B" + from + ":C" + (lastRow ? lastRow + 30 : '')).values || [];
+    sig = 't' + from + ':' + v.length + '|' + JSON.stringify(v[v.length - 1] || []);
+  } catch (e) { /* בלי Sheets API – קוראים הכל */ }
+  if (st && sig && st.sig === sig) { WATCH_PH_.noChange = 1; return; }
 
   const leads = readLeads_(cfg).leads.filter(function (l) { return l.name || l.phone; });
   const tail = leads.slice(-WATCH_TAIL_);
   const keys = tail.map(watchKey_);
+  const newLast = leads.length ? leads[leads.length - 1].row : 1;
+  if (newLast !== lastRow) sig = watchSig_(cfg, newLast);   // החתימה – לפי המיקום החדש של סוף הגיליון
   if (!st) {   // הפעלה ראשונה: רק רושמים את מה שקיים – בלי מבול התראות
-    writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys });
+    writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys, lastRow: newLast });
     watchStats_(t0, true);
     return;
   }
@@ -455,7 +469,7 @@ function watchNewLeadsCore_(t0) {
   const fresh = tail.filter(function (l, i) {
     return !seen[keys[i]] && !/^ידני/.test(String(l.ad || '')) && (!l.entry || l.entry >= since);
   });
-  writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys });
+  writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys, lastRow: newLast });
   const todo = fresh.filter(function (l) { return claimLeadNotice_(watchKey_(l)); });
   if (todo.length > 5) {
     notify_('lead_new', { title: '🎯 ' + todo.length + ' לידים חדשים', link: '#/leads' });
@@ -465,6 +479,14 @@ function watchNewLeadsCore_(t0) {
   if (fresh.length) invalidateLeads_();
   watchStats_(t0, true);
   pruneNotifs_();
+}
+
+function watchSig_(cfg, lastRow) {
+  try {
+    const from = Math.max(2, lastRow - 1);
+    const v = Sheets.Spreadsheets.Values.get(cfg.leadsSheetId, "'" + LEADS_TAB_ + "'!B" + from + ":C" + (lastRow + 30)).values || [];
+    return 't' + from + ':' + v.length + '|' + JSON.stringify(v[v.length - 1] || []);
+  } catch (e) { return null; }
 }
 
 /** כמה זמן לוקחת הבדיקה – כדי לוודא שלא מתקרבים למכסה היומית של גוגל (90 דק׳ לטריגרים). */

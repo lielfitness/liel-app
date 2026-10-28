@@ -4,6 +4,15 @@
  */
 const RUN_LABELS_ = { zoom: 'סריקת זומים', watch: 'בדיקת לידים חדשים', edit: 'עריכה בגיליון' };
 const QUOTA_MIN_ = 90, QUOTA_WARN_MIN_ = 60;
+const FIN_LABELS_ = { ccHourly: 'קארדקום (כל שעה)', snapshot: 'מעקב ביטולים (כל שעה)', ccWatch: 'סיכום לטלגרם (כל 15 דק׳)', weeklyRun: 'הורדת פגישות' };
+
+// זמן כל שלב בבדיקה של כל דקה (לפילוח הצריכה)
+let WATCH_PH_ = {};
+function step_(name, fn) {
+  const t = Date.now();
+  try { return fn(); } catch (e) { console.warn(name + ': ' + e); }
+  finally { WATCH_PH_[name] = (WATCH_PH_[name] || 0) + (Date.now() - t); }
+}
 
 function trackRun_(name, t0) {
   try {
@@ -11,13 +20,19 @@ function trackRun_(name, t0) {
     const day = Utilities.formatDate(new Date(), TZ_, 'yyyy-MM-dd');
     if (s.day !== day) {
       if (s.day) s.prev = { day: s.day, ms: s.ms };
-      s.day = day; s.ms = 0; s.by = {};
+      s.day = day; s.ms = 0; s.by = {}; s.ph = {}; s.quick = 0;
     }
     const ms = Date.now() - t0;
     s.ms = (s.ms || 0) + ms;
     s.by = s.by || {};
     const b = s.by[name] || (s.by[name] = { runs: 0, ms: 0 });
     b.runs++; b.ms += ms;
+    if (name === 'watch') {
+      if (!s.ph) { s.ph = {}; s.phSince = Utilities.formatDate(new Date(), TZ_, 'HH:mm'); }
+      Object.keys(WATCH_PH_).forEach(function (k) { if (k !== 'noChange') s.ph[k] = (s.ph[k] || 0) + WATCH_PH_[k]; });
+      if (WATCH_PH_.noChange) s.quick = (s.quick || 0) + 1;
+      WATCH_PH_ = {};
+    }
     s.last = s.last || {};
     s.last[name] = Date.now();
     writeJsonProp_('RUN_STATS', s);
@@ -29,7 +44,10 @@ function healthCheck_() {
   const props = PropertiesService.getScriptProperties();
   const s = readJsonProp_('RUN_STATS', {});
   const today = Utilities.formatDate(new Date(), TZ_, 'yyyy-MM-dd');
-  const usedMin = s.day === today ? (s.ms || 0) / 60000 : 0;
+  // כולל את הסקריפט של הפיננסים – אותו חשבון, אותה מכסה (נקרא פעם בשעה מה-Web App שלו)
+  const fin = readJsonProp_('FIN_USAGE', null);
+  const finMs = fin && fin.day === today ? fin.ms || 0 : 0;
+  const usedMin = ((s.day === today ? s.ms || 0 : 0) + finMs) / 60000;
   const triggers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   const watchMin = Number(props.getProperty('WATCH_MINUTES') || 1);
   const last = s.last || {};
@@ -64,7 +82,31 @@ function healthCheck_() {
       runs: Object.keys(RUN_LABELS_).map(function (k) {
         const b = by[k] || { runs: 0, ms: 0 };
         return { k: k, label: RUN_LABELS_[k], runs: b.runs, avgMs: b.runs ? Math.round(b.ms / b.runs) : 0, totalMin: Math.round(b.ms / 6000) / 10, last: last[k] || null };
-      }),
+      }).concat(Object.keys(fin && fin.day === today ? fin.by || {} : {}).map(function (k) {
+        const b = fin.by[k];
+        return { k: 'fin:' + k, label: 'פיננסים – ' + (FIN_LABELS_[k] || k), runs: b.runs, avgMs: b.runs ? Math.round(b.ms / b.runs) : 0, totalMin: Math.round(b.ms / 6000) / 10, last: null };
+      })),
     },
   };
+}
+
+// ---------- פעם בשעה: שורה בלשונית "שימוש טריגרים" בגיליון המערכת (לבדיקה ולמעקב) ----------
+// כולל את הסקריפט של הפיננסים (אותו חשבון = אותה מכסה של 90 דק׳), שמדווח את הזמן שלו דרך ה-Web App שלו.
+function usageDump_() {
+  const props = PropertiesService.getScriptProperties();
+  const hour = Utilities.formatDate(new Date(), TZ_, 'yyyy-MM-dd HH');
+  if (props.getProperty('USAGE_HOUR') === hour) return;
+  props.setProperty('USAGE_HOUR', hour);
+  let fin = null;
+  try { fin = finCall_('usage'); writeJsonProp_('FIN_USAGE', fin); } catch (e) { console.warn('fin usage: ' + e); }
+  const s = readJsonProp_('RUN_STATS', {});
+  const by = s.by || {};
+  const fmt = function (b) { return b ? b.runs + ' ריצות · ממוצע ' + (b.runs ? Math.round(b.ms / b.runs) : 0) + 'ms · ' + Math.round(b.ms / 6000) / 10 + ' דק׳' : '—'; };
+  const ph = Object.keys(s.ph || {}).sort(function (a, b) { return s.ph[b] - s.ph[a]; })
+    .map(function (k) { return k + ' ' + Math.round(s.ph[k] / 100) / 10 + 'ש׳'; }).join(' · ') + ' (מאז ' + (s.phSince || '?') + ')';
+  const finBy = fin && fin.day === s.day ? fin.by || {} : {};
+  const finMs = fin && fin.day === s.day ? fin.ms || 0 : 0;
+  sysTab_('usage').appendRow([Utilities.formatDate(new Date(), TZ_, 'dd/MM HH:mm'), Math.round((s.ms || 0) / 6000) / 10, Math.round(finMs / 6000) / 10,
+    fmt(by.watch), (s.quick || 0) + ' יצאו מוקדם', fmt(by.zoom), fmt(by.edit), ph,
+    Object.keys(finBy).map(function (k) { return k + ': ' + fmt(finBy[k]); }).join(' | '), s.prev ? s.prev.day + ': ' + Math.round(s.prev.ms / 6000) / 10 + ' דק׳' : '']);
 }

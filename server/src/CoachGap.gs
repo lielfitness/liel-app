@@ -79,7 +79,7 @@ function gapJoinDates_(cfg, coaches) {
 function computeCoachGap_(force) {
   const props = PropertiesService.getScriptProperties();
   const prev = readJsonProp_('GAP_DATA', null);
-  if (!force && prev && Date.now() - prev.at < 60 * 60000) return prev;
+  if (!force && prev && Date.now() - prev.at < 6 * 60 * 60000) return prev;   // כל 6 שעות (חוסך מכסת טריגרים)
   const cfg = getConfig_();
   const coaches = coachesData_(true).coaches;
   const events = gapEvents_(cfg);
