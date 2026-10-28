@@ -32,7 +32,7 @@ function setup() {
     log.push('זומים קיימים שסומנו כ"נראו" (לא ייכתבו/יישלחו): ' + seedZoomSeen_());
   }
   if (!has('scanZoomBookings')) {
-    ScriptApp.newTrigger('scanZoomBookings').timeBased().everyMinutes(10).create();
+    ScriptApp.newTrigger('scanZoomBookings').timeBased().everyMinutes(30).create();
     log.push('נוצר טריגר: סריקת זומים כל 10 דקות');
   }
   if (!has('onLeadsEdit')) {
@@ -80,7 +80,7 @@ function benchmarkSpeed() {
 function reinstallTriggers() {
   const cfg = getConfig_();
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
-  ScriptApp.newTrigger('scanZoomBookings').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('scanZoomBookings').timeBased().everyMinutes(30).create();
   ScriptApp.newTrigger('onLeadsEdit').forSpreadsheet(cfg.leadsSheetId).onEdit().create();
   ScriptApp.newTrigger('watchNewLeads').timeBased().everyMinutes(Number(PropertiesService.getScriptProperties().getProperty('WATCH_MINUTES') || 1)).create();
   PropertiesService.getScriptProperties().deleteProperty('CAL_TRIGGER');

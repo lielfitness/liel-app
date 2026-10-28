@@ -62,7 +62,7 @@ function healthCheck_() {
   else if (last.watch && ago(last.watch) > watchLimit) issues.push('הבדיקה של לידים חדשים לא רצה ' + ago(last.watch) + ' דק׳');
 
   if (triggers.indexOf('scanZoomBookings') < 0) issues.push('סריקת הזומים כבויה');
-  else if (last.zoom && ago(last.zoom) > 15) issues.push('סריקת הזומים לא רצה ' + ago(last.zoom) + ' דק׳');
+  else if (last.zoom && ago(last.zoom) > 45) issues.push('סריקת הזומים לא רצה ' + ago(last.zoom) + ' דק׳');
 
   if (!props.getProperty('FCM_SERVICE_ACCOUNT')) issues.push('Push לטלפון לא מוגדר');
   if (usedMin > QUOTA_WARN_MIN_) issues.push('שימוש יומי בטריגרים: ' + Math.round(usedMin) + ' מתוך ' + QUOTA_MIN_ + ' דק׳');
@@ -94,6 +94,12 @@ function healthCheck_() {
 // כולל את הסקריפט של הפיננסים (אותו חשבון = אותה מכסה של 90 דק׳), שמדווח את הזמן שלו דרך ה-Web App שלו.
 function usageDump_() {
   const props = PropertiesService.getScriptProperties();
+  // פעם אחת: סריקת הזומים (גיבוי) כל 30 דק׳ במקום 10 – שינוי ביומן עדיין מעדכן מיד (onCalendarChange)
+  if (props.getProperty('ZOOM_EVERY') !== '30') {
+    ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'scanZoomBookings') ScriptApp.deleteTrigger(t); });
+    ScriptApp.newTrigger('scanZoomBookings').timeBased().everyMinutes(30).create();
+    props.setProperty('ZOOM_EVERY', '30');
+  }
   const hour = Utilities.formatDate(new Date(), TZ_, 'yyyy-MM-dd HH');
   if (props.getProperty('USAGE_HOUR') === hour) return;
   props.setProperty('USAGE_HOUR', hour);

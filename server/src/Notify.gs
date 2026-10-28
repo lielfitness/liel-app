@@ -360,6 +360,7 @@ function pushToUser_(email, n) {
 // ---------- זיהוי ליד חדש בגיליון (Webflow) – טריגר כל דקה ----------
 const WATCH_PROP_ = 'LEADS_WATCH';
 const WATCH_TAIL_ = 250;
+const WATCH_KEEP_ = 600;   // כמה מפתחות "כבר נראה" לשמור (10 תווים כל אחד – בתוך המגבלה של Script Property)
 
 /** מפתח יציב לליד: טלפון + תאריך כניסה (מייל שנוסף מהזמנת זום לא משנה אותו). */
 function watchKey_(l) {
@@ -451,7 +452,9 @@ function watchNewLeadsCore_(t0) {
     const v = Sheets.Spreadsheets.Values.get(cfg.leadsSheetId, "'" + LEADS_TAB_ + "'!B" + from + ":C" + (lastRow ? lastRow + 30 : '')).values || [];
     sig = 't' + from + ':' + v.length + '|' + JSON.stringify(v[v.length - 1] || []);
   } catch (e) { /* בלי Sheets API – קוראים הכל */ }
-  if (st && sig && st.sig === sig) { WATCH_PH_.noChange = 1; return; }
+  // רשת ביטחון: פעם בשעה קריאה מלאה בכל מקרה (ליד שנוסף באמצע הגיליון, למשל)
+  const fullDue = !st || !st.fullAt || Date.now() - st.fullAt > 60 * 60000;
+  if (st && sig && st.sig === sig && !fullDue) { WATCH_PH_.noChange = 1; return; }
 
   const leads = readLeads_(cfg).leads.filter(function (l) { return l.name || l.phone; });
   const tail = leads.slice(-WATCH_TAIL_);
@@ -459,7 +462,7 @@ function watchNewLeadsCore_(t0) {
   const newLast = leads.length ? leads[leads.length - 1].row : 1;
   if (newLast !== lastRow) sig = watchSig_(cfg, newLast);   // החתימה – לפי המיקום החדש של סוף הגיליון
   if (!st) {   // הפעלה ראשונה: רק רושמים את מה שקיים – בלי מבול התראות
-    writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys, lastRow: newLast });
+    writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys, lastRow: newLast, fullAt: Date.now() });
     watchStats_(t0, true);
     return;
   }
@@ -469,7 +472,9 @@ function watchNewLeadsCore_(t0) {
   const fresh = tail.filter(function (l, i) {
     return !seen[keys[i]] && !/^ידני/.test(String(l.ad || '')) && (!l.entry || l.entry >= since);
   });
-  writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys, lastRow: newLast });
+  // זוכרים גם לידים שכבר יצאו מהזנב (נמחקו / זזו במיון) – כדי שליד שחזר (↶ מחיקה, מיון) לא ייחשב חדש
+  const keep = keys.concat((st.keys || []).filter(function (k) { return keys.indexOf(k) < 0; })).slice(0, WATCH_KEEP_);
+  writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keep, lastRow: newLast, fullAt: Date.now() });
   const todo = fresh.filter(function (l) { return claimLeadNotice_(watchKey_(l)); });
   if (todo.length > 5) {
     notify_('lead_new', { title: '🎯 ' + todo.length + ' לידים חדשים', link: '#/leads' });

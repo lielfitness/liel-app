@@ -2982,7 +2982,7 @@
       </div>
       <div class="section-title">זומים</div>
       <div class="card small">
-        <div>טריגר שינוי ביומן: ${x.calTrigger === 'ok' ? '⚡ פעיל (+ גיבוי כל 10 דק׳)' : esc(x.calTrigger || '')}</div>
+        <div>טריגר שינוי ביומן: ${x.calTrigger === 'ok' ? '⚡ פעיל (+ גיבוי כל 30 דק׳)' : esc(x.calTrigger || '')}</div>
         <div>הרשאת כתיבה ליומן: ${x.calendarWrite ? '✅' : '❌'}</div>
         ${z ? `<div>אחרון: ${esc(z.name)}${z.seconds != null ? ` – עודכן תוך ${z.seconds < 120 ? z.seconds + ' שניות' : Math.round(z.seconds / 60) + ' דקות'}` : ''} (${esc(z.via || '')}, התאמה לפי ${esc(z.how || '')})</div>` : ''}
       </div>
