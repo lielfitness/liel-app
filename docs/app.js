@@ -2381,10 +2381,10 @@
       ${(d.review || []).length ? `<div class="mlist">${(d.review || []).map((r) => {
         const dc = decided[r.id];
         return `<div class="card tx-row ${dc ? 'decided' : ''}" data-rid="${esc(r.id)}">
-          <div class="tx-top"><b class="grow">${esc(r.desc)}</b><b class="ltr-text">₪${esc(r.amount)}</b></div>
+          <div class="tx-top"><b class="grow">${r.bit ? '<span class="pill">ביט</span> ' : ''}${esc(r.desc)}</b><b class="ltr-text">₪${esc(r.amount)}</b></div>
           <div class="tx-bottom">
             <span class="muted small grow">${esc(r.date)} · ${esc(r.source)} · ${esc(r.type)}</span>
-            ${dc ? `<span class="small">${dc.business ? '✅ עסקי' : '❌ פרטי'}</span><button class="btn small ghost" data-undo>ביטול</button>`
+            ${dc ? `<span class="small">${dc.business ? '✅ עסקי' + (dc.cat ? ' · ' + esc(dc.cat) : '') : '❌ פרטי'}</span><button class="btn small ghost" data-undo>ביטול</button>`
               : '<button class="btn small" data-biz="1">✅ עסקי</button><button class="btn small danger" data-biz="0">❌ פרטי</button>'}
           </div>
         </div>`;
@@ -2426,7 +2426,14 @@
     bindReminders();
     $app.querySelectorAll('[data-rid]').forEach((row) => {
       const r = (d.review || []).find((x) => x.id === row.dataset.rid);
-      row.querySelectorAll('[data-biz]').forEach((b) => { b.onclick = () => decideTx(r, b.dataset.biz === '1'); });
+      row.querySelectorAll('[data-biz]').forEach((b) => {
+        b.onclick = () => {
+          const biz = b.dataset.biz === '1';
+          // ביט – הוצאה עסקית: בוחרים קטגוריה (ברירת מחדל "שיווק - תוכן")
+          if (biz && r.bit && r.type !== 'הכנסה') return pickBitCat(r);
+          decideTx(r, biz);
+        };
+      });
       const u = row.querySelector('[data-undo]');
       if (u) u.onclick = () => undoDecide(r);
     });
@@ -2439,11 +2446,21 @@
     $app.querySelectorAll('[data-unadd]').forEach((b) => { b.onclick = () => undoManualTx(b.dataset.unadd); });
   }
 
-  function decideTx(r, business) {
-    decided[r.id] = { business, pending: true };
+  const BIT_EXPENSE_CATS = ['שיווק - תוכן', 'שיווק - פרסום ממומן', 'שיווק - לידים', 'תוכנות ומנויים', 'ציוד', 'תקשורת', 'רואה חשבון', 'שכר', 'עמלות סליקה'];
+  function pickBitCat(r) {
+    const sh = openSheet(`
+      <div class="row"><b class="grow">ביט עסקי – קטגוריה</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="small">${esc(r.desc)} · ₪${esc(r.amount)} · ${esc(r.date)}</div>
+      <div class="field"><label for="bc-cat">קטגוריה</label><select id="bc-cat">${BIT_EXPENSE_CATS.map((c) => `<option>${esc(c)}</option>`).join('')}</select></div>
+      <div class="muted small">החלטה חד-פעמית לשורה הזו – לא הופכת לכלל.</div>
+      <button class="btn" data-save>✅ עסקי</button>`);
+    sh.el.querySelector('[data-save]').onclick = () => { const cat = sh.el.querySelector('#bc-cat').value; sh.close(); decideTx(r, true, cat); };
+  }
+  function decideTx(r, business, cat) {
+    decided[r.id] = { business, cat: cat || (business && r.bit && r.type === 'הכנסה' ? 'הכנסות ביט' : ''), pending: true };
     redrawStage2();
-    sendWrite('finDecide', { id: r.id, business }).then((res) => {
-      decided[r.id] = { business, undo: res.undo };
+    sendWrite('finDecide', Object.assign({ id: r.id, business }, cat ? { cat } : {})).then((res) => {
+      decided[r.id] = { business, cat: decided[r.id] && decided[r.id].cat, undo: res.undo };
       toast(business ? `✅ עסקי – ${r.desc}` : `❌ פרטי – ${r.desc}`);
       markDerivedStale();
     }).catch((e) => { delete decided[r.id]; redrawStage2(); toast('לא נשמר: ' + e.message, true); });

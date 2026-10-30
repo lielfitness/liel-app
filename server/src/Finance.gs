@@ -250,8 +250,9 @@ function actionFinance_(req, ctx) {
   const txVals = tx.getLastRow() > 1 ? tx.getRange(2, 1, tx.getLastRow() - 1, 11).getDisplayValues() : [];
   {
     txVals.forEach(function (r) {
-      if (String(r[TX_.biz - 1]).trim() !== 'לבדיקה') return;
-      review.push({ id: r[TX_.id - 1], date: r[0], source: r[1], desc: r[2], type: r[3], amount: r[4], cat: r[5], note: r[10] });
+      const bit = isBitPending_(r);
+      if (String(r[TX_.biz - 1]).trim() !== 'לבדיקה' && !bit) return;
+      review.push({ id: r[TX_.id - 1], date: r[0], source: r[1], desc: r[2], type: r[3], amount: r[4], cat: r[5], note: r[10], bit: bit });
     });
   }
   const sum = finTab_(ss, 'summary');
@@ -307,20 +308,32 @@ function actionFinDecide_(req, ctx) {
       CacheService.getScriptCache().remove('finrev_v1');
       return;
     }
-    if (String(cur[TX_.biz - 1]).trim() !== 'לבדיקה') throw apiError_('STALE', 'השורה כבר סווגה (' + cur[TX_.biz - 1] + ')');
+    const bitPending = isBitPending_(cur);
+    if (String(cur[TX_.biz - 1]).trim() !== 'לבדיקה' && !bitPending) throw apiError_('STALE', 'השורה כבר סווגה (' + cur[TX_.biz - 1] + ')');
     const biz = req.business === true;
-    const isBit = cur[TX_.type - 1] === 'הכנסה' && /ביט/.test(cur[TX_.source - 1] + ' ' + cur[TX_.desc - 1]);
+    const isBit = bitPending || (cur[TX_.type - 1] === 'הכנסה' && /ביט/.test(cur[TX_.source - 1] + ' ' + cur[TX_.desc - 1]));
     const note = 'החלטת ליאל ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy') + ' (מהאפליקציה): ' + (biz ? 'עסקי' : 'פרטי') +
       (isBit ? ' – החלטה חד-פעמית (ביט), לא להפוך לכלל' : '');
     const prev = { cat: cur[TX_.cat - 1], biz: cur[TX_.biz - 1], note: cur[TX_.note - 1] };
     sh.getRange(row, TX_.biz).setValue(biz ? 'כן' : 'לא');
     if (!biz) sh.getRange(row, TX_.cat).setValue('פרטי');
+    // ביט עסקי: הכנסה → "הכנסות ביט"; הוצאה → הקטגוריה שנבחרה (ברירת מחדל "שיווק - תוכן")
+    else if (bitPending) {
+      const income = String(cur[TX_.type - 1]).trim() === 'הכנסה';
+      const cat = income ? 'הכנסות ביט' : (BIT_EXPENSE_CATS_.indexOf(String(req.cat || '')) >= 0 ? String(req.cat) : 'שיווק - תוכן');
+      sh.getRange(row, TX_.cat).setValue(cat);
+    }
     sh.getRange(row, TX_.note).setValue(prev.note ? prev.note + ' | ' + note : note);
     out = { ok: true, undo: Object.assign({ wrote: biz ? 'כן' : 'לא' }, prev) };
     CacheService.getScriptCache().remove('finrev_v1');
   });
   return out;
 }
+
+// ביט: נרשם ב"תנועות" עם קטגוריה "ביט - לאישור" ועסקי "לא" (נספר כפרטי) עד שליאל מחליט ב"לבדיקה"
+const BIT_PENDING_CAT_ = 'ביט - לאישור';
+const BIT_EXPENSE_CATS_ = ['שיווק - תוכן', 'שיווק - פרסום ממומן', 'שיווק - לידים', 'תוכנות ומנויים', 'ציוד', 'תקשורת', 'רואה חשבון', 'שכר', 'עמלות סליקה'];
+function isBitPending_(r) { return String(r[TX_.cat - 1]).trim() === BIT_PENDING_CAT_; }
 
 /** הכנסה ידנית: שורה חדשה בסוף "תנועות", באותו פורמט כמו השורות manual-… שליאל הוסיף */
 const INCOME_SRC_ = {
@@ -370,7 +383,10 @@ function finReviewCount_() {
   if (hit != null) return Number(hit);
   const sh = finTab_(finSs_(), 'tx');
   const n = sh.getLastRow() - 1;
-  const c = n > 0 ? sh.getRange(2, TX_.biz, n, 1).getDisplayValues().filter(function (r) { return String(r[0]).trim() === 'לבדיקה'; }).length : 0;
+  // "לבדיקה" + ביט שמחכה להחלטה (קטגוריה "ביט - לאישור")
+  const c = n > 0 ? sh.getRange(2, TX_.cat, n, 2).getDisplayValues().filter(function (r) {
+    return String(r[1]).trim() === 'לבדיקה' || String(r[0]).trim() === BIT_PENDING_CAT_;
+  }).length : 0;
   cache.put('finrev_v1', String(c), 120);
   return c;
 }
