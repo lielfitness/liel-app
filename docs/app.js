@@ -192,10 +192,12 @@
   /** אחרי 3 תשובות "עסוק": השינוי נשאר בתור ועל המסך, ונשלח שוב לבד (בחזרה לאפליקציה / בפתיחה הבאה) – לא שגיאה */
   function busyQueued() { toast('⏳ השרת עסוק – השינוי שמור בתור ויישלח שוב לבד'); }
   /** השרת עסוק (נעילה) – ניסיון חוזר אוטומטי (אותו opId – מבוצע פעם אחת בלבד) */
+  /** "עדיין רץ" (אותה פעולה כבר רצה בשרת) – לא הצלחה: מטופל כמו "עסוק" (נשאר בתור עד "בוצע" / "כבר בוצע") */
+  function notRunning(d) { if (d && d.duplicate && d.running) throw Object.assign(new Error('הפעולה עדיין רצה בשרת'), { code: 'BUSY' }); return d; }
   async function apiBusyRetry(action, p) {
     const waits = [1500, 4000];
     for (let i = 0; ; i++) {
-      try { return await api(action, p); } catch (e) {
+      try { return notRunning(await api(action, p)); } catch (e) {
         if (e.code !== 'BUSY' || i >= waits.length) throw e;
         await new Promise((r) => setTimeout(r, waits[i]));
       }
@@ -880,7 +882,7 @@
       let busy = 0;
       (d.results || []).forEach((r, i) => {
         const it = items[i];
-        if (!r.ok && r.code === 'BUSY') { busy++; return; }   // השרת עסוק – נשאר בתור, יישלח שוב בפעם הבאה
+        if ((!r.ok && r.code === 'BUSY') || (r.ok && r.data && r.data.duplicate && r.data.running)) { busy++; return; }   // עסוק / עדיין רץ – נשאר בתור, יישלח שוב בפעם הבאה
         obRemove(it.opId);
         // תזכורת שחיכתה בתור – עכשיו השרת אישר
         if (/^reminder/.test(it.action) && it.params) remConfirm(it.params.list === 'home' ? 'home' : 'fin', it.params.id || it.params.newId);
@@ -2829,7 +2831,7 @@
   async function remSend(action, p) {
     const waits = [2000, 5000];
     for (let i = 0; ; i++) {
-      try { return await api(action, p); } catch (e) {
+      try { return notRunning(await api(action, p)); } catch (e) {
         if ((e.code && e.code !== 'BUSY') || i >= waits.length) throw e;
         await new Promise((r) => setTimeout(r, waits[i]));
       }

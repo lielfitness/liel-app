@@ -176,7 +176,8 @@ function logPerf_(e, out) {
     return { t: Date.now(), a: p.action + (via ? ' (' + via + ')' : ''), ms: ms, v: req.v || '', ok: ok, f: what,
       ph: (p.opId ? 'op ' + p.opId + ' · ' : '') + (!via && !ok && out.error ? 'שגיאה: ' + out.error + ' · ' : '') + (!via && PHASES_ ? PHASES_.join(' · ') : '') +
         (!via && OPLOG_MS_ ? ' · oplog ' + OPLOG_MS_ : '') + (!via && ONCE_LOCK_MS_ != null ? ' · oplock ' + ONCE_LOCK_MS_ : '') +
-        (!via && OPREWRITE_ ? ' · oprewrite ' + OPREWRITE_ : '') + (!via && !ok && out.code === 'BUSY' ? ' · BUSY' : ''),
+        (!via && OPREWRITE_ ? ' · oprewrite ' + OPREWRITE_ : '') + (!via && !ok && out.code === 'BUSY' ? ' · BUSY' : '') +
+        (!via && ok && out.data && out.data.running ? ' · RUNNING' : ''),
       lt: p._lt != null ? p._lt : '', qw: p._qw != null ? p._qw : '' };
   };
   let add = [];
@@ -189,6 +190,7 @@ function logPerf_(e, out) {
       if (!PERF_ACTIONS_[op.action]) return;
       const en = entry(p, !!out.ok && !!(res[i] && res[i].ok), out.ms, 'תור, ' + (i + 1) + '/' + req.ops.length);
       if (res[i] && res[i].code === 'BUSY') en.ph += 'BUSY';   // לספירה בדוח
+      if (res[i] && res[i].ok && res[i].data && res[i].data.running) en.ph += 'RUNNING';
       add.push(en);
     });
   }
@@ -357,7 +359,7 @@ function runAction_(action, req, ctx) {
     const seen = opSeen_(req);
     if (seen) return Object.assign({ duplicate: true }, seen.durable ? { durable: true, done: true } : {}, seen.r || {});
     if (cache.get('oprun:' + req.opId)) return { duplicate: true, running: true };
-    cache.put('oprun:' + req.opId, '1', 600);
+    cache.put('oprun:' + req.opId, '1', 420);   // 7 דק׳ (ריצה מוגבלת ל-6) – אם השרת נעצר באמצע, הסימון פג והשליחה הבאה מבצעת
   } finally { lock.releaseLock(); }
   try {
     const out = fn(req, ctx);
