@@ -827,6 +827,8 @@
       (d.results || []).forEach((r, i) => {
         const it = items[i];
         obRemove(it.opId);
+        // תזכורת שחיכתה בתור – עכשיו השרת אישר
+        if (/^reminder/.test(it.action) && it.params) remConfirm(it.params.list === 'home' ? 'home' : 'fin', it.params.id || it.params.newId);
         if (!r.ok || (r.data && r.data.done === false)) failed.push({ desc: it.desc, why: r.ok ? (r.data && r.data.message) : r.error });
       });
       if (failed.length) {
@@ -947,6 +949,7 @@
     if (parts[0] === 'leads') updateLeadsView();
     else if (parts[0] === 'lead' && parts[1]) { const l = findLead(decodeURIComponent(parts[1])); if (l && !cardBusy()) renderLead(l); }
     else if (parts[0] === 'untreated' && !isEditing()) renderUntreated();
+    else if (parts[0] === 'month' && state.month && !isEditing()) renderMonth(isAdmin() ? 'שכר שי' : 'החודש שלי', monthLocal(state.leads, state.month));
   }
   // פעולות "נקה" שעוד בדרך לשרת – 🔄 מחכה להן, כדי שהרשימה שתגיע כבר תכיר אותן
   const opsInFlight = new Set();
@@ -1015,7 +1018,7 @@
       // הוספת מאמן / הורדת פגישה: מיד במסך המאמנים, בשרת ברקע
       coachBack = stage2Local(entry);
       back = coachBack.back;
-      redrawStage2();
+      redrawStage2(); redrawHome();
     } else if (entry && state.leads) {
       current = findLead(entry.leadId);
       if (current) {
@@ -1038,7 +1041,7 @@
     obAdd({ opId, action: isUndo ? 'undo' : 'redo', desc: opDesc(isUndo ? 'undo' : 'redo', {}, current), at: Date.now(), params: { opId } });
     if (!entry) toast(isUndo ? 'מבטל…' : 'מבצע שוב…');
     const revert = () => {
-      if (coachBack) { stage2Local(coachBack.back); redrawStage2(); }
+      if (coachBack) { stage2Local(coachBack.back); if (entry && entry.kind === 'rem') remConfirm(entry.scope || 'fin', entry.id); redrawStage2(); redrawHome(); }
       if (current && ver === localVer[realId(current.id)]) { setLead(current); showLead(current, true); }
       if (reinserted) { state.leads = state.leads.filter((l) => l.id !== entry.leadId); persistLeads(); updateLeadsView(); }
       if (removed) { state.leads.splice(Math.max(0, removedAt), 0, removed); persistLeads(); updateLeadsView(); }
@@ -1054,6 +1057,7 @@
         const d = await api(isUndo ? 'undo' : 'redo', { opId, _lt: lt, _qw: Math.round(performance.now() - tQueued) });
         obRemove(opId);
         syncUndoCounts(d);
+        if (entry && entry.kind === 'rem') remConfirm(entry.scope || 'fin', entry.id);
         if (d.done) {
           // תשובה מהשרת מוחלת רק אם לא נעשה מאז שינוי מקומי חדש יותר באותו ליד
           if (d.lead && (!pid || ver === localVer[realId(pid)])) { setLead(d.lead); showLead(d.lead); }
@@ -1843,7 +1847,71 @@
   async function viewMonth() {
     const title = isAdmin() ? 'שכר שי' : 'החודש שלי';
     if (!state.month) { const n = new Date(); state.month = n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0'); }
-    return swr('month:' + state.month, 'month', { month: state.month }, title, (d) => renderMonth(title, d));
+    // מיד: חישוב מקומי מהלידים שבזיכרון (כולל שינויים שעוד נשמרים). השרת מאשר ברקע, ואם יש פער – השרת קובע.
+    if (!state.leads) { const c = store.get('leads'); if (c) applyLeadsData(c); }
+    const seq = navSeq, month = state.month, key = 'month:' + month;
+    const local = state.leads ? monthLocal(state.leads, month) : null;
+    if (local) renderMonth(title, local); else if (store.get(key)) renderMonth(title, store.get(key)); else loading(title);
+    try {
+      const fresh = await api('month', { month });
+      store.set(key, fresh);
+      if (seq !== navSeq || isEditing()) return;
+      // אם בינתיים השתנה ליד מקומית (עוד לא בשרת) – החישוב המקומי עדיפ; אחרת – השרת
+      if (state.leads && state.leads.some((l) => isPending(l.id))) renderMonth(title, monthLocal(state.leads, month));
+      else renderMonth(title, fresh);
+    } catch (e) { if (seq === navSeq && e.code !== 'AUTH' && !local) errorView(title, e); }
+  }
+
+  // ---------- שכר שי: אותו חישוב כמו בשרת (Salary.gs → actionMonth_) ----------
+  const SAL_BASE = 15, SAL_COUNTED = ['נסגר', 'לא נסגר', 'ממתין'], SAL_NOSHOW = 'לא הגיע';
+  const salTier = (n) => (n <= 5 ? 80 : n <= 10 ? 100 : 120);
+  function salFromS(s) {
+    const t = String(s || '').trim();
+    if (!t) return { kind: 'empty', amount: null };
+    if (/^לא/.test(t)) return { kind: 'no', amount: 0 };
+    const m = t.match(/(\d+)/); return { kind: 'yes', amount: m ? Number(m[1]) : null };
+  }
+  function monthLocal(leads, month) {
+    const n = new Date();
+    const prev = new Date(n.getFullYear(), n.getMonth() - 1, 1);
+    const locked = month < prev.getFullYear() + '-' + String(prev.getMonth() + 1).padStart(2, '0');
+    const zr = (l) => String(l.zoomResult || '').trim();
+    const inMonth = leads.filter((l) => !l._pending && l.zoomDate && String(l.zoomDate).slice(0, 7) === month);
+    let counted, noShow, pending;
+    if (locked) {   // חודש נעול: לפי מה שרשום ב-S
+      counted = inMonth.filter((l) => salFromS(l.reward).kind === 'yes')
+        .sort((a, b) => (a.zoomDate !== b.zoomDate ? (a.zoomDate < b.zoomDate ? -1 : 1) : (salFromS(a.reward).amount || 0) - (salFromS(b.reward).amount || 0) || a.row - b.row))
+        .map((l, i) => { const amt = salFromS(l.reward).amount || 0; return { lead: l, n: i + 1, tier: amt >= 120 ? 3 : amt >= 100 ? 2 : 1, amount: amt }; });
+      noShow = inMonth.filter((l) => salFromS(l.reward).kind === 'no');
+      pending = inMonth.filter((l) => salFromS(l.reward).kind === 'empty');
+    } else {
+      counted = inMonth.filter((l) => SAL_COUNTED.includes(zr(l)))
+        .sort((a, b) => {
+          if (a.zoomDate !== b.zoomDate) return a.zoomDate < b.zoomDate ? -1 : 1;
+          const sa = salFromS(a.reward).amount || 999, sb = salFromS(b.reward).amount || 999;
+          return sa !== sb ? sa - sb : a.row - b.row;
+        })
+        .map((l, i) => ({ lead: l, n: i + 1, tier: i + 1 <= 5 ? 1 : i + 1 <= 10 ? 2 : 3, amount: salTier(i + 1) }));
+      noShow = inMonth.filter((l) => zr(l) === SAL_NOSHOW);
+      pending = inMonth.filter((l) => !SAL_COUNTED.includes(zr(l)) && zr(l) !== SAL_NOSHOW);
+    }
+    const entered = leads.filter((l) => !l._pending && l.entry && String(l.entry).slice(0, 7) === month);
+    const list = counted.map((m) => {
+      const s = salFromS(m.lead.reward);
+      return { n: m.n, row: m.lead.row, id: m.lead.id, name: m.lead.name, date: m.lead.zoomDate, tier: m.tier, amount: m.amount,
+        sheetReward: m.lead.reward, mismatch: false && (s.amount == null || s.amount !== m.amount), zoomResult: m.lead.zoomResult };
+    });
+    const brief = (l) => ({ id: l.id, name: l.name, date: l.zoomDate, zoomResult: l.zoomResult, sheetReward: l.reward });
+    const bonus = list.reduce((s, m) => s + m.amount, 0), count = list.length;
+    const nextAt = count < 6 ? 6 : count < 11 ? 11 : null;
+    const cached = store.get('month:' + month) || {};
+    return {
+      month, locked, lockedDiffs: cached.lockedDiffs || [], leadsCount: entered.length, basePerLead: SAL_BASE, baseTotal: entered.length * SAL_BASE,
+      meetings: list, noShow: noShow.map(brief), pending: pending.map(brief).sort((a, b) => (a.date < b.date ? -1 : 1)),
+      bonusTotal: bonus, total: entered.length * SAL_BASE + bonus,
+      currentTier: count === 0 ? 0 : count <= 5 ? 1 : count <= 10 ? 2 : 3,
+      toNextTier: nextAt ? nextAt - count : 0, nextTierAmount: nextAt ? salTier(nextAt) : null, local: true,
+    };
   }
 
   function renderMonth(title, d) {
@@ -2043,6 +2111,7 @@
   function redrawStage2() {
     const page = location.hash.replace(/^#\/?/, '').split('/');
     if (page[0] === 'coaches' && store.get('coaches')) renderCoaches(store.get('coaches'));
+    else if (page[0] === 'finance' && finYear && store.get(finKey())) renderFinance(store.get(finKey()));
     else if (page[0] === 'coach' && page[1]) { const d = store.get('coaches'); if (d) renderCoach(d, decodeURIComponent(page[1])); }
     else if (page[0] === 'finance' && store.get('finance')) renderFinance(store.get('finance'));
   }
@@ -2305,7 +2374,10 @@
 
   // ---------- שלב 2: פיננסים ----------
   const FIN_TASK_URL = 'https://claude.ai/scheduled-task/trig_01QP8CxvKDVccpZkYZg9xXca';
-  function viewFinance() { return swr('finance', 'finance', {}, 'פיננסים', renderFinance); }
+  // בחירת שנה וחודש בפיננסים: finYear = null → השנה הנוכחית; finSel = null → החודש הנוכחי (בשנה קודמת – דצמבר)
+  let finYear = null, finSel = null;
+  const finKey = () => (finYear ? 'finance:' + finYear : 'finance');
+  function viewFinance() { return swr(finKey(), 'finance', finYear ? { year: finYear } : {}, 'פיננסים', renderFinance); }
   const money = (n) => (n == null ? '—' : ils(Math.round(n)));
   const decided = {};    // id → { business, undo } – החלטות "לבדיקה" מהמסך הזה
   const debtUndo = {};   // key → פריט חוב שנוקה (להצגת ↶)
@@ -2319,7 +2391,44 @@
     </details>`;
   }
 
-  let finView = 'cur';   // 'cur' = החודש הנוכחי, 'prev' = החודש הקודם (בלחיצה על הריבוע שלו)
+  let finView = 'cur';   // (ישן – נשאר רק בשביל הקישור לדוח החייבים)
+  /** "השנה": סרגל שנים שאפשר להחליק + הסכומים של השנה שנבחרה */
+  function finYearHtml(d, viewY) {
+    const years = d.years || [viewY];
+    const t = d.pastYear ? d.yearTotals : d.year;
+    return `<div class="section-title">השנה</div>
+      <div class="fin-strip years" data-strip="years">${years.map((y) => `<button type="button" class="chip ${y === viewY ? 'on' : ''}" data-fy="${y}">${y}</button>`).join('')}</div>
+      ${t ? `<div class="card year-card">
+        <div class="fin-line">הכנסות שנתיות <b>${money(t.income)}</b></div>
+        <div class="fin-line">הוצאות שנתיות <b>${money(t.expenses)}</b></div>
+        <div class="fin-line">רווח נטו שנתי <b>${money(t.net)}</b></div>
+        <div class="muted small">${d.pastYear ? 'כל השנה' : 'מ-1 בינואר עד היום'}</div>
+      </div>` : '<div class="card muted">אין נתונים לשנה הזו</div>'}`;
+  }
+  function renderFinanceEmpty(d, viewY) {
+    shell('פיננסים', `<div class="card muted" style="margin-top:6px">אין נתונים לשנת ${viewY}</div>${finYearHtml(d, viewY)}`);
+    bindFinNav(d);
+  }
+  /** לחיצות על חודש / שנה / "חזרה" */
+  function bindFinNav(d) {
+    $app.querySelectorAll('[data-fmm]').forEach((b) => { b.onclick = () => { finSel = Number(b.dataset.fmm); renderFinance(store.get(finKey()) || d); }; });
+    $app.querySelectorAll('[data-fm="cur"]').forEach((b) => { b.onclick = () => { finSel = null; if (finYear) { finYear = null; viewFinance(); } else renderFinance(store.get('finance') || d); window.scrollTo(0, 0); }; });
+    $app.querySelectorAll('[data-fy]').forEach((b) => {
+      b.onclick = () => {
+        const y = Number(b.dataset.fy);
+        finYear = y === new Date().getFullYear() ? null : y;
+        finSel = null;   // שנה קודמת נפתחת על דצמבר; השנה הנוכחית – על החודש הנוכחי
+        window.scrollTo(0, 0);
+        viewFinance();
+      };
+    });
+    // הסרגלים – גלילה לפריט שנבחר
+    $app.querySelectorAll('.fin-strip').forEach((s) => {   // (בעברית scrollLeft שלילי – לכן לפי מיקום יחסי)
+      const sel = s.querySelector('.sel, .on'); if (!sel) return;
+      const sr = s.getBoundingClientRect(), r = sel.getBoundingClientRect();
+      s.scrollLeft += (r.left + r.width / 2) - (sr.left + sr.width / 2);
+    });
+  }
   const HEB_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
 
   /** שורות מידע קטנות: יתרה בעו"ש + חיוב הבא בכאל, וצפי מקארדקום לחודש הבא */
@@ -2342,12 +2451,19 @@
   }
 
   function renderFinance(d) {
-    const mo = d.months || [];
-    const isPrev = finView === 'prev' && !!mo[1];
-    const cur = isPrev ? mo[1] : mo[0];
+    const nowY = new Date().getFullYear(), nowM = new Date().getMonth() + 1;
+    const viewY = d.pastYear ? d.year : nowY;
+    // כל החודשים של השנה (שרת חדש: ym). שרת ישן: רק החודש הנוכחי והקודם.
+    const all = d.ym && d.ym.months ? d.ym.months.map((m) => Object.assign({}, m, { label: m.label || HEB_MONTHS[m.m - 1] }))
+      : (d.months || []).map((m, i) => Object.assign({}, m, { m: i === 0 ? nowM : nowM - 1, lists: i === 0 ? d.month : d.prevMonth }));
+    if (d.noData || !all.length) return renderFinanceEmpty(d, viewY);
+    const selM = finSel || (d.pastYear ? all[all.length - 1].m : nowM);
+    const cur = all.find((m) => m.m === selM) || all[all.length - 1];
+    const isPrev = d.pastYear || cur.m !== nowM;   // חודש שאינו הנוכחי – רק סכומים ורשימות
+    const mo = all;
     const review = (d.review || []).filter((r) => !decided[r.id]);
     const pre = (t) => `<div class="pre">${esc(t)}</div>`;
-    const ml = (isPrev ? d.prevMonth : d.month) || { income: [], expenses: [] };
+    const ml = cur.lists || { income: [], expenses: [] };
     const sumOf = (a) => a.reduce((s, x) => s + (Number(x.amount) || 0), 0);
     const debts = d.summary && d.summary.debts;
     const debtItems = debts ? (debts.items || []).filter((it) => !it.key || (!it.cleared && !debtUndo[it.key])) : [];
@@ -2355,16 +2471,15 @@
     const anom = d.summary && d.summary.anomalies && d.summary.anomalies.items ? d.summary.anomalies : null;
     const anomItems = anom ? anom.items.filter((it) => !it.cleared && !anomUndo[it.key]) : [];
     shell('פיננסים', `
-      <div class="tiles">
-        ${mo.map((m, i) => `<button type="button" class="card tile fin-month ${(i === 1) === isPrev ? 'sel' : ''}" data-fm="${i === 1 ? 'prev' : 'cur'}">
-          <div class="lbl"><b>${esc(m.label)}</b>${i === 0 ? ' (החודש)' : ' (החודש הקודם)'}</div>
+      <div class="fin-strip" data-strip="months">
+        ${mo.slice().reverse().map((m) => `<button type="button" class="card tile fin-month ${m.m === cur.m ? 'sel' : ''}" data-fmm="${m.m}">
+          <div class="lbl"><b>${esc(m.label)}</b>${!d.pastYear && m.m === nowM ? ' (החודש)' : ''}${d.pastYear ? ' ' + viewY : ''}</div>
           <div class="fin-line">הכנסות <b>${money(m.income)}</b></div>
           <div class="fin-line">הוצאות <b>${money(m.expenses)}</b></div>
           <div class="fin-line">רווח נטו משוער <b>${money(m.net)}</b></div>
-          ${i === 1 && !isPrev ? '<div class="muted small">לדוח המלא ←</div>' : ''}
         </button>`).join('')}
       </div>
-      ${isPrev ? `<div class="prev-banner"><span class="grow">מוצג הדוח של <b>${esc(cur.label)}</b></span><button class="btn small" data-fm="cur">← חזרה ל${esc(mo[0].label)}</button></div>` : ''}
+      ${isPrev ? `<div class="prev-banner"><span class="grow">מוצג הדוח של <b>${esc(cur.label)}${d.pastYear ? ' ' + viewY : ''}</b></span><button class="btn small" data-fm="cur">← חזרה ל${esc(HEB_MONTHS[nowM - 1])}${d.pastYear ? ' ' + nowY : ''}</button></div>` : ''}
       ${finInfoHtml(d)}
       <div class="row" style="align-items:center;margin-top:6px">
         <div class="muted small grow">עדכון פיננסים אחרון: ${esc(d.lastUpdate || '—')}</div>
@@ -2404,13 +2519,7 @@
       ${monthDetails(isPrev ? 'הכנסות ' + cur.label : 'הכנסות החודש', ml.income, sumOf(ml.income), cur ? cur.income : null, true)}
       ${monthDetails(isPrev ? 'הוצאות ' + cur.label : 'הוצאות החודש', ml.expenses, sumOf(ml.expenses), cur ? cur.expenses : null, false)}
       ${!isPrev && d.summary && d.summary.text ? `<details class="card"><summary>הצגת הסיכום המלא${d.summary.at ? ` · ${esc(d.summary.at)}` : ''}</summary>${pre(d.summary.text)}</details>` : ''}
-      ${d.year ? `<div class="section-title">השנה</div>
-      <div class="card year-card">
-        <div class="fin-line">הכנסות שנתיות <b>${money(d.year.income)}</b></div>
-        <div class="fin-line">הוצאות שנתיות <b>${money(d.year.expenses)}</b></div>
-        <div class="fin-line">רווח נטו שנתי <b>${money(d.year.net)}</b></div>
-        <div class="muted small">מ-1 בינואר עד היום</div>
-      </div>` : ''}
+      ${finYearHtml(d, viewY)}
       ${d.fixed ? `<div class="section-title">נספחים</div>
       <details class="card month-list"><summary>הוצאות קבועות${d.fixed.total ? ` – ₪${esc(d.fixed.total)}` : ''}</summary>
         <table class="mtable"><thead><tr><th>שם</th><th>חודש קודם</th><th>תדירות</th><th>חיוב אחרון</th></tr></thead><tbody>
@@ -2418,9 +2527,7 @@
         ${d.fixed.total ? `<tr class="total"><td><b>סה״כ</b></td><td class="nowrap amt">₪${esc(d.fixed.total)}</td><td></td><td></td></tr>` : ''}
         </tbody></table>
       </details>` : ''}`);
-    $app.querySelectorAll('[data-fm]').forEach((b) => {
-      b.onclick = () => { const v = b.dataset.fm; if (v === finView) return; finView = v; renderFinance(store.get('finance') || d); window.scrollTo(0, 0); };
-    });
+    bindFinNav(d);
     const ai = $app.querySelector('[data-act="add-income"]'); if (ai) ai.onclick = () => openManualTx('inc');
     const ae = $app.querySelector('[data-act="add-expense"]'); if (ae) ae.onclick = () => openManualTx('exp');
     bindReminders();
@@ -2513,6 +2620,36 @@
     if (scope === 'home' && r.time) { const [hh, mm] = r.time.split(':').map(Number); return new Date(y, m - 1, d, hh, mm).getTime(); }
     return new Date(y, m - 1, d - 1, scope === 'home' ? 18 : 15, 0).getTime();
   }
+  /**
+   * שכבת "פעולות מקומיות" (כמו בתזכורות של האייפון): כל פעולה על תזכורת נרשמת כאן ומוחלת על כל ציור,
+   * מעל מה שהגיע מהשרת – עד שהשרת אישר, ועוד 2 דקות (רענון שיצא לפני האישור יכול להחזיר רשימה ישנה).
+   * בלי זה, רענון ברקע של הבית/הפיננסים דרס את השינוי, ותזכורת שנמחקה חזרה לשנייה.
+   */
+  const REM_GRACE_MS = 120000;
+  // נשמר גם במכשיר – כך שאחרי סגירה ופתיחה (כשהפעולה עוד בתור) הפריט לא "חוזר"
+  let remOverlay = null;
+  function remOv() { if (!remOverlay) { try { remOverlay = JSON.parse(LS.get('lf_rem_overlay') || 'null'); } catch (e) { remOverlay = null; } remOverlay = remOverlay || { fin: {}, home: {} }; } return remOverlay; }
+  function remSaveOv() { try { LS.set('lf_rem_overlay', JSON.stringify(remOv())); } catch (e) { /* */ } }
+  function remMark(scope, id, st) { remOv()[scope][id] = { st: st, at: Date.now(), ok: 0 }; remSaveOv(); }
+  function remConfirm(scope, id) { const o = remOv()[scope] && remOv()[scope][id]; if (o) { o.ok = Date.now(); remSaveOv(); } }
+  /** הרשימה כפי שהמסך צריך להראות: מהשרת + הפעולות המקומיות */
+  function remView(list, scope) {
+    const out = (list || []).map((r) => Object.assign({}, r));
+    const ov = remOv()[scope] || {};
+    Object.keys(ov).forEach((id) => {
+      const o = ov[id];
+      if ((o.ok && Date.now() - o.ok > REM_GRACE_MS) || (!o.ok && Date.now() - o.at > 864e5)) { delete ov[id]; return; }
+      const i = out.findIndex((r) => r.id === id);
+      if (!o.st || o.st.status !== REM_ACTIVE) { if (i >= 0) out.splice(i, 1); return; }
+      const cur = i >= 0 ? out[i] : null;
+      const r = cur || { id, created: o.at };
+      const moved = !cur || r.date !== o.st.date || (r.time || '') !== (o.st.time || '');
+      Object.assign(r, { text: o.st.text, date: o.st.date, time: o.st.time || '' });
+      if (moved) { r.fireAt = remFireLocal(r, scope); r.alerted = scope === 'home' && r.fireAt != null && r.fireAt <= Date.now() ? true : (cur && !moved ? cur.alerted : false); }
+      if (!cur) out.push(r);
+    });
+    return out;
+  }
   function remSorted(list, scope) {
     if (scope === 'home') {   // הקרוב ביותר בזמן למעלה; בלי מועד – בסוף (החדשה ראשונה)
       const t = (r) => (r.fireAt != null ? r.fireAt : remFireLocal(r, scope));
@@ -2526,7 +2663,7 @@
   }
   function remSectionHtml(d, scope) {
     scope = scope || 'fin';
-    const list = remSorted(d.reminders || [], scope);
+    const list = remSorted(remView(d.reminders || [], scope), scope);
     const today = isoToday();
     return `<div class="row" style="margin:14px 0 6px;align-items:center">
         <div class="section-title grow" style="margin:0">תזכורות${list.length ? ` (${list.length})` : ''}</div>
@@ -2539,6 +2676,7 @@
           <button type="button" class="rem-del-bg" data-rem-del tabindex="-1">מחק</button>
           <div class="rem-row">
             <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${past ? 'past' : ''}">${esc(fmtIso(r.date))}${r.time ? ' · ' + esc(r.time) : ''}${past ? ' · עבר' : ''}</div>` : ''}</div>
+            ${scope === 'home' && r.time ? `<a class="rem-btn rem-alarm" href="${esc(remAlarmUrl(r))}" aria-label="שעון מעורר" title="שעון מעורר (קיצור הדרך Liel Alarm)">⏰</a>` : ''}
             <button type="button" class="rem-btn rem-hover-del" data-rem-del aria-label="מחיקה" title="מחיקה">🗑</button>
             <button type="button" class="rem-btn" data-rem-edit aria-label="עריכה" title="עריכה">✎</button>
             <button type="button" class="rem-btn" data-rem-done aria-label="בוצע" title="בוצע">✓</button>
@@ -2546,11 +2684,19 @@
         </div>`;
       }).join('') : '<div class="muted small">אין תזכורות</div>'}</div>`;
   }
-  function remFind(id, scope) { const d = store.get(REM_STORE[scope || 'fin']); return d && (d.reminders || []).find((r) => r.id === id); }
+  /** ⏰ שעון מעורר: מריץ את קיצור הדרך "Liel Alarm" באייפון (שעה|שם), שיוצר שעון מעורר וחוזר לאפליקציה */
+  function remAlarmUrl(r) {
+    const back = location.origin + location.pathname + '#/home';
+    const input = r.time + '|' + String(r.text).replace(/\|/g, ' ').slice(0, 80);
+    return 'shortcuts://x-callback-url/run-shortcut?name=' + encodeURIComponent('Liel Alarm') + '&input=text&text=' + encodeURIComponent(input) +
+      '&x-success=' + encodeURIComponent(back) + '&x-cancel=' + encodeURIComponent(back) + '&x-error=' + encodeURIComponent(back);
+  }
+  function remFind(id, scope) { scope = scope || 'fin'; const d = store.get(REM_STORE[scope]); return d ? remView(d.reminders || [], scope).find((r) => r.id === id) : null; }
   function remStateOf(r) { return r ? { text: r.text, date: r.date || '', time: r.time || '', status: REM_ACTIVE } : null; }
   /** מחיל מצב של תזכורת במסך (null / לא פעיל = יורדת מהרשימה) */
   function remApply(id, st, scope) {
     scope = scope || 'fin';
+    remMark(scope, id, st);
     patchStore(REM_STORE[scope], (d) => {
       d.reminders = d.reminders || [];
       const i = d.reminders.findIndex((r) => r.id === id);
@@ -2583,6 +2729,7 @@
       try {
         const d = await api(action, p);
         obRemove(opId); syncUndoCounts(d);
+        remConfirm(scope, id);
         // התשובה מהשרת: התאריך שחושב (שעה בלי תאריך) ואם ההתראה כבר יצאה/עבר הזמן – אדום
         if (d.reminder) {
           patchStore(REM_STORE[scope], (f) => { const r = (f.reminders || []).find((x) => x.id === d.reminder.id); if (r) Object.assign(r, { date: d.reminder.date, time: d.reminder.time || '', fireAt: d.reminder.fireAt, alerted: !!d.reminder.alerted }); });
@@ -2591,7 +2738,7 @@
       } catch (e) {
         if (e.code !== 'AUTH') obRemove(opId);
         dropUndoLocal(entry); state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
-        remApply(id, before, scope); redrawStage2(); if (scope === 'home') redrawHome();
+        remApply(id, before, scope); remConfirm(scope, id); redrawStage2(); if (scope === 'home') redrawHome();
         if (e.code !== 'AUTH') toast('לא נשמר – ' + e.message, true);
       } finally { syncEnd(); }
     });
@@ -3329,7 +3476,7 @@
       if (page === 'coaches') { coachFilter = parts[1] === 'low' || parts[1] === 'done' ? parts[1] : 'active'; return viewCoaches(); }
       if (page === 'coach' && parts[1]) return viewCoach(decodeURIComponent(parts[1]));
       if (page === 'finance') {
-        if (parts[1] === 'debts') { finView = 'cur'; const go = () => { const el = $app.querySelector('.debts'); if (el) el.scrollIntoView({ block: 'start' }); }; const r = viewFinance(); setTimeout(go, 60); return r; }
+        if (parts[1] === 'debts') { finView = 'cur'; finSel = null; finYear = null; const go = () => { const el = $app.querySelector('.debts'); if (el) el.scrollIntoView({ block: 'start' }); }; const r = viewFinance(); setTimeout(go, 60); return r; }
         return viewFinance();
       }
       if (page === 'more') return viewMore();

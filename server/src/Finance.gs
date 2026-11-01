@@ -236,8 +236,11 @@ function splitSummary_(text) {
 
 function actionFinance_(req, ctx) {
   const ss = finSs_();
-  const year = ss.getSheetByName(String(new Date().getFullYear()));
   const now = new Date();
+  // שנה קודמת: רק החודשים, הרשימות והסיכום השנתי (בלי "לבדיקה", חייבים וכו' – אלה של עכשיו)
+  const askYear = Number(req.year) || now.getFullYear();
+  if (askYear !== now.getFullYear()) return finYearOnly_(ss, askYear, now);
+  const year = ss.getSheetByName(String(new Date().getFullYear()));
   const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   let months = [];
   if (year) {
@@ -277,7 +280,35 @@ function actionFinance_(req, ctx) {
       anomalies: parts['⚠️'] ? { title: parts['⚠️'].title, items: anomalyItems_(parts['⚠️'].body) } : null,
       invoices: parts['🧾'] || null },
     reminders: (function () { try { return remList_(); } catch (e) { console.warn('reminders: ' + e); return []; } })(),
+    ym: finYearMonths_(year, txVals, now.getFullYear(), now.getMonth() + 1),
+    years: finYears_(ss, now),
   };
+}
+
+/** כל החודשים של שנה (ינואר עד החודש האחרון) – סכומים מהלשונית של השנה + רשימות מ"תנועות" */
+function finYearMonths_(yearSh, txVals, y, lastMonth) {
+  const out = { year: y, months: [] };
+  for (let m = 1; m <= lastMonth; m++) {
+    const row = yearSh ? monthRow_(yearSh, new Date(y, m - 1, 1)) : { label: '', net: null, expenses: null, income: null };
+    out.months.push(Object.assign({ m: m }, row, { lists: monthLists_(txVals, y, m) }));
+  }
+  return out;
+}
+/** אילו שנים יש (לשונית בשם השנה), מהחדשה לישנה. השנה הנוכחית תמיד. */
+function finYears_(ss, now) {
+  const ys = ss.getSheets().map(function (s) { return s.getName(); }).filter(function (n) { return /^\d{4}$/.test(n); }).map(Number);
+  if (ys.indexOf(now.getFullYear()) < 0) ys.push(now.getFullYear());
+  for (let y = now.getFullYear() - 1; y >= now.getFullYear() - 3; y--) if (ys.indexOf(y) < 0) ys.push(y);   // גם שנים בלי נתונים – כדי שאפשר לבחור ולראות "אין נתונים"
+  return ys.sort(function (a, b) { return b - a; });
+}
+/** שנה קודמת */
+function finYearOnly_(ss, y, now) {
+  const sh = ss.getSheetByName(String(y));
+  const tx = finTab_(ss, 'tx');
+  const txVals = tx.getLastRow() > 1 ? tx.getRange(2, 1, tx.getLastRow() - 1, 11).getDisplayValues() : [];
+  const ym = finYearMonths_(sh, txVals, y, 12);
+  const hasData = !!sh || ym.months.some(function (m) { return m.lists.income.length || m.lists.expenses.length; });
+  return { pastYear: true, year: y, noData: !hasData, ym: hasData ? ym : { year: y, months: [] }, yearTotals: sh ? yearTotals_(sh, 11) : null, years: finYears_(ss, now) };
 }
 
 /** מוצא שורה ב"תנועות" לפי המזהה (J) */
@@ -569,7 +600,7 @@ function actionAnomClear_(req, ctx) {
 }
 
 // ---------- השנה: שורת "סה״כ שנתי" בלשונית השנה (אותן עמודות כמו הריבוע החודשי) ----------
-function yearTotals_(sh) {
+function yearTotals_(sh, lastMonthIdx) {
   const n = Math.min(sh.getLastRow(), 30);
   const vals = sh.getRange(1, 1, n, 12).getValues();
   const num = function (x) { return typeof x === 'number' ? x : null; };
@@ -580,7 +611,7 @@ function yearTotals_(sh) {
   }
   // אין שורת סיכום – מסכמים את חודשי השנה עד החודש הנוכחי (שורה 2 = ינואר)
   const out = { income: 0, expenses: 0, net: 0 };
-  for (let m = 0; m <= new Date().getMonth(); m++) {
+  for (let m = 0; m <= (lastMonthIdx != null ? lastMonthIdx : new Date().getMonth()); m++) {
     const r = vals[m + 1] || [];
     out.income += num(r[8]) || 0; out.expenses += num(r[6]) || 0; out.net += num(r[0]) || 0;
   }

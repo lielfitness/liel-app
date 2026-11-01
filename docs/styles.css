@@ -552,3 +552,10 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 /* תזכורת שכבר נשלחה עליה התראה – אדום עדין עד ✓ / מחיקה / תאריך חדש */
 .rem-swipe.alerted .rem-row { background-image: linear-gradient(rgba(198, 40, 40, .18), rgba(198, 40, 40, .18)); border-inline-start-color: var(--danger); }
 .rem-swipe.alerted .rem-btn { border-color: rgba(198, 40, 40, .3); }
+/* פיננסים: סרגל חודשים / שנים שאפשר להחליק הצידה */
+.fin-strip { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x proximity; padding: 2px 2px 8px; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.fin-strip::-webkit-scrollbar { display: none; }
+.fin-strip > .fin-month { flex: 0 0 168px; scroll-snap-align: center; }
+.fin-strip.years { gap: 8px; margin-bottom: 8px; }
+.fin-strip.years > .chip { flex: 0 0 auto; }
+.rem-alarm { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
