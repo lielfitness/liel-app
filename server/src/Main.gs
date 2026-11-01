@@ -175,7 +175,8 @@ function logPerf_(e, out) {
     const what = p.fields ? Object.keys(p.fields).join(',') : (p.kind || [p.op, p.id, p.key, p.name, p.undo ? '↶' : ''].filter(Boolean).join(' ').slice(0, 120));
     return { t: Date.now(), a: p.action + (via ? ' (' + via + ')' : ''), ms: ms, v: req.v || '', ok: ok, f: what,
       ph: (p.opId ? 'op ' + p.opId + ' · ' : '') + (!via && !ok && out.error ? 'שגיאה: ' + out.error + ' · ' : '') + (!via && PHASES_ ? PHASES_.join(' · ') : '') +
-        (!via && OPLOG_MS_ ? ' · oplog ' + OPLOG_MS_ : ''),
+        (!via && OPLOG_MS_ ? ' · oplog ' + OPLOG_MS_ : '') + (!via && ONCE_LOCK_MS_ != null ? ' · oplock ' + ONCE_LOCK_MS_ : '') +
+        (!via && OPREWRITE_ ? ' · oprewrite ' + OPREWRITE_ : '') + (!via && !ok && out.code === 'BUSY' ? ' · BUSY' : ''),
       lt: p._lt != null ? p._lt : '', qw: p._qw != null ? p._qw : '' };
   };
   let add = [];
@@ -185,7 +186,10 @@ function logPerf_(e, out) {
     const res = (out.data && out.data.results) || [];
     (req.ops || []).slice(0, 40).forEach(function (op, i) {
       const p = Object.assign({}, op.params || {}, { action: op.action });
-      if (PERF_ACTIONS_[op.action]) add.push(entry(p, !!out.ok && !!(res[i] && res[i].ok), out.ms, 'תור, ' + (i + 1) + '/' + req.ops.length));
+      if (!PERF_ACTIONS_[op.action]) return;
+      const en = entry(p, !!out.ok && !!(res[i] && res[i].ok), out.ms, 'תור, ' + (i + 1) + '/' + req.ops.length);
+      if (res[i] && res[i].code === 'BUSY') en.ph += 'BUSY';   // לספירה בדוח
+      add.push(en);
     });
   }
   if (!add.length) return;
@@ -234,7 +238,7 @@ const OPDONE_ON_ = true;   // דלוק (2026-11-01): ה-Properties תופסים 
 const OPDONE_PFX_ = 'OPDONE_', OPDONE_MAX_ = 8500, OPDONE_DAYS_ = 30;
 // תקרות: הרישום מתקרב ל-150KB → 14 יום; מעל 150KB → מוחקים את הימים הישנים עד שיורד. כל ה-Properties מעל 350KB → לא כותבים לרישום בכלל.
 const OPDONE_SOFT_ = 120000, OPDONE_CAP_ = 150000, OPDONE_SHORT_DAYS_ = 14, PROPS_SAFE_ = 350000;
-let OPLOG_MS_ = 0, WITHLOCK_ON_ = false;
+let OPLOG_MS_ = 0, ONCE_LOCK_MS_ = null, OPREWRITE_ = 0, WITHLOCK_ON_ = false;
 function opBytes_(s) { return unescape(encodeURIComponent(String(s))).length; }
 function opDay_(opId) {
   const t = parseInt(String(opId).split('-')[0], 36);
@@ -268,9 +272,16 @@ function opDoneAdd_(opId) {
     const sh = opShards_(id);
     if (sh.list.some(function (x) { return (' ' + x.v + ' ').indexOf(' ' + id + ' ') >= 0; })) return;
     const p = PropertiesService.getScriptProperties();
-    const last = sh.list[sh.list.length - 1];
-    if (last && last.v.length + id.length + 1 <= OPDONE_MAX_) p.setProperty(last.k, last.v + ' ' + id);
-    else p.setProperty(last ? sh.base + '_' + (sh.list.length + 1) : sh.base, id);
+    // כתיבה + וידוא (אם בלי נעילה כתיבה מקבילה דרסה – כותבים שוב, עד 3 פעמים)
+    for (let i = 0; i < 3; i++) {
+      const cur = i ? opShards_(id) : sh;
+      if (i && cur.list.some(function (x) { return (' ' + x.v + ' ').indexOf(' ' + id + ' ') >= 0; })) break;
+      if (i) OPREWRITE_++;   // הווידוא גילה שהכתיבה הקודמת נדרסה – כותבים שוב (לספירה בדוח)
+      const last = cur.list[cur.list.length - 1];
+      if (last && last.v.length + id.length + 1 <= OPDONE_MAX_) p.setProperty(last.k, last.v + ' ' + id);
+      else p.setProperty(last ? cur.base + '_' + (cur.list.length + 1) : cur.base, id);
+      if (lock || WITHLOCK_ON_) break;   // עם נעילה – אין כתיבה מקבילה
+    }
     if (!sh.list.length) opDonePrune_(p, Number(CacheService.getScriptCache().get('opdone_days')) || OPDONE_DAYS_);   // יום חדש – מוחקים ימים ישנים
   } catch (e) { console.warn('opDone write: ' + e); }
   finally { if (lock) lock.releaseLock(); OPLOG_MS_ += Date.now() - t0; }
@@ -336,14 +347,18 @@ function runAction_(action, req, ctx) {
   const fn = ACTIONS[action].fn;
   if (!OP_ONCE_[action] || !req.opId) return fn(req, ctx);
   const cache = CacheService.getScriptCache();
+  // נעילה ממוקדת: נעילת המשתמש (לא של כל השרת), רק סביב הבדיקה + סימון "רץ" – הפעולה עצמה רצה אחריה.
+  // שליחה שנייה של אותו מזהה בזמן שהראשונה רצה רואה "רץ" ולא מבצעת. בלי נעילה – לא ממשיכים (BUSY, האפליקציה מנסה שוב).
+  const t0 = Date.now();
   const lock = LockService.getUserLock();
-  const got = lock.tryLock(5000);
+  if (!lock.tryLock(10000)) throw apiError_('BUSY', 'השרת עסוק, מנסה שוב');
+  ONCE_LOCK_MS_ = (ONCE_LOCK_MS_ || 0) + Date.now() - t0;
   try {
     const seen = opSeen_(req);
     if (seen) return Object.assign({ duplicate: true }, seen.durable ? { durable: true, done: true } : {}, seen.r || {});
     if (cache.get('oprun:' + req.opId)) return { duplicate: true, running: true };
     cache.put('oprun:' + req.opId, '1', 600);
-  } finally { if (got) lock.releaseLock(); }
+  } finally { lock.releaseLock(); }
   try {
     const out = fn(req, ctx);
     const s = JSON.stringify(out || {});
