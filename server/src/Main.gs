@@ -174,7 +174,8 @@ function logPerf_(e, out) {
     // מה נוגע: שדות, או המזהה / השם (למשל איזה ביטול נוקה)
     const what = p.fields ? Object.keys(p.fields).join(',') : (p.kind || [p.op, p.id, p.key, p.name, p.undo ? '↶' : ''].filter(Boolean).join(' ').slice(0, 120));
     return { t: Date.now(), a: p.action + (via ? ' (' + via + ')' : ''), ms: ms, v: req.v || '', ok: ok, f: what,
-      ph: (p.opId ? 'op ' + p.opId + ' · ' : '') + (!via && !ok && out.error ? 'שגיאה: ' + out.error + ' · ' : '') + (!via && PHASES_ ? PHASES_.join(' · ') : ''),
+      ph: (p.opId ? 'op ' + p.opId + ' · ' : '') + (!via && !ok && out.error ? 'שגיאה: ' + out.error + ' · ' : '') + (!via && PHASES_ ? PHASES_.join(' · ') : '') +
+        (!via && OPLOG_MS_ ? ' · oplog ' + OPLOG_MS_ : ''),
       lt: p._lt != null ? p._lt : '', qw: p._qw != null ? p._qw : '' };
   };
   let add = [];
@@ -217,12 +218,104 @@ function actionPerfLog_(req, ctx) { return { log: readJsonProp_('PERF_LOG', []).
 function opSeen_(req) {
   if (!req || !req.opId) return null;
   const v = CacheService.getScriptCache().get('op:' + req.opId);
-  if (!v) return null;
-  try { return JSON.parse(v); } catch (e) { return { r: null }; }
+  if (v) { try { return JSON.parse(v); } catch (e) { return { r: null }; } }
+  // לא בזיכרון (6 שעות) – הרישום הקבוע: פעולה שכבר בוצעה לא מבוצעת שוב, גם אחרי שבוע
+  return OPDONE_ON_ && opDoneHas_(req.opId) ? { r: null, durable: true } : null;
 }
 function opMark_(req, result) {
   if (!req || !req.opId) return;
   try { CacheService.getScriptCache().put('op:' + req.opId, JSON.stringify({ r: result || null }), 21600); } catch (e) { /* */ }
+  if (OPDONE_ON_) opDoneAdd_(req.opId);
+}
+
+// ---------- רישום קבוע של פעולות שבוצעו (Script Properties: OPDONE_<יום>, מזהים מופרדים ברווח) ----------
+// היום נלקח מהמזהה עצמו (הזמן שבו הפעולה נוצרה במכשיר) – כך שבדיקה = קריאה אחת. נשמר 30 יום.
+const OPDONE_ON_ = false;   // שלב 1: כבוי – רק מדידת גודל ה-Properties. נדלק אחרי שהמדידה תקינה.
+const OPDONE_PFX_ = 'OPDONE_', OPDONE_MAX_ = 8500, OPDONE_DAYS_ = 30;
+// תקרות: הרישום מתקרב ל-150KB → 14 יום; מעל 150KB → מוחקים את הימים הישנים עד שיורד. כל ה-Properties מעל 350KB → לא כותבים לרישום בכלל.
+const OPDONE_SOFT_ = 120000, OPDONE_CAP_ = 150000, OPDONE_SHORT_DAYS_ = 14, PROPS_SAFE_ = 350000;
+let OPLOG_MS_ = 0, WITHLOCK_ON_ = false;
+function opBytes_(s) { return unescape(encodeURIComponent(String(s))).length; }
+function opDay_(opId) {
+  const t = parseInt(String(opId).split('-')[0], 36);
+  return t > 1.7e12 && t < 4e12 ? Utilities.formatDate(new Date(t), TZ_, 'yyyyMMdd') : 'x';
+}
+function opShards_(opId) {
+  const base = OPDONE_PFX_ + opDay_(opId), p = PropertiesService.getScriptProperties(), out = [];
+  for (let i = 1; i <= 50; i++) {
+    const k = i === 1 ? base : base + '_' + i, v = p.getProperty(k);
+    if (v === null) break;
+    out.push({ k: k, v: v });
+  }
+  return { base: base, list: out };
+}
+function opDoneHas_(opId) {
+  const t0 = Date.now();
+  try {
+    const id = ' ' + opId + ' ';
+    return opShards_(opId).list.some(function (x) { return (' ' + x.v + ' ').indexOf(id) >= 0; });
+  } catch (e) { console.warn('opDone read: ' + e); return false; }
+  finally { OPLOG_MS_ += Date.now() - t0; }
+}
+function opDoneAdd_(opId) {
+  const t0 = Date.now();
+  let lock = null;
+  try {
+    if (!WITHLOCK_ON_) { lock = LockService.getScriptLock(); if (!lock.tryLock(5000)) lock = null; }
+    const id = String(opId).replace(/\s/g, '');
+    if (opDay_(id) === 'x') return;   // מזהה לא בפורמט – לא נרשם
+    if (CacheService.getScriptCache().get('opdone_block')) { console.warn('opDone: הרישום עצור – ה-Properties קרובים לגבול'); return; }
+    const sh = opShards_(id);
+    if (sh.list.some(function (x) { return (' ' + x.v + ' ').indexOf(' ' + id + ' ') >= 0; })) return;
+    const p = PropertiesService.getScriptProperties();
+    const last = sh.list[sh.list.length - 1];
+    if (last && last.v.length + id.length + 1 <= OPDONE_MAX_) p.setProperty(last.k, last.v + ' ' + id);
+    else p.setProperty(last ? sh.base + '_' + (sh.list.length + 1) : sh.base, id);
+    if (!sh.list.length) opDonePrune_(p, Number(CacheService.getScriptCache().get('opdone_days')) || OPDONE_DAYS_);   // יום חדש – מוחקים ימים ישנים
+  } catch (e) { console.warn('opDone write: ' + e); }
+  finally { if (lock) lock.releaseLock(); OPLOG_MS_ += Date.now() - t0; }
+}
+/** מוחק רק מפתחות OPDONE_<8 ספרות> – אף Property אחר לא נמחק */
+function opDonePrune_(p, days) {
+  const cut = Utilities.formatDate(new Date(Date.now() - days * DAY_MS_), TZ_, 'yyyyMMdd');
+  p.getKeys().forEach(function (k) {
+    if (k.indexOf(OPDONE_PFX_) !== 0) return;
+    const day = k.slice(OPDONE_PFX_.length, OPDONE_PFX_.length + 8);
+    if (/^\d{8}$/.test(day) && day < cut) p.deleteProperty(k);
+  });
+}
+/**
+ * מתוך הבדיקה של כל 5 דקות, פעם ב-6 שעות: כמה תופסים כל ה-Properties (מפתח + ערך, בבתים) ומה מזה הרישום.
+ * אוכף את התקרות ומדווח שורה ל"ביצועים" (שמות מפתחות וגדלים בלבד – בלי ערכים).
+ */
+function propsSizeCheck_() {
+  const c = CacheService.getScriptCache();
+  if (c.get('props_sz_at')) return;
+  c.put('props_sz_at', '1', 21600);
+  const p = PropertiesService.getScriptProperties();
+  const all = p.getProperties();
+  const sizes = Object.keys(all).map(function (k) { return { k: k, b: opBytes_(k) + opBytes_(all[k]) }; });
+  const total = sizes.reduce(function (a, x) { return a + x.b; }, 0);
+  const op = sizes.filter(function (x) { return x.k.indexOf(OPDONE_PFX_) === 0; });
+  let opTotal = op.reduce(function (a, x) { return a + x.b; }, 0);
+  let days = OPDONE_DAYS_, note = '';
+  if (opTotal > OPDONE_SOFT_) {
+    days = OPDONE_SHORT_DAYS_; opDonePrune_(p, days); note = ' · קוצר ל-' + days + ' יום';
+    opTotal = 0; const keep = p.getKeys().filter(function (k) { return k.indexOf(OPDONE_PFX_) === 0; }).sort().reverse();
+    keep.forEach(function (k) { const b = opBytes_(k) + opBytes_(p.getProperty(k) || ''); if (opTotal + b > OPDONE_CAP_) { p.deleteProperty(k); note += ' · נמחק ' + k; } else opTotal += b; });
+  }
+  c.put('opdone_days', String(days), 21600);
+  const opKeys = p.getKeys().filter(function (k) { return k.indexOf(OPDONE_PFX_) === 0; }).length;
+  const block = total - (sizes.filter(function (x) { return x.k.indexOf(OPDONE_PFX_) === 0; }).reduce(function (a, x) { return a + x.b; }, 0)) + opTotal > PROPS_SAFE_;
+  if (block) c.put('opdone_block', '1', 21600); else c.remove('opdone_block');
+  const top = sizes.slice().sort(function (a, b) { return b.b - a.b; }).slice(0, 8).map(function (x) { return x.k + ' ' + (x.b / 1024).toFixed(1) + 'KB'; }).join(', ');
+  const entry = { t: Date.now(), a: 'propsSize', ms: 0, v: '', ok: !block, f: Math.round(total / 1024) + 'KB',
+    ph: 'סה"כ ' + (total / 1024).toFixed(1) + 'KB · ' + sizes.length + ' מפתחות · רישום ' + (opTotal / 1024).toFixed(1) + 'KB (' + opKeys + ' מפתחות, ' + days + ' יום)' +
+      (block ? ' · הרישום נעצר (מעל ' + PROPS_SAFE_ / 1000 + 'KB)' : '') + note + ' · הגדולים: ' + top };
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(5000)) {
+    try { c.put('perf_buf', JSON.stringify(JSON.parse(c.get('perf_buf') || '[]').concat([entry]).slice(-80)), 21600); } finally { lock.releaseLock(); }
+  }
 }
 function opDupOut_(dup, ctx) {
   return Object.assign({ duplicate: true, done: true }, (dup && dup.r) || {}, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
@@ -247,7 +340,7 @@ function runAction_(action, req, ctx) {
   const got = lock.tryLock(5000);
   try {
     const seen = opSeen_(req);
-    if (seen) return Object.assign({ duplicate: true }, seen.r || {});
+    if (seen) return Object.assign({ duplicate: true }, seen.durable ? { durable: true, done: true } : {}, seen.r || {});
     if (cache.get('oprun:' + req.opId)) return { duplicate: true, running: true };
     cache.put('oprun:' + req.opId, '1', 600);
   } finally { if (got) lock.releaseLock(); }

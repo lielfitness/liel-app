@@ -179,7 +179,12 @@
     const p = Object.assign({}, params, { opId });
     const who = params.coach || params.name || params.desc || '';
     obAdd({ opId, action, desc: (WRITE_LABELS[action] || action) + (params.undo ? ' (↶)' : '') + (who ? ' – ' + who : ''), at: Date.now(), params: p });
-    return api(action, p).then((d) => { obRemove(opId); return d; }, (e) => { if (e.code !== 'AUTH') obRemove(opId); throw e; });
+    return api(action, p).then((d) => {
+      obRemove(opId);
+      // הפעולה כבר בוצעה בעבר (רישום קבוע בשרת) – אין תוצאה מלאה להחיל; המסך נשאר כפי שהוא ומתרענן מהשרת
+      if (d && d.duplicate && d.durable) { softRefresh(); return new Promise(() => {}); }
+      return d;
+    }, (e) => { if (e.code !== 'AUTH') obRemove(opId); throw e; });
   }
   async function apiRaw(action, params) {
     if (!CFG.apiUrl) throw new Error('האתר עוד לא מחובר לשרת (חסר apiUrl ב-config.js)');

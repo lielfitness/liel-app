@@ -201,7 +201,7 @@ function actionLateCharge_(req, ctx) {
 }
 function actionCoachRenew_(req, ctx) {
   // בתפעול יכולים להיות כמה מיילים בתא – הסקריפט בודק שהמייל הראשון שייך למאמן
-  const r = finCall_('renew', { name: req.name, email: String(req.email || '').split(/[,;\s]+/)[0], n: Number(req.n) });
+  const r = finCall_('renew', { name: req.name, email: String(req.email || '').split(/[,;\s]+/)[0], n: Number(req.n), ref: req.opId || '' });
   CacheService.getScriptCache().remove('coach_v1');
   return r;
 }
@@ -698,7 +698,8 @@ function actionCoachMinus_(req, ctx) {
   finLock_(function () {
     dup = opSeen_(req); if (dup) return;
     const r = finCall_('minus', { name: req.name, email: String(req.email || '').split(/[,;\s]+/)[0], ref: req.opId || '' });
-    pushUndoEntry_(ctx.email, { kind: 'coachMinus', logId: r.logId, name: r.coach, email: String(req.email || ''), desc: 'הורדת פגישה', changes: [] });
+    // r.duplicate = ההורדה כבר נרשמה ביומן (שליחה חוזרת) – גם ↶ כבר נרשם אז
+    if (!r.duplicate) pushUndoEntry_(ctx.email, { kind: 'coachMinus', logId: r.logId, name: r.coach, email: String(req.email || ''), desc: 'הורדת פגישה', changes: [] });
     out = { left: r.left };
     opMark_(req, out);
   });

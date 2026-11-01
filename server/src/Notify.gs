@@ -390,6 +390,7 @@ function watchNewLeads() {
       step_('gap', function () { computeCoachGap_(false); });
       step_('ghost', function () { ghostReconcile_(false); });
       step_('usage', usageDump_);
+      step_('props', propsSizeCheck_);   // פעם ב-6 שעות (לפי cache) – גודל ה-Properties + תקרות הרישום
     }
     if (due.five || due.onb) step_('onboard', pollOnboard_);
     if (due.ten) step_('perf', flushPerf_);

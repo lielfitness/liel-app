@@ -322,6 +322,7 @@ function locateLead_(cfg, row, id) {
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) throw apiError_('BUSY', 'השרת עסוק, נסי שוב בעוד רגע');
+  WITHLOCK_ON_ = true;   // הרישום הקבוע (opDoneAdd_) לא צריך נעילה משלו
   CACHE_PATCH_ = null;
   let ok = false;
   try {
@@ -335,6 +336,7 @@ function withLock_(fn) {
     else if (ok && CACHE_PATCH_) patchLeadsCache_(CACHE_PATCH_); else invalidateLeads_();
     CACHE_PATCH_ = null;
     if (PHASES_) phase_('cache');
+    WITHLOCK_ON_ = false;
     lock.releaseLock();
   }
 }
