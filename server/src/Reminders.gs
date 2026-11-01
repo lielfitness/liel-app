@@ -49,7 +49,10 @@ function remWrite_(sh, x) {
 }
 /** list: '' = פיננסים, 'home' = הבית של המשתמש */
 function remList_(list, email) {
-  return remRows_().list.filter(function (x) {
+  // מזהה כפול: רק השורה האחרונה שעודכנה קובעת (כך שורה ישנה שנשארה "פעיל" לא מחזירה תזכורת שנמחקה)
+  const byId = {};
+  remRows_().list.forEach(function (x) { if (!byId[x.id] || x.updated >= byId[x.id].updated) byId[x.id] = x; });
+  return Object.keys(byId).map(function (k) { return byId[k]; }).filter(function (x) {
     return x.status === REM_ACTIVE_ && x.list === (list || '') && (!list || x.owner === String(email || '').toLowerCase());
   }).map(remPublic_);
 }
@@ -70,6 +73,14 @@ function cleanRemTime_(t) {
   return t;
 }
 function remCanTouch_(x, ctx) { return x.list !== 'home' || x.owner === ctx.email; }
+/** כל השורות עם המזהה (אמורה להיות אחת – אבל אם נוצרה כפילות, כל פעולה חלה על כולן) */
+function remAllById_(d, id) { return d.list.filter(function (r) { return r.id === id; }); }
+/** השורה "הקובעת" למזהה: זו שעודכנה אחרונה */
+function remLatest_(rows) { return rows.slice().sort(function (a, b) { return b.updated - a.updated; })[0] || null; }
+/** מתי הפעולה נוצרה במכשיר (מתוך opId: זמן בבסיס 36 לפני המקף) */
+function remOpTime_(req) { const t = parseInt(String((req && req.opId) || '').split('-')[0], 36); return t > 1.7e12 && t < 4e12 ? t : 0; }
+// פעולת שמירה ישנה (שליחה חוזרת מהתור אחרי שעות) לא דורסת שינוי מאוחר יותר. מרווח לסטיית שעון של המכשיר.
+const REM_STALE_MS_ = 120000;
 
 // ---------- פעולות (דרך התור, פעם אחת לכל opId – ראו OP_ONCE_) ----------
 /** הוספה (בלי id) או עריכה */
@@ -89,8 +100,15 @@ function actionReminderSave_(req, ctx) {
   withLock_(function () {
     CACHE_PATCH_ = 'skip';
     const d = remRows_();
-    let x = req.id ? d.list.filter(function (r) { return r.id === req.id; })[0] : null;
-    if (req.id && (!x || !remCanTouch_(x, ctx))) throw apiError_('NOT_FOUND', 'התזכורת לא נמצאה');
+    // הוספה שכבר קרתה (אותו newId) – למשל שליחה חוזרת מהתור אחרי יותר מ-6 שעות: לא יוצרים שורה שנייה, לא משנים כלום
+    const dupNew = !req.id && req.newId ? remLatest_(remAllById_(d, String(req.newId))) : null;
+    if (dupNew) { out = { duplicate: true, reminder: dupNew.status === REM_ACTIVE_ ? remPublic_(dupNew) : null }; return; }
+    const rows = req.id ? remAllById_(d, req.id).filter(function (r) { return remCanTouch_(r, ctx); }) : [];
+    let x = remLatest_(rows);
+    if (req.id && !x) throw apiError_('NOT_FOUND', 'התזכורת לא נמצאה');
+    // עריכה ישנה (נוצרה לפני השינוי האחרון בשורה) – לא דורסת (למשל לא מחזירה תזכורת שנמחקה)
+    const opT = remOpTime_(req);
+    if (x && opT && opT < x.updated - REM_STALE_MS_) { out = { duplicate: true, stale: true, reminder: x.status === REM_ACTIVE_ ? remPublic_(x) : null }; return; }
     const before = remState_(x);
     if (!x) x = { row: d.sh.getLastRow() + 1, id: String(req.newId || Utilities.getUuid().slice(0, 10)), created: Date.now(), status: REM_ACTIVE_, notified: '',
       list: list, owner: list === 'home' ? ctx.email : '' };
@@ -99,27 +117,30 @@ function actionReminderSave_(req, ctx) {
     const f = remFireAt_(x);
     if (x.list === 'home' && f && f.getTime() <= Date.now()) x.notified = remKey_(x);
     remWrite_(d.sh, x);
+    rows.forEach(function (r) { if (r.row !== x.row) { r.status = REM_DELETED_; remWrite_(d.sh, r); } });   // כפילות ישנה – יורדת
     pushUndoEntry_(ctx.email, { kind: 'rem', id: x.id, before: before, after: remState_(x), desc: before ? 'עריכת תזכורת' : 'תזכורת חדשה', changes: [] });
     out = { reminder: remPublic_(x) };
   });
+  if (out.duplicate) return Object.assign(out, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
   remSchedule_();   // פיננסים: אם זמן ההתראה כבר עבר – נשלחת עכשיו
-  const fresh = remRows_().list.filter(function (r) { return r.id === out.reminder.id; })[0];
+  const fresh = remLatest_(remAllById_(remRows_(), out.reminder.id));
   if (fresh) out.reminder = remPublic_(fresh);
   return Object.assign(out, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
 }
 
-/** בוצע / מחיקה – משנה מצב בלבד */
+/** בוצע / מחיקה – משנה מצב בלבד. תמיד מצליחה: בכל השורות עם המזהה, גם אם ההתראה יצאה או שהשורה השתנתה מאז שנטענה */
 function actionReminderSet_(req, ctx) {
   const status = req.op === 'done' ? REM_DONE_ : req.op === 'delete' ? REM_DELETED_ : '';
   if (!status) throw apiError_('BAD_REQUEST', 'פעולה לא מוכרת');
   withLock_(function () {
     CACHE_PATCH_ = 'skip';
     const d = remRows_();
-    const x = d.list.filter(function (r) { return r.id === req.id; })[0];
-    if (!x || !remCanTouch_(x, ctx)) throw apiError_('NOT_FOUND', 'התזכורת לא נמצאה');
+    const rows = remAllById_(d, String(req.id || '')).filter(function (r) { return remCanTouch_(r, ctx); });
+    if (!rows.length) return;   // כבר לא קיימת – המטרה הושגה
+    const x = remLatest_(rows.filter(function (r) { return r.status === REM_ACTIVE_; }));
+    if (!x) return;   // כבר ירדה (שליחה חוזרת)
     const before = remState_(x);
-    x.status = status;
-    remWrite_(d.sh, x);
+    rows.forEach(function (r) { if (r.status === REM_ACTIVE_) { r.status = status; remWrite_(d.sh, r); } });
     pushUndoEntry_(ctx.email, { kind: 'rem', id: x.id, before: before, after: remState_(x), desc: status === REM_DONE_ ? 'תזכורת בוצעה' : 'מחיקת תזכורת', changes: [] });
   });
   remSchedule_();
@@ -129,12 +150,14 @@ function actionReminderSet_(req, ctx) {
 /** ↶/↷ (מתוך undoRedo_, בתוך הנעילה): מחזיר את התזכורת למצב ששמור ברשומה */
 function remUndoRedo_(e, to, verb, ctx) {
   const d = remRows_();
-  const x = d.list.filter(function (r) { return r.id === e.id; })[0];
-  if (!x || !remCanTouch_(x, ctx)) return { done: false, message: 'התזכורת לא נמצאה' };
+  const rows = remAllById_(d, e.id).filter(function (r) { return remCanTouch_(r, ctx); });
+  const x = remLatest_(rows);
+  if (!x) return { done: false, message: 'התזכורת לא נמצאה' };
   const cur = remState_(x);
   const target = e.before || { text: x.text, date: x.date, time: x.time, status: REM_DELETED_ };   // לפני ההוספה = לא קיימת
   x.text = target.text; x.date = target.date; x.time = target.time || ''; x.status = target.status;
   remWrite_(d.sh, x);
+  rows.forEach(function (r) { if (r.row !== x.row && r.status === REM_ACTIVE_) { r.status = REM_DELETED_; remWrite_(d.sh, r); } });
   pushStack_(to, ctx.email, { kind: 'rem', id: e.id, before: cur, after: target, desc: e.desc, changes: [] });
   remSchedule_(true);   // בתוך הנעילה – ההתראה (אם הגיע זמנה) תצא בבדיקה של הדקה הבאה
   return { done: true, message: verb + ': ' + (e.desc || 'תזכורת'), rem: true, reminder: target.status === REM_ACTIVE_ ? remPublic_(x) : null, remId: e.id };

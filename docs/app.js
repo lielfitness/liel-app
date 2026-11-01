@@ -2665,6 +2665,7 @@
     scope = scope || 'fin';
     const list = remSorted(remView(d.reminders || [], scope), scope);
     const today = isoToday();
+    if (scope === 'home') remAlarmTick(list);
     return `<div class="row" style="margin:14px 0 6px;align-items:center">
         <div class="section-title grow" style="margin:0">תזכורות${list.length ? ` (${list.length})` : ''}</div>
         <button class="btn small secondary" data-act="rem-add" data-scope="${scope}">＋ תזכורת</button>
@@ -2676,13 +2677,31 @@
           <button type="button" class="rem-del-bg" data-rem-del tabindex="-1">מחק</button>
           <div class="rem-row">
             <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${past ? 'past' : ''}">${esc(fmtIso(r.date))}${r.time ? ' · ' + esc(r.time) : ''}${past ? ' · עבר' : ''}</div>` : ''}</div>
-            ${scope === 'home' && r.time ? `<a class="rem-btn rem-alarm" href="${esc(remAlarmUrl(r))}" aria-label="שעון מעורר" title="שעון מעורר (קיצור הדרך Liel Alarm)">⏰</a>` : ''}
+            ${scope === 'home' && remAlarmOn(r) ? `<a class="rem-btn rem-alarm" href="${esc(remAlarmUrl(r))}" aria-label="שעון מעורר" title="שעון מעורר (קיצור הדרך Liel Alarm)">⏰</a>` : ''}
             <button type="button" class="rem-btn rem-hover-del" data-rem-del aria-label="מחיקה" title="מחיקה">🗑</button>
             <button type="button" class="rem-btn" data-rem-edit aria-label="עריכה" title="עריכה">✎</button>
             <button type="button" class="rem-btn" data-rem-done aria-label="בוצע" title="בוצע">✓</button>
           </div>
         </div>`;
       }).join('') : '<div class="muted small">אין תזכורות</div>'}</div>`;
+  }
+  // ⏰ רק כשהמועד בעוד פחות מ-24 שעות (שעון מעורר באייפון מצלצל בפעם הקרובה של השעה, בלי תאריך)
+  const REM_ALARM_WIN = 864e5;
+  function remAlarmAt(r) { return r.time ? (r.fireAt != null ? r.fireAt : remFireLocal(r, 'home')) : null; }
+  function remAlarmOn(r) { const t = remAlarmAt(r), now = Date.now(); return t != null && t > now && t - now < REM_ALARM_WIN; }
+  /** ציור מחדש בגבול הבא (כניסה לחלון / מועד שעבר) – כדי שהכפתור יופיע וייעלם לבד */
+  let remAlarmTimer = 0;
+  function remAlarmTick(list) {
+    clearTimeout(remAlarmTimer);
+    const now = Date.now();
+    let next = 0;
+    list.forEach((r) => {
+      const t = remAlarmAt(r);
+      if (t == null || t <= now) return;
+      const b = t - now < REM_ALARM_WIN ? t : t - REM_ALARM_WIN;
+      if (!next || b < next) next = b;
+    });
+    if (next) remAlarmTimer = setTimeout(redrawHome, Math.min(next - now + 1000, 2147483000));
   }
   /** ⏰ שעון מעורר: מריץ את קיצור הדרך "Liel Alarm" באייפון (שעה|שם), שיוצר שעון מעורר וחוזר לאפליקציה */
   function remAlarmUrl(r) {
@@ -2727,7 +2746,7 @@
     syncStart();
     undoChain = undoChain.then(async () => {
       try {
-        const d = await api(action, p);
+        const d = await remSend(action, p);
         obRemove(opId); syncUndoCounts(d);
         remConfirm(scope, id);
         // התשובה מהשרת: התאריך שחושב (שעה בלי תאריך) ואם ההתראה כבר יצאה/עבר הזמן – אדום
@@ -2736,12 +2755,35 @@
           redrawStage2(); if (scope === 'home') redrawHome();
         }
       } catch (e) {
+        if (!e.code) {
+          // אין חיבור גם אחרי הניסיונות החוזרים: נשאר בתור ועל המסך כפי שעשית – נשלח לבד כשחוזרים לאפליקציה / כשיש חיבור
+          remFailNotice(desc, (after || before || {}).text, false);
+          return;
+        }
         if (e.code !== 'AUTH') obRemove(opId);
         dropUndoLocal(entry); state.undoCount = Math.max(0, state.undoCount - 1); updateUndoBtn();
         remApply(id, before, scope); remConfirm(scope, id); redrawStage2(); if (scope === 'home') redrawHome();
-        if (e.code !== 'AUTH') toast('לא נשמר – ' + e.message, true);
+        if (e.code !== 'AUTH') remFailNotice(desc, (after || before || {}).text, e.message);
       } finally { syncEnd(); }
     });
+  }
+  /** שליחה עם ניסיון חוזר אוטומטי כשאין חיבור / תשובה לא תקינה (השרת מבצע פעם אחת לפי opId) */
+  async function remSend(action, p) {
+    const waits = [2000, 5000];
+    for (let i = 0; ; i++) {
+      try { return await api(action, p); } catch (e) {
+        if (e.code || i >= waits.length) throw e;
+        await new Promise((r) => setTimeout(r, waits[i]));
+      }
+    }
+  }
+  /** הודעה ברורה על המסך (לא רק טוסט) כשפעולה על תזכורת לא נשמרה */
+  function remFailNotice(desc, text, why) {
+    const what = esc(desc) + (text ? ' – <b>' + esc(String(text).slice(0, 60)) + '</b>' : '');
+    openSheet(`<div class="row"><b class="grow">⚠️ ${why === false ? 'עוד לא נשמר' : 'לא נשמר'}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="small">${what}</div>
+      <div class="small">${why === false ? 'אין חיבור לשרת (ניסיתי 3 פעמים). השינוי נשאר על המסך ובתור, וישלח לבד כשהחיבור יחזור.' : 'השרת לא קיבל את השינוי: ' + esc(why || 'שגיאה') + '. התזכורת הוחזרה למצב הקודם – נסה שוב.'}</div>
+      <button class="btn" data-x>הבנתי</button>`);
   }
   function redrawHome() { if (location.hash === '#/home' && store.get('home') && !isEditing()) renderHome(store.get('home')); }
   function remDelete(id, scope) {
