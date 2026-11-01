@@ -230,7 +230,7 @@ function opMark_(req, result) {
 
 // ---------- רישום קבוע של פעולות שבוצעו (Script Properties: OPDONE_<יום>, מזהים מופרדים ברווח) ----------
 // היום נלקח מהמזהה עצמו (הזמן שבו הפעולה נוצרה במכשיר) – כך שבדיקה = קריאה אחת. נשמר 30 יום.
-const OPDONE_ON_ = false;   // שלב 1: כבוי – רק מדידת גודל ה-Properties. נדלק אחרי שהמדידה תקינה.
+const OPDONE_ON_ = true;   // דלוק (2026-11-01): ה-Properties תופסים 23KB מתוך ~500KB
 const OPDONE_PFX_ = 'OPDONE_', OPDONE_MAX_ = 8500, OPDONE_DAYS_ = 30;
 // תקרות: הרישום מתקרב ל-150KB → 14 יום; מעל 150KB → מוחקים את הימים הישנים עד שיורד. כל ה-Properties מעל 350KB → לא כותבים לרישום בכלל.
 const OPDONE_SOFT_ = 120000, OPDONE_CAP_ = 150000, OPDONE_SHORT_DAYS_ = 14, PROPS_SAFE_ = 350000;
