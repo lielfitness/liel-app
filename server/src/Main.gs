@@ -240,30 +240,41 @@ const OPDONE_ON_ = true;   // דלוק (2026-11-01): ה-Properties תופסים 
 const OPDONE_PFX_ = 'OPDONE_', OPDONE_MAX_ = 8500, OPDONE_DAYS_ = 30;
 // תקרות: הרישום מתקרב ל-150KB → 14 יום; מעל 150KB → מוחקים את הימים הישנים עד שיורד. כל ה-Properties מעל 350KB → לא כותבים לרישום בכלל.
 const OPDONE_SOFT_ = 120000, OPDONE_CAP_ = 150000, OPDONE_SHORT_DAYS_ = 14, PROPS_SAFE_ = 350000;
-let OPLOG_MS_ = 0, ONCE_LOCK_MS_ = null, OPREWRITE_ = 0, WITHLOCK_ON_ = false;
+let OPLOG_MS_ = 0, ONCE_LOCK_MS_ = null, OPREWRITE_ = 0, WITHLOCK_ON_ = false, LOCK_GEN_ = 0;
 function opBytes_(s) { return unescape(encodeURIComponent(String(s))).length; }
 function opDay_(opId) {
   const t = parseInt(String(opId).split('-')[0], 36);
   return t > 1.7e12 && t < 4e12 ? Utilities.formatDate(new Date(t), TZ_, 'yyyyMMdd') : 'x';
 }
-function opShards_(opId) {
-  const base = OPDONE_PFX_ + opDay_(opId), p = PropertiesService.getScriptProperties(), out = [];
+// v63: פחות קריאות. רסיס הבא נקרא רק אם הנוכחי מלא (רסיס חדש נפתח רק כשהקודם מלא) – ביום רגיל קריאה אחת.
+// בתוך אותה נעילה (withLock_) – הקריאה של "כבר בוצע?" משמשת גם לרישום, ורישום שני של אותה פעולה מדולג.
+let OPSH_MEMO_ = null, OPDONE_SEEN_ = {};
+function opShards_(opId, reuse) {
+  const base = OPDONE_PFX_ + opDay_(opId);
+  if (reuse && WITHLOCK_ON_ && OPSH_MEMO_ && OPSH_MEMO_.base === base && OPSH_MEMO_.gen === LOCK_GEN_) return OPSH_MEMO_;
+  const p = PropertiesService.getScriptProperties(), out = [];
   for (let i = 1; i <= 50; i++) {
     const k = i === 1 ? base : base + '_' + i, v = p.getProperty(k);
     if (v === null) break;
     out.push({ k: k, v: v });
+    if (v.length + 40 <= OPDONE_MAX_) break;   // לא מלא – אין רסיס אחריו
   }
-  return { base: base, list: out };
+  const sh = { base: base, list: out, gen: LOCK_GEN_ };
+  if (WITHLOCK_ON_) OPSH_MEMO_ = sh;
+  return sh;
 }
 function opDoneHas_(opId) {
   const t0 = Date.now();
   try {
     const id = ' ' + opId + ' ';
-    return opShards_(opId).list.some(function (x) { return (' ' + x.v + ' ').indexOf(id) >= 0; });
+    const has = opShards_(opId).list.some(function (x) { return (' ' + x.v + ' ').indexOf(id) >= 0; });
+    if (has) OPDONE_SEEN_[opId] = 1;
+    return has;
   } catch (e) { console.warn('opDone read: ' + e); return false; }
   finally { OPLOG_MS_ += Date.now() - t0; }
 }
 function opDoneAdd_(opId) {
+  if (OPDONE_SEEN_[opId]) return;   // כבר נרשם (או נמצא) בבקשה הזו – בלי קריאה נוספת
   const t0 = Date.now();
   let lock = null;
   try {
@@ -271,8 +282,8 @@ function opDoneAdd_(opId) {
     const id = String(opId).replace(/\s/g, '');
     if (opDay_(id) === 'x') return;   // מזהה לא בפורמט – לא נרשם
     if (CacheService.getScriptCache().get('opdone_block')) { console.warn('opDone: הרישום עצור – ה-Properties קרובים לגבול'); return; }
-    const sh = opShards_(id);
-    if (sh.list.some(function (x) { return (' ' + x.v + ' ').indexOf(' ' + id + ' ') >= 0; })) return;
+    const sh = opShards_(id, true);
+    if (sh.list.some(function (x) { return (' ' + x.v + ' ').indexOf(' ' + id + ' ') >= 0; })) { OPDONE_SEEN_[id] = 1; return; }
     const p = PropertiesService.getScriptProperties();
     // כתיבה + וידוא (אם בלי נעילה כתיבה מקבילה דרסה – כותבים שוב, עד 3 פעמים)
     for (let i = 0; i < 3; i++) {
@@ -280,11 +291,12 @@ function opDoneAdd_(opId) {
       if (i && cur.list.some(function (x) { return (' ' + x.v + ' ').indexOf(' ' + id + ' ') >= 0; })) break;
       if (i) OPREWRITE_++;   // הווידוא גילה שהכתיבה הקודמת נדרסה – כותבים שוב (לספירה בדוח)
       const last = cur.list[cur.list.length - 1];
-      if (last && last.v.length + id.length + 1 <= OPDONE_MAX_) p.setProperty(last.k, last.v + ' ' + id);
-      else p.setProperty(last ? cur.base + '_' + (cur.list.length + 1) : cur.base, id);
+      if (last && last.v.length + id.length + 1 <= OPDONE_MAX_) { last.v = last.v + ' ' + id; p.setProperty(last.k, last.v); }
+      else { const nk = last ? cur.base + '_' + (cur.list.length + 1) : cur.base; cur.list.push({ k: nk, v: id }); p.setProperty(nk, id); }
       if (lock || WITHLOCK_ON_) break;   // עם נעילה – אין כתיבה מקבילה
     }
-    if (!sh.list.length) opDonePrune_(p, Number(CacheService.getScriptCache().get('opdone_days')) || OPDONE_DAYS_);   // יום חדש – מוחקים ימים ישנים
+    OPDONE_SEEN_[id] = 1;
+    if (sh.list.length === 1 && sh.list[0].v === id) opDonePrune_(p, Number(CacheService.getScriptCache().get('opdone_days')) || OPDONE_DAYS_);   // יום חדש – מוחקים ימים ישנים
   } catch (e) { console.warn('opDone write: ' + e); }
   finally { if (lock) lock.releaseLock(); OPLOG_MS_ += Date.now() - t0; }
 }

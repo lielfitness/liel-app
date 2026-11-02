@@ -323,6 +323,7 @@ function withLock_(fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) throw apiError_('BUSY', 'השרת עסוק, נסי שוב בעוד רגע');
   WITHLOCK_ON_ = true;   // הרישום הקבוע (opDoneAdd_) לא צריך נעילה משלו
+  LOCK_GEN_++;           // קריאה של הרישום מתוך נעילה קודמת כבר לא תקפה
   CACHE_PATCH_ = null;
   let ok = false;
   try {
