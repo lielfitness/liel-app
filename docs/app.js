@@ -1965,10 +1965,12 @@
     const bonus = list.reduce((s, m) => s + m.amount, 0), count = list.length;
     const nextAt = count < 6 ? 6 : count < 11 ? 11 : null;
     const cached = store.get('month:' + month) || {};
+    // השלמות (מהשרת – נשמרות עם החודש): רק בסה"כ, לא במדרגות
+    const adjustments = cached.adjustments || [], adjustTotal = adjustments.reduce((s, a) => s + (Number(a.amount) || 0), 0);
     return {
       month, locked, lockedDiffs: cached.lockedDiffs || [], leadsCount: entered.length, basePerLead: SAL_BASE, baseTotal: entered.length * SAL_BASE,
       meetings: list, noShow: noShow.map(brief), pending: pending.map(brief).sort((a, b) => (a.date < b.date ? -1 : 1)),
-      bonusTotal: bonus, total: entered.length * SAL_BASE + bonus,
+      bonusTotal: bonus, adjustments, adjustTotal, total: entered.length * SAL_BASE + bonus + adjustTotal,
       currentTier: count === 0 ? 0 : count <= 5 ? 1 : count <= 10 ? 2 : 3,
       toNextTier: nextAt ? nextAt - count : 0, nextTierAmount: nextAt ? salTier(nextAt) : null, local: true,
     };
@@ -2013,6 +2015,8 @@
           </div>
           <div class="amt">${ils(m.amount)}</div>
         </a>`).join('')}</div>` : '<div class="empty">עוד אין זומים בחודש הזה</div>'}
+      ${(d.adjustments || []).length ? `<div class="section-title">השלמות</div>
+        <div class="mlist">${d.adjustments.map((a) => `<div class="card mrow"><div class="grow"><b>${esc(a.note || 'השלמה')}</b><div class="muted small">לא נספרת כפגישה ולא משנה מדרגות</div></div><div class="amt">${a.amount > 0 ? '+' : ''}${ils(a.amount)}</div></div>`).join('')}</div>` : ''}
       ${d.pending.length ? `<div class="section-title">ממתינות לתוצאת זום – עוד לא נספרות (${d.pending.length})</div>
         <div class="mlist">${d.pending.map((x) => `<a class="card mrow" href="#/lead/${esc(x.id)}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.name)}</b></div><span class="pill warn">${esc(fmtIso(x.date))}</span></a>`).join('')}</div>` : ''}
       ${d.noShow.length ? `<div class="section-title">לא הגיעו – בלי בונוס (${d.noShow.length})</div>

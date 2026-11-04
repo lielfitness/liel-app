@@ -64,6 +64,28 @@ function lockedMonthMeetings_(leads, month) {
   };
 }
 
+// ---------- השלמות שכר: לשונית מוסתרת בגיליון המערכת (חודש yyyy-MM | סכום | הסבר | נוסף | על ידי) ----------
+// מתווספות לסה"כ של החודש בלבד – לא נספרות כפגישה, לא משנות מדרגות / "עוד X למדרגה" / סטטיסטיקות / חודשים אחרים.
+const SAL_ADJ_TAB_ = 'השלמות שכר (מערכת)';
+function salaryAdjustments_(month) {
+  const c = CacheService.getScriptCache();
+  let all = null;
+  try { all = JSON.parse(c.get('saladj_v1') || 'null'); } catch (e) { all = null; }
+  if (!all) {
+    all = [];
+    try {
+      const sh = systemSs_().getSheetByName(SAL_ADJ_TAB_);
+      if (sh && sh.getLastRow() > 1) {
+        all = sh.getRange(2, 1, sh.getLastRow() - 1, 3).getDisplayValues()
+          .map(function (r) { return { month: String(r[0]).trim(), amount: Number(String(r[1]).replace(/[^\d.\-]/g, '')) || 0, note: String(r[2]).trim() }; })
+          .filter(function (x) { return /^\d{4}-\d{2}$/.test(x.month) && x.amount; });
+      }
+      c.put('saladj_v1', JSON.stringify(all), 600);
+    } catch (e) { console.warn('salary adjustments: ' + e); }
+  }
+  return all.filter(function (x) { return x.month === month; }).map(function (x) { return { amount: x.amount, note: x.note }; });
+}
+
 function actionMonth_(req, ctx) {
   const now = new Date();
   const month = /^\d{4}-\d{2}$/.test(req.month || '') ? req.month : monthKey_(now);
@@ -90,6 +112,8 @@ function actionMonth_(req, ctx) {
 
   const bonus = list.reduce(function (s, m) { return s + m.amount; }, 0);
   const count = list.length;
+  const adjustments = salaryAdjustments_(month);
+  const adjustTotal = adjustments.reduce(function (s, a) { return s + a.amount; }, 0);
   const nextTierAt = count < 6 ? 6 : (count < 11 ? 11 : null);
 
   return {
@@ -103,7 +127,9 @@ function actionMonth_(req, ctx) {
     noShow: mm.noShow.map(brief),
     pending: mm.pending.map(brief).sort(function (a, b) { return a.date < b.date ? -1 : 1; }),
     bonusTotal: bonus,
-    total: entered.length * BASE_PER_LEAD_ + bonus,
+    adjustments: adjustments,
+    adjustTotal: adjustTotal,
+    total: entered.length * BASE_PER_LEAD_ + bonus + adjustTotal,
     currentTier: count === 0 ? 0 : (count <= 5 ? 1 : (count <= 10 ? 2 : 3)),
     toNextTier: nextTierAt ? nextTierAt - count : 0,
     nextTierAmount: nextTierAt ? tierAmount_(nextTierAt) : null,
