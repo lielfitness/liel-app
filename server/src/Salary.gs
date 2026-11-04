@@ -152,6 +152,14 @@ function syncRewards_(sh, leads, months, dry) {
       if (!dry) sh.getRange(d.lead.row, COL_.reward).setValue(d.value);
     });
   });
+  // S בלי תאריך זום = שארית (למשל ↶ על הוספת זום – ה-↶ לא שלח ניקוי). ליד בלי זום לא נספר באף חודש,
+  // לכן S שלו תמיד ריק. רק לידים שנכנסו בחודש פתוח – היסטוריה של חודשים נעולים לא נוגעים.
+  leads.forEach(function (l) {
+    const cur = String(l.reward || '').trim();
+    if (l.zoomDate || !cur || !l.entry || isLockedMonth_(l.entry.slice(0, 7))) return;
+    changes.push({ row: l.row, name: l.name, month: '', from: cur, to: '' });
+    if (!dry) sh.getRange(l.row, COL_.reward).setValue('');
+  });
   return { changes: changes, locked: locked };
 }
 

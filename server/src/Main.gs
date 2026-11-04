@@ -170,6 +170,8 @@ const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAd
   addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1, reminderSave: 1, reminderSet: 1 };
 function logPerf_(e, out) {
   const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+  // מזהה הליד (שמירה / ניסיון / ↶↷ – מהתשובה) – כדי לדעת בוודאות באיזה ליד מדובר
+  const leadOf = function (p, data) { return p.id && (p.action === 'updateLead' || p.action === 'markAttempt' || p.action === 'deleteLead' || p.action === 'cancelZoom' || p.action === 'assignZoom') ? p.id : (p._lid || (data && data.lead && data.lead.id) || ''); };
   const entry = function (p, ok, ms, via) {
     // מה נוגע: שדות, או המזהה / השם (למשל איזה ביטול נוקה)
     const what = p.fields ? Object.keys(p.fields).join(',') : (p.kind || [p.op, p.id, p.key, p.name, p.undo ? '↶' : ''].filter(Boolean).join(' ').slice(0, 120));
@@ -177,7 +179,8 @@ function logPerf_(e, out) {
       ph: (p.opId ? 'op ' + p.opId + ' · ' : '') + (!via && !ok && out.error ? 'שגיאה: ' + out.error + ' · ' : '') + (!via && PHASES_ ? PHASES_.join(' · ') : '') +
         (!via && OPLOG_MS_ ? ' · oplog ' + OPLOG_MS_ : '') + (!via && ONCE_LOCK_MS_ != null ? ' · oplock ' + ONCE_LOCK_MS_ : '') +
         (!via && OPREWRITE_ ? ' · oprewrite ' + OPREWRITE_ : '') + (!via && !ok && out.code === 'BUSY' ? ' · BUSY' : '') +
-        (!via && ok && out.data && out.data.running ? ' · RUNNING' : ''),
+        (!via && ok && out.data && out.data.running ? ' · RUNNING' : '') +
+        (leadOf(p, via ? null : out.data) ? ' · lead ' + leadOf(p, via ? null : out.data) : ''),
       lt: p._lt != null ? p._lt : '', qw: p._qw != null ? p._qw : '' };
   };
   let add = [];
@@ -188,6 +191,7 @@ function logPerf_(e, out) {
     (req.ops || []).slice(0, 40).forEach(function (op, i) {
       const p = Object.assign({}, op.params || {}, { action: op.action });
       if (!PERF_ACTIONS_[op.action]) return;
+      if (res[i] && res[i].data && res[i].data.lead && res[i].data.lead.id) p._lid = res[i].data.lead.id;
       const en = entry(p, !!out.ok && !!(res[i] && res[i].ok), out.ms, 'תור, ' + (i + 1) + '/' + req.ops.length);
       if (res[i] && res[i].code === 'BUSY') en.ph += 'BUSY';   // לספירה בדוח
       if (res[i] && res[i].ok && res[i].data && res[i].data.running) en.ph += 'RUNNING';
