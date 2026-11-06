@@ -262,7 +262,9 @@
     const t0 = performance.now();
     const ctl = timeoutMs && typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
-    const netErr = (kind) => Object.assign(new Error(kind === 'timeout' ? 'השרת לא ענה בזמן. נסו שוב.' : 'אין חיבור לשרת. בדקו אינטרנט ונסו שוב.'), { code: 'NET', kind });
+    // קריאה (עם הגבלת זמן): code=NET → ניסיון חוזר לבד. שמירה: בדיוק כמו קודם (שגיאה בלי code = "אין חיבור", נשארת בתור)
+    const netErr = (kind) => (timeoutMs ? Object.assign(new Error(kind === 'timeout' ? 'השרת לא ענה בזמן. נסו שוב.' : 'אין חיבור לשרת. בדקו אינטרנט ונסו שוב.'), { code: 'NET', kind })
+      : new Error('אין חיבור לשרת. בדקו אינטרנט ונסו שוב.'));
     let out;
     try {
       try {
