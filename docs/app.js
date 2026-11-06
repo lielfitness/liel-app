@@ -989,11 +989,13 @@
   // תזכורות (כולל ↶/↷ שלהן): 30 יום – לפי ההחלטה של ליאל (06/11/2026)
   const OB_STALE_MS = 25 * 864e5, OB_STALE_REM_MS = 30 * 864e5;
   function obTime(x) { const t = x.at || parseInt(String(x.opId || '').split('-')[0], 36); return t > 1.7e12 ? t : Date.now(); }
-  function obIsRem(x) { return /^reminder/.test(x.action || '') || !!x.rem; }
+  function obIsRem(x) { return /^(reminder|remCat)/.test(x.action || '') || !!x.rem; }
   function obIsStale(x) { return Date.now() - obTime(x) > (obIsRem(x) ? OB_STALE_REM_MS : OB_STALE_MS); }
   /** המזהה של התזכורת שהפעולה בתור נוגעת בה (אם זו פעולה על תזכורת) */
-  function obRemId(x) { return x.rem ? x.rem.id : (/^reminder/.test(x.action || '') && x.params ? (x.params.id || x.params.newId) : ''); }
-  function obRemScope(x) { return x.rem ? x.rem.scope : (x.params && x.params.list === 'home' ? 'home' : 'fin'); }
+  function obRemId(x) { return x.rem ? x.rem.id : (/^(reminder|remCat)/.test(x.action || '') && x.params ? (x.params.id || x.params.newId) : ''); }
+  function obRemScope(x) { return x.rem ? x.rem.scope : (/^remCat/.test(x.action || '') || (x.params && x.params.list === 'home') ? 'home' : 'fin'); }
+  /** אישור / ביטול של שינוי מקומי – תזכורת או קטגוריה */
+  function obConfirm(x) { const id = obRemId(x); if (!id) return; if (/^remCat/.test(x.action || '')) catConfirm(id); else remConfirm(obRemScope(x), id); }
   /** יש בתור פעולה על תזכורת / ↶ / ↷ שנוצרה לפני הפעולה הזו ועוד לא נשלחה – הסדר חשוב, לכן שולחים הכול יחד לפי הסדר */
   function obEarlierRem(opId) {
     const l = obAll(); const i = l.findIndex((x) => x.opId === opId);
@@ -1022,7 +1024,10 @@
         obRemove(it.opId); row.remove(); toast('נמחק מהתור');
         // תזכורת: השינוי שנמחק מהתור יורד גם מהמסך (חוזר למה שיש בשרת)
         const rid = obRemId(it);
-        if (rid && !obAll().some((x) => obRemId(x) === rid)) { const sc = obRemScope(it); delete remOv()[sc][rid]; remSaveOv(); redrawStage2(); redrawHome(); softRefresh(); }
+        if (rid && !obAll().some((x) => obRemId(x) === rid)) {
+          if (/^remCat/.test(it.action)) { delete catOv()[rid]; catSaveOv(); } else { const sc = obRemScope(it); delete remOv()[sc][rid]; remSaveOv(); }
+          redrawStage2(); redrawHome(); softRefresh();
+        }
       }
       else if (ev.target.closest('[data-ob-send]')) {
         row.querySelectorAll('button').forEach((b) => { b.disabled = true; });
@@ -1060,10 +1065,12 @@
   let replayP = null;
   function replayOutbox() {
     showStaleOutbox();
-    const items = obFresh();
+    const items = obFresh().slice(0, 40);   // השרת מטפל בעד 40 בבקשה – השאר בסבב הבא (מיד אחרי)
     if (!items.length || replayP) return replayP || Promise.resolve();
     syncStart();
+    let batchOk = false;
     replayP = api('batch', { ops: items.map((x) => ({ action: x.action, params: x.params })) }).then((d) => {
+      batchOk = true;
       const failed = [];
       let busy = 0;
       (d.results || []).forEach((r, i) => {
@@ -1071,7 +1078,7 @@
         if ((!r.ok && r.code === 'BUSY') || (r.ok && r.data && r.data.duplicate && r.data.running)) { busy++; return; }   // עסוק / עדיין רץ – נשאר בתור, יישלח שוב בפעם הבאה
         obRemove(it.opId);
         // תזכורת שחיכתה בתור – עכשיו השרת אישר
-        if (obRemId(it)) remConfirm(obRemScope(it), obRemId(it));
+        obConfirm(it);
         if (!r.ok || (r.data && r.data.done === false)) failed.push({ desc: it.desc, why: r.ok ? (r.data && r.data.message) : r.error });
       });
       if (failed.length) {
@@ -1088,7 +1095,7 @@
         syncEnd(); replayP = null;
         // נוספו לתור פעולות בזמן הסנכרון – סבב נוסף מיד (בלי לחכות ל-45 שניות)
         const sent = {}; items.forEach((x) => { sent[x.opId] = 1; });
-        if (!offlineNow() && obFresh().some((x) => !sent[x.opId] && (obIsRem(x) || x.action === 'undo' || x.action === 'redo'))) setTimeout(replayOutbox, 1500);
+        if (batchOk && !offlineNow() && obFresh().some((x) => !sent[x.opId])) setTimeout(replayOutbox, 1500);
       });
     return replayP;
   }
@@ -2911,6 +2918,7 @@
       const r = cur || { id, created: o.at };
       const moved = !cur || r.date !== o.st.date || (r.time || '') !== (o.st.time || '');
       Object.assign(r, { text: o.st.text, date: o.st.date, time: o.st.time || '' });
+      if (o.st.cat !== undefined) r.cat = o.st.cat;
       if (moved) { r.fireAt = remFireLocal(r, scope); r.alerted = scope === 'home' && r.fireAt != null && r.fireAt <= Date.now() ? true : (cur && !moved ? cur.alerted : false); }
       if (!cur) out.push(r);
     });
@@ -2927,8 +2935,136 @@
     const noD = list.filter((r) => !r.date).sort((a, b) => (b.created || 0) - (a.created || 0));
     return withD.concat(noD);
   }
+  // ---------- קטגוריות של תזכורות בבית (כמו ברשימות של האייפון) ----------
+  // ברירת המחדל ("תזכורות", כחולה) תמיד פתוחה למעלה; השאר – תפריטים נפתחים (סגורים כברירת מחדל). "כל התזכורות" פותח את כולן.
+  const REM_COLORS = { blue: ['כחול', '0, 79, 153'], green: ['ירוק', '46, 140, 70'], yellow: ['צהוב', '214, 170, 0'], orange: ['כתום', '230, 120, 20'],
+    red: ['אדום', '198, 40, 40'], purple: ['סגול', '120, 70, 170'], gray: ['אפור', '110, 117, 125'], beige: ['בז׳', '196, 164, 120'] };
+  const remRgb = (c) => (REM_COLORS[c] || REM_COLORS.blue)[1];
+  let remAllMode = false;
+  const remCatOpen = {};   // קטגוריה → פתוחה (לזמן שהאפליקציה פתוחה)
+  let catOverlay = null;
+  function catOv() { if (!catOverlay) { try { catOverlay = JSON.parse(LS.get('lf_remcat_ov') || 'null'); } catch (e) { catOverlay = null; } catOverlay = catOverlay || {}; } return catOverlay; }
+  function catSaveOv() { try { LS.set('lf_remcat_ov', JSON.stringify(catOv())); } catch (e) { /* */ } }
+  function catConfirm(id) { const o = catOv()[id]; if (o) { o.ok = Date.now(); catSaveOv(); } }
+  /** הקטגוריות כפי שהמסך צריך להראות: ברירת המחדל (id ריק) ראשונה, אחריה לפי הסדר */
+  function remCats(d) {
+    const byId = {};
+    ((d && d.remCats) || []).forEach((c) => { byId[c.id] = Object.assign({}, c); });
+    const ov = catOv();
+    Object.keys(ov).forEach((id) => {
+      const o = ov[id];
+      if ((o.ok && Date.now() - o.ok > REM_GRACE_MS) || (!o.ok && Date.now() - o.at > 864e5 && !remQueued(id))) { delete ov[id]; return; }
+      if (o.st.deleted) delete byId[id]; else byId[id] = Object.assign(byId[id] || { id, order: o.at }, o.st);
+    });
+    const def = byId.default || {};
+    delete byId.default;
+    return [{ id: '', name: def.name || 'תזכורות', color: def.color || 'blue' }]
+      .concat(Object.values(byId).sort((a, b) => (a.order || 0) - (b.order || 0)));
+  }
+  function remRowHtml(r, scope, today) {
+    const past = r.date && r.date < today && !r.alerted;
+    return `
+        <div class="rem-swipe ${r.alerted ? 'alerted' : ''}" data-rem="${esc(r.id)}" data-scope="${scope}">
+          <button type="button" class="rem-del-bg" data-rem-del tabindex="-1">מחק</button>
+          <div class="rem-row">
+            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${past ? 'past' : ''}">${esc(fmtIso(r.date))}${r.time ? ' · ' + esc(r.time) : ''}${past ? ' · עבר' : ''}</div>` : ''}</div>
+            ${scope === 'home' && remAlarmOn(r) ? `<a class="rem-btn rem-alarm" href="${esc(remAlarmUrl(r))}" aria-label="שעון מעורר" title="שעון מעורר (קיצור הדרך Liel Alarm)">⏰</a>` : ''}
+            <button type="button" class="rem-btn rem-hover-del" data-rem-del aria-label="מחיקה" title="מחיקה">🗑</button>
+            <button type="button" class="rem-btn" data-rem-edit aria-label="עריכה" title="עריכה">✎</button>
+            <button type="button" class="rem-btn" data-rem-done aria-label="בוצע" title="בוצע">✓</button>
+          </div>
+        </div>`;
+  }
+  function remHomeHtml(d) {
+    const list = remSorted(remView(d.reminders || [], 'home'), 'home');
+    remAlarmTick(list);
+    const today = isoToday();
+    const cats = remCats(d);
+    const known = {}; cats.forEach((c) => { known[c.id] = 1; });
+    const catOf = (r) => (r.cat && known[r.cat] ? r.cat : '');   // קטגוריה שנמחקה / לא מוכרת → ברירת המחדל
+    const block = (c, i) => {
+      const items = list.filter((r) => catOf(r) === c.id);
+      const open = i === 0 || remAllMode || !!remCatOpen[c.id];
+      const head = `<span class="rem-dot" aria-hidden="true"></span><b class="grow rem-cat-name">${esc(c.name)}${items.length ? ` (${items.length})` : ''}</b>
+          <button type="button" class="rem-btn" data-cat-edit="${esc(c.id)}" aria-label="שם וצבע – ${esc(c.name)}" title="שם וצבע">✎</button>
+          <button type="button" class="btn small secondary" data-act="rem-add" data-scope="home" data-cat="${esc(c.id)}">＋ תזכורת</button>`;
+      const body = `<div class="rem-list">${items.length ? items.map((r) => remRowHtml(r, 'home', today)).join('') : '<div class="muted small">אין תזכורות</div>'}</div>`;
+      if (i === 0) return `<div class="rem-cat main" style="--rc:${remRgb(c.color)}"><div class="rem-cat-head">${head}</div>${body}</div>`;
+      return `<details class="rem-cat" data-cat="${esc(c.id)}" style="--rc:${remRgb(c.color)}" ${open ? 'open' : ''}><summary class="rem-cat-head"><span class="rem-caret" aria-hidden="true">▸</span>${head}</summary>${body}</details>`;
+    };
+    return `<div class="rem-top">
+        ${cats.length > 1 ? `<button type="button" class="chip rem-all ${remAllMode ? 'on' : ''}" data-act="rem-all">כל התזכורות (${list.length})</button>` : ''}
+        <span class="grow"></span>
+        <button type="button" class="btn small secondary" data-act="rem-cat-add">＋ קטגוריה</button>
+      </div>
+      ${cats.map(block).join('')}`;
+  }
+  /** עריכת קטגוריה (שם + צבע); id ריק = ברירת המחדל; null = חדשה */
+  function openRemCat(id) {
+    const d = store.get('home') || {};
+    const cats = remCats(d);
+    const c = id == null ? null : cats.find((x) => x.id === id);
+    const isDef = c && c.id === '';
+    let color = c ? c.color : 'green';
+    const sh = openSheet(`
+      <div class="row"><b class="grow">${c ? 'קטגוריה – שם וצבע' : 'קטגוריה חדשה'}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="field"><label for="rc-name">שם</label><input id="rc-name" maxlength="40" value="${c ? esc(c.name) : ''}" placeholder="למשל: בית, עבודה, קניות"></div>
+      <div class="field"><label>צבע</label><div class="rc-colors" role="radiogroup">${Object.keys(REM_COLORS).map((k) =>
+        `<button type="button" class="rc-swatch ${k === color ? 'on' : ''}" data-color="${k}" role="radio" aria-checked="${k === color}" aria-label="${REM_COLORS[k][0]}" title="${REM_COLORS[k][0]}" style="--rc:${REM_COLORS[k][1]}"></button>`).join('')}</div></div>
+      <div class="notice small" id="rc-warn" hidden></div>
+      <button class="btn" data-save>${c ? 'שמירה' : 'הוספה'}</button>
+      ${c && !isDef ? '<button class="btn danger" data-del style="margin-top:8px">מחיקת הקטגוריה</button>' : ''}`);
+    const $ = (q) => sh.el.querySelector(q);
+    setTimeout(() => $('#rc-name').focus(), 50);
+    sh.el.querySelectorAll('.rc-swatch').forEach((b) => { b.onclick = () => {
+      color = b.dataset.color;
+      sh.el.querySelectorAll('.rc-swatch').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', x === b); });
+    }; });
+    $('[data-save]').onclick = () => {
+      const name = $('#rc-name').value.trim();
+      if (!name) { const w = $('#rc-warn'); w.hidden = false; w.textContent = 'חסר שם'; return; }
+      sh.close();
+      if (c) {
+        if (name === c.name && color === c.color) return;
+        const cid = isDef ? 'default' : c.id;
+        catOp('remCatSave', { id: cid, name, color }, cid, { name, color }, 'שינוי קטגוריה');
+      } else {
+        const nid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+        catOp('remCatSave', { newId: nid, name, color, order: Date.now() }, nid, { name, color, order: Date.now() }, 'קטגוריה חדשה');
+        remCatOpen[nid] = true;
+      }
+    };
+    const del = $('[data-del]');
+    if (del) del.onclick = () => {
+      const n = remView((d.reminders || []), 'home').filter((r) => r.cat === c.id).length;
+      if (!confirm(`למחוק את הקטגוריה "${c.name}"?` + (n ? `\n${n} התזכורות שבה יעברו ל"${cats[0].name}". אף תזכורת לא תימחק.` : ''))) return;
+      sh.close();
+      catOp('remCatDelete', { id: c.id }, c.id, { deleted: true }, 'מחיקת קטגוריה');
+    };
+  }
+  /** פעולה על קטגוריה: מיד במסך ובמכשיר, לשרת דרך התור (גם בלי חיבור – נשלחת לפי הסדר כשיש) */
+  function catOp(action, params, id, st, desc) {
+    catOv()[id] = { st, at: Date.now(), ok: 0 }; catSaveOv(); redrawHome();
+    const opId = newOpId();
+    const p = Object.assign({}, params, { opId });
+    obAdd({ opId, action, desc: desc + ' – ' + String(st.name || '').slice(0, 40), at: Date.now(), params: p });
+    syncStart();
+    undoChain = undoChain.then(async () => {
+      try {
+        if (offlineNow() || obEarlierRem(opId)) { if (offlineNow()) savedOffline(); kickSync(); return; }
+        await remSend(action, p);
+        obRemove(opId); catConfirm(id);
+      } catch (e) {
+        if (!e.code || e.code === 'BUSY') { if (e.code === 'BUSY') busyQueued(); else savedOffline(); return; }
+        if (e.code !== 'AUTH') obRemove(opId);
+        delete catOv()[id]; catSaveOv(); redrawHome();
+        if (e.code !== 'AUTH') remFailNotice(desc, st.name, e.message);
+      } finally { syncEnd(); }
+    });
+  }
   function remSectionHtml(d, scope) {
     scope = scope || 'fin';
+    if (scope === 'home') return remHomeHtml(d);
     const list = remSorted(remView(d.reminders || [], scope), scope);
     const today = isoToday();
     if (scope === 'home') remAlarmTick(list);
@@ -2977,7 +3113,7 @@
       '&x-success=' + encodeURIComponent(back) + '&x-cancel=' + encodeURIComponent(back) + '&x-error=' + encodeURIComponent(back);
   }
   function remFind(id, scope) { scope = scope || 'fin'; const d = store.get(REM_STORE[scope]); return d ? remView(d.reminders || [], scope).find((r) => r.id === id) : null; }
-  function remStateOf(r) { return r ? { text: r.text, date: r.date || '', time: r.time || '', status: REM_ACTIVE } : null; }
+  function remStateOf(r) { return r ? { text: r.text, date: r.date || '', time: r.time || '', status: REM_ACTIVE, cat: r.cat || '' } : null; }
   /** מחיל מצב של תזכורת במסך (null / לא פעיל = יורדת מהרשימה) */
   function remApply(id, st, scope) {
     scope = scope || 'fin';
@@ -2990,6 +3126,7 @@
       if (!r) { r = { id, created: Date.now() }; d.reminders.push(r); }
       if (r.date !== st.date || (r.time || '') !== (st.time || '')) r.alerted = false;
       Object.assign(r, { text: st.text, date: st.date, time: st.time || '' });
+      if (st.cat !== undefined) r.cat = st.cat;
       r.fireAt = remFireLocal(r, scope);
       // בבית: תזכורת שזמנה כבר עבר – אדומה מיד (בלי Push)
       if (scope === 'home' && r.fireAt != null && r.fireAt <= Date.now()) r.alerted = true;
@@ -3064,10 +3201,12 @@
     remOp('reminderSet', { id, op: 'done' }, id, remStateOf(r), Object.assign(remStateOf(r), { status: 'בוצע' }), 'תזכורת בוצעה', scope);
     toast('✓ בוצע · ↶ לביטול');
   }
-  function openReminder(id, scope) {
+  function openReminder(id, scope, catId) {
     scope = scope || 'fin';
     const home = scope === 'home';
     const r = id ? remFind(id, scope) : null;
+    const cats = home ? remCats(store.get('home') || {}) : [];
+    const curCat = r ? (cats.some((c) => c.id === (r.cat || '')) ? (r.cat || '') : '') : (catId || '');
     const sh = openSheet(`
       <div class="row"><b class="grow">${r ? 'עריכת תזכורת' : 'תזכורת חדשה'}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
       <div class="field"><label for="rm-text">מה לזכור</label><textarea id="rm-text" rows="3" placeholder="${home ? 'למשל: להתקשר לרון' : 'למשל: לגבות מדנה את התשלום השני'}">${r ? esc(r.text) : ''}</textarea></div>
@@ -3075,6 +3214,7 @@
         <div class="field grow"><label for="rm-date">תאריך (רשות)</label><input id="rm-date" type="date" value="${r ? esc(r.date || '') : ''}"></div>
         ${home ? `<div class="field grow"><label for="rm-time">שעה (רשות)</label><input id="rm-time" type="time" value="${r ? esc(r.time || '') : ''}"></div>` : ''}
       </div>
+      ${cats.length > 1 ? `<div class="field"><label for="rm-cat">קטגוריה</label><select id="rm-cat">${cats.map((c) => `<option value="${esc(c.id)}" ${c.id === curCat ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>` : ''}
       <div class="muted small">${home ? 'עם שעה – התראה בדיוק בשעה הזו (גם בלילה). שעה בלי תאריך – הפעם הבאה שהשעה מגיעה. תאריך בלי שעה – ערב לפני ב-18:00.' : 'עם תאריך – תגיע התראה יום לפני ב-15:00.'}</div>
       <div class="notice small" id="rm-warn" hidden></div>
       <button class="btn" data-save>${r ? 'שמירה' : 'הוספה'}</button>`);
@@ -3085,6 +3225,7 @@
       let date = $('#rm-date').value;
       const time = home ? $('#rm-time').value : '';
       if (!text) { const w = $('#rm-warn'); w.hidden = false; w.textContent = 'חסר טקסט'; return; }
+      const cat = home ? ($('#rm-cat') ? $('#rm-cat').value : curCat) : undefined;
       // שעה בלי תאריך: היום אם השעה עוד לא עברה, אחרת מחר (כמו בשרת)
       if (time && !date) {
         const [hh, mm] = time.split(':').map(Number);
@@ -3093,11 +3234,14 @@
       }
       sh.close();
       if (r) {
-        if (text === r.text && date === (r.date || '') && time === (r.time || '')) return;
-        remOp('reminderSave', { id: r.id, text, date, time }, r.id, remStateOf(r), { text, date, time, status: REM_ACTIVE }, 'עריכת תזכורת', scope);
+        if (text === r.text && date === (r.date || '') && time === (r.time || '') && (!home || cat === (r.cat || ''))) return;
+        remOp('reminderSave', Object.assign({ id: r.id, text, date, time }, home ? { cat } : {}), r.id, remStateOf(r),
+          Object.assign({ text, date, time, status: REM_ACTIVE }, home ? { cat } : {}), cat !== (r.cat || '') && home && text === r.text ? 'העברת תזכורת לקטגוריה' : 'עריכת תזכורת', scope);
       } else {
         const nid = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-        remOp('reminderSave', { newId: nid, text, date, time }, nid, null, { text, date, time, status: REM_ACTIVE }, 'תזכורת חדשה', scope);
+        remOp('reminderSave', Object.assign({ newId: nid, text, date, time }, home && cat ? { cat } : {}), nid, null,
+          Object.assign({ text, date, time, status: REM_ACTIVE }, home ? { cat: cat || '' } : {}), 'תזכורת חדשה', scope);
+        if (home && cat) remCatOpen[cat] = true;   // שהתזכורת החדשה תיראה
       }
     };
   }
@@ -3107,7 +3251,11 @@
   function remClose(el) { if (!el) return; const row = el.querySelector('.rem-row'); row.style.transition = 'transform .2s'; row.style.transform = ''; el.classList.remove('open'); if (remOpenEl === el) remOpenEl = null; }
   document.addEventListener('touchstart', (e) => { if (remOpenEl && !remOpenEl.contains(e.target)) remClose(remOpenEl); }, { passive: true });
   function bindReminders() {
-    $app.querySelectorAll('[data-act="rem-add"]').forEach((b) => { b.onclick = () => openReminder(null, b.dataset.scope); });
+    $app.querySelectorAll('[data-act="rem-add"]').forEach((b) => { b.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); openReminder(null, b.dataset.scope, b.dataset.cat || ''); }; });
+    $app.querySelectorAll('[data-cat-edit]').forEach((b) => { b.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); openRemCat(b.dataset.catEdit); }; });
+    const ca = $app.querySelector('[data-act="rem-cat-add"]'); if (ca) ca.onclick = () => openRemCat(null);
+    const ra = $app.querySelector('[data-act="rem-all"]'); if (ra) ra.onclick = () => { remAllMode = !remAllMode; redrawHome(); };
+    $app.querySelectorAll('details.rem-cat').forEach((el) => { el.addEventListener('toggle', () => { if (!remAllMode) remCatOpen[el.dataset.cat] = el.open; }); });
     $app.querySelectorAll('.rem-swipe').forEach((el) => {
       const id = el.dataset.rem, scope = el.dataset.scope || 'fin';
       const row = el.querySelector('.rem-row');

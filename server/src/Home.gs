@@ -27,6 +27,7 @@ function actionHome_(req, ctx) {
     },
     zoomAlerts: readJsonProp_(ZOOM_ALERTS_KEY_, []).length,
     reminders: (function () { try { return remList_('home', ctx.email); } catch (e) { console.warn('home reminders: ' + e); return []; } })(),
+    remCats: (function () { try { return remCatList_(ctx.email); } catch (e) { console.warn('home remCats: ' + e); return []; } })(),
     health: healthCheck_(),
     stage2: finHomeCounts_(),
     fin: null,

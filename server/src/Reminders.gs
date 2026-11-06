@@ -4,14 +4,15 @@
  *   בית (אישית לכל משתמש, H = home, I = המשתמש): אפשר גם שעה.
  *     תאריך + שעה → בדיוק אז · שעה בלי תאריך → הפעם הבאה שהשעה מגיעה (התאריך נשמר) · תאריך בלי שעה → ערב לפני, 18:00.
  *     נוצרה אחרי שזמן ההתראה עבר → מסומנת מיד (אדום), בלי Push.
- *   מזהה | טקסט | תאריך | נוצר | עודכן | מצב | התראה נשלחה ל- | רשימה | משתמש | שעה
+ *   מזהה | טקסט | תאריך | נוצר | עודכן | מצב | התראה נשלחה ל- | רשימה | משתמש | שעה | קטגוריה
+ *   קטגוריה (K, נוסף 06/11/2026): ריק = ברירת המחדל ("תזכורות"). הקטגוריות עצמן – בלשונית "קטגוריות תזכורות (מערכת)".
  * מחיקה ו"בוצע" לא מוחקים שורה – רק משנים מצב (כך ↶ יכול להחזיר).
  * רץ מתוך הבדיקה של כל דקה (גם בלילה – בדיקה זולה מהזיכרון) – בלי טריגר נוסף.
  */
-const REM_TAB_ = { name: 'תזכורות (מערכת)', head: ['מזהה', 'טקסט', 'תאריך', 'נוצר', 'עודכן', 'מצב', 'התראה נשלחה ל-', 'רשימה', 'משתמש', 'שעה'] };
+const REM_TAB_ = { name: 'תזכורות (מערכת)', head: ['מזהה', 'טקסט', 'תאריך', 'נוצר', 'עודכן', 'מצב', 'התראה נשלחה ל-', 'רשימה', 'משתמש', 'שעה', 'קטגוריה'] };
 const REM_ACTIVE_ = 'פעיל', REM_DONE_ = 'בוצע', REM_DELETED_ = 'נמחק';
 const REM_NEXT_KEY_ = 'REM_NEXT_V3';   // מתי ההתראה הקרובה (ms). שם חדש = הלוח מחושב מחדש פעם אחת לפי הכללים הנוכחיים
-const REM_COLS_ = 10;
+const REM_COLS_ = 11;
 
 function remSheet_() {
   const ss = systemSs_();
@@ -33,7 +34,7 @@ function remRows_() {
   const rows = n < 2 ? [] : sh.getRange(2, 1, n - 1, REM_COLS_).getDisplayValues();
   return { sh: sh, list: rows.map(function (r, i) {
     return { row: i + 2, id: r[0], text: r[1], date: r[2], created: Number(r[3]) || 0, updated: Number(r[4]) || 0, status: r[5] || REM_ACTIVE_,
-      notified: r[6], list: r[7] === 'home' ? 'home' : '', owner: String(r[8] || '').toLowerCase(), time: r[9] || '' };
+      notified: r[6], list: r[7] === 'home' ? 'home' : '', owner: String(r[8] || '').toLowerCase(), time: r[9] || '', cat: r[10] || '' };
   }) };
 }
 /** המפתח של "התראה נשלחה": תאריך (+ שעה). שינוי תאריך/שעה = מפתח חדש = ההתראה מתוזמנת מחדש */
@@ -41,11 +42,11 @@ function remKey_(x) { return x.date ? x.date + (x.time ? ' ' + x.time : '') : ''
 // alerted = כבר נשלחה (או עבר הזמן) – השורה אדומה עד ✓ / מחיקה / מועד חדש
 function remPublic_(x) {
   const f = remFireAt_(x);
-  return { id: x.id, text: x.text, date: x.date, time: x.time, created: x.created, fireAt: f ? f.getTime() : null, alerted: !!x.date && x.notified === remKey_(x) };
+  return { id: x.id, text: x.text, date: x.date, time: x.time, cat: x.cat || '', created: x.created, fireAt: f ? f.getTime() : null, alerted: !!x.date && x.notified === remKey_(x) };
 }
 function remWrite_(sh, x) {
   sh.getRange(x.row, 1, 1, REM_COLS_).setValues([[x.id, x.text, x.date || '', String(x.created || ''), String(Date.now()), x.status, x.notified || '',
-    x.list || '', x.owner || '', x.time || '']]);
+    x.list || '', x.owner || '', x.time || '', x.cat || '']]);
 }
 /** list: '' = פיננסים, 'home' = הבית של המשתמש */
 function remList_(list, email) {
@@ -58,7 +59,14 @@ function remList_(list, email) {
 }
 
 /** רק מצב התזכורת – למחסנית ↶/↷ */
-function remState_(x) { return x ? { text: x.text, date: x.date || '', time: x.time || '', status: x.status } : null; }
+function remState_(x) { return x ? { text: x.text, date: x.date || '', time: x.time || '', status: x.status, cat: x.cat || '' } : null; }
+/** מזהה קטגוריה: ריק / default = ברירת המחדל */
+function cleanRemCat_(c) {
+  c = String(c == null ? '' : c).trim();
+  if (!c || c === 'default') return '';
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(c)) throw apiError_('BAD_REQUEST', 'קטגוריה לא תקינה');
+  return c;
+}
 
 function cleanRemDate_(d) {
   d = String(d || '').trim();
@@ -113,6 +121,7 @@ function actionReminderSave_(req, ctx) {
     if (!x) x = { row: d.sh.getLastRow() + 1, id: String(req.newId || Utilities.getUuid().slice(0, 10)), created: Date.now(), status: REM_ACTIVE_, notified: '',
       list: list, owner: list === 'home' ? ctx.email : '' };
     x.text = text; x.date = date; x.time = time; x.status = REM_ACTIVE_;
+    if (list === 'home' && req.cat !== undefined) x.cat = cleanRemCat_(req.cat);   // לא נשלח = הקטגוריה לא משתנה
     // בבית: אם זמן ההתראה כבר עבר – מסומנת מיד (אדום), בלי Push
     const f = remFireAt_(x);
     if (x.list === 'home' && f && f.getTime() <= Date.now()) x.notified = remKey_(x);
@@ -156,6 +165,7 @@ function remUndoRedo_(e, to, verb, ctx) {
   const cur = remState_(x);
   const target = e.before || { text: x.text, date: x.date, time: x.time, status: REM_DELETED_ };   // לפני ההוספה = לא קיימת
   x.text = target.text; x.date = target.date; x.time = target.time || ''; x.status = target.status;
+  if (target.cat != null) x.cat = target.cat;   // רשומות ישנות (לפני הקטגוריות) – הקטגוריה לא משתנה
   remWrite_(d.sh, x);
   rows.forEach(function (r) { if (r.row !== x.row && r.status === REM_ACTIVE_) { r.status = REM_DELETED_; remWrite_(d.sh, r); } });
   pushStack_(to, ctx.email, { kind: 'rem', id: e.id, before: cur, after: target, desc: e.desc, changes: [] });
@@ -229,4 +239,82 @@ function remNotifyDue_() {
     });
   } finally { lock.releaseLock(); }
   remSetNext_(next);
+}
+
+
+// ---------- קטגוריות של תזכורות בבית (לכל משתמש בנפרד) – נוסף 06/11/2026 ----------
+// לשונית מוסתרת "קטגוריות תזכורות (מערכת)": מזהה | שם | צבע | סדר | משתמש | עודכן | מצב
+// ברירת המחדל ("תזכורות", כחולה) לא חייבת שורה; שורה עם המזהה default משנה לה שם / צבע. מחיקה = מצב "נמחק" (השורה נשארת).
+const REM_CAT_TAB_ = { name: 'קטגוריות תזכורות (מערכת)', head: ['מזהה', 'שם', 'צבע', 'סדר', 'משתמש', 'עודכן', 'מצב'] };
+const REM_CAT_COLORS_ = ['blue', 'green', 'yellow', 'orange', 'red', 'purple', 'gray', 'beige'];
+function remCatSheet_() {
+  const ss = systemSs_();
+  let sh = ss.getSheetByName(REM_CAT_TAB_.name);
+  if (!sh) {
+    sh = ss.insertSheet(REM_CAT_TAB_.name);
+    sh.getRange('A:Z').setNumberFormat('@');
+    sh.getRange(1, 1, 1, REM_CAT_TAB_.head.length).setValues([REM_CAT_TAB_.head]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.hideSheet();
+  }
+  return sh;
+}
+function remCatRows_(create) {
+  const ss = systemSs_();
+  const sh = create ? remCatSheet_() : ss.getSheetByName(REM_CAT_TAB_.name);
+  if (!sh) return { sh: null, list: [] };
+  const n = sh.getLastRow();
+  const rows = n < 2 ? [] : sh.getRange(2, 1, n - 1, 7).getDisplayValues();
+  return { sh: sh, list: rows.map(function (r, i) {
+    return { row: i + 2, id: r[0], name: r[1], color: r[2], order: Number(r[3]) || 0, owner: String(r[4] || '').toLowerCase(), updated: Number(r[5]) || 0, status: r[6] || REM_ACTIVE_ };
+  }) };
+}
+function remCatWrite_(sh, c) {
+  sh.getRange(c.row, 1, 1, 7).setValues([[c.id, c.name, c.color, String(c.order || 0), c.owner, String(Date.now()), c.status]]);
+}
+/** הקטגוריות של המשתמש (שורה אחרונה לכל מזהה), כולל default אם שונה לה שם / צבע */
+function remCatList_(email) {
+  const me = String(email || '').toLowerCase();
+  const byId = {};
+  remCatRows_(false).list.forEach(function (c) { if (c.owner === me && (!byId[c.id] || c.updated >= byId[c.id].updated)) byId[c.id] = c; });
+  return Object.keys(byId).map(function (k) { return byId[k]; }).filter(function (c) { return c.status === REM_ACTIVE_; })
+    .map(function (c) { return { id: c.id, name: c.name, color: c.color, order: c.order }; });
+}
+/** הוספה (newId) או שינוי שם / צבע / סדר (id). default = ברירת המחדל */
+function actionRemCatSave_(req, ctx) {
+  const id = String(req.id || req.newId || '').trim();
+  if (id !== 'default') cleanRemCat_(id);
+  if (!id) throw apiError_('BAD_REQUEST', 'חסר מזהה');
+  const name = String(req.name || '').trim().slice(0, 40);
+  if (!name) throw apiError_('BAD_REQUEST', 'חסר שם לקטגוריה');
+  const color = REM_CAT_COLORS_.indexOf(req.color) >= 0 ? req.color : 'blue';
+  let out = null;
+  withLock_(function () {
+    CACHE_PATCH_ = 'skip';
+    const d = remCatRows_(true);
+    const mine = d.list.filter(function (c) { return c.id === id && c.owner === ctx.email; });
+    let c = mine.sort(function (a, b) { return b.updated - a.updated; })[0];
+    if (!c) c = { row: d.sh.getLastRow() + 1, id: id, owner: ctx.email, order: Number(req.order) || Date.now() };
+    else if (req.order != null) c.order = Number(req.order) || c.order;
+    c.name = name; c.color = color; c.status = REM_ACTIVE_;
+    remCatWrite_(d.sh, c);
+    out = { cat: { id: c.id, name: c.name, color: c.color, order: c.order } };
+  });
+  return out;
+}
+/** מחיקת קטגוריה: התזכורות שבה עוברות לברירת המחדל (אף תזכורת לא נמחקת) */
+function actionRemCatDelete_(req, ctx) {
+  const id = cleanRemCat_(req.id);
+  if (!id) throw apiError_('BAD_REQUEST', 'אי אפשר למחוק את ברירת המחדל');
+  let moved = 0;
+  withLock_(function () {
+    CACHE_PATCH_ = 'skip';
+    const d = remCatRows_(false);
+    if (d.sh) d.list.forEach(function (c) { if (c.id === id && c.owner === ctx.email && c.status === REM_ACTIVE_) { c.status = REM_DELETED_; remCatWrite_(d.sh, c); } });
+    const r = remRows_();
+    r.list.forEach(function (x) {
+      if (x.list === 'home' && x.owner === ctx.email && x.cat === id) { x.cat = ''; remWrite_(r.sh, x); moved++; }
+    });
+  });
+  return { ok: true, moved: moved };
 }

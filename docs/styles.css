@@ -548,8 +548,8 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 }
 .rem-row {
   position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px;
-  background: #fff; background-image: linear-gradient(rgba(0, 79, 153, .18), rgba(0, 79, 153, .18));
-  border-inline-start: 3px solid var(--brand); border-radius: 10px; color: var(--ink);
+  background: #fff; background-image: linear-gradient(rgba(var(--rc, 0, 79, 153), .18), rgba(var(--rc, 0, 79, 153), .18));
+  border-inline-start: 3px solid rgb(var(--rc, 0, 79, 153)); border-radius: 10px; color: var(--ink);
   touch-action: pan-y; will-change: transform;
 }
 .rem-main { min-width: 0; }
@@ -557,8 +557,8 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .rem-date { font-size: 12px; color: var(--muted); margin-top: 1px; }
 .rem-date.past { color: #a15c00; }
 .rem-btn {
-  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 7px; border: 1px solid rgba(0, 79, 153, .25);
-  background: rgba(255, 255, 255, .7); color: var(--brand); font-size: 13px; cursor: pointer; padding: 0;
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 7px; border: 1px solid rgba(var(--rc, 0, 79, 153), .25);
+  background: rgba(255, 255, 255, .7); color: rgb(var(--rc, 0, 79, 153)); font-size: 13px; cursor: pointer; padding: 0;
 }
 .rem-hover-del { display: none; color: var(--danger); border-color: rgba(200, 40, 40, .3); }
 @media (hover: hover) and (pointer: fine) {
@@ -575,3 +575,20 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 .fin-strip.years { gap: 8px; margin-bottom: 8px; }
 .fin-strip.years > .chip { flex: 0 0 auto; }
 .rem-alarm { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
+/* ---------- קטגוריות של תזכורות (בבית) ---------- */
+.rem-top { display: flex; align-items: center; gap: 8px; margin: 14px 0 8px; }
+.chip.rem-all.on { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 700; }
+.rem-cat { margin: 0 0 10px; }
+.rem-cat-head { display: flex; align-items: center; gap: 8px; padding: 4px 0 6px; list-style: none; cursor: default; }
+details.rem-cat > summary.rem-cat-head { cursor: pointer; border-top: 1px solid var(--line); padding-top: 10px; }
+details.rem-cat > summary::-webkit-details-marker { display: none; }
+.rem-caret { color: var(--muted); font-size: 12px; transition: transform .15s; width: 12px; display: inline-block; }
+details.rem-cat[open] .rem-caret { transform: rotate(90deg); }
+[dir="rtl"] details.rem-cat:not([open]) .rem-caret { transform: scaleX(-1); }
+.rem-dot { width: 12px; height: 12px; border-radius: 50%; background: rgb(var(--rc, 0, 79, 153)); flex: 0 0 auto; }
+.rem-cat-name { font-size: 15px; color: rgb(var(--rc, 0, 79, 153)); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rem-cat-head .btn.small { padding: 4px 12px; }
+.rc-colors { display: flex; flex-wrap: wrap; gap: 10px; }
+.rc-swatch { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #fff; background: rgb(var(--rc)); box-shadow: 0 0 0 1px var(--line); cursor: pointer; padding: 0; }
+.rc-swatch.on { box-shadow: 0 0 0 3px rgb(var(--rc)); }

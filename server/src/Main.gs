@@ -63,6 +63,8 @@ const ACTIONS = {
   onboardRerun:   { roles: ['admin'], fn: actionOnboardRerun_ },
   reminderSave:   { roles: ['admin'], fn: actionReminderSave_ },
   reminderSet:    { roles: ['admin'], fn: actionReminderSet_ },
+  remCatSave:     { roles: ['admin'], fn: actionRemCatSave_ },
+  remCatDelete:   { roles: ['admin'], fn: actionRemCatDelete_ },
 };
 
 function doGet() {
@@ -167,7 +169,8 @@ function roleOf_(email, cfg) {
 const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1,
   lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
   finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1,
-  addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1, reminderSave: 1, reminderSet: 1 };
+  addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1, reminderSave: 1, reminderSet: 1,
+  remCatSave: 1, remCatDelete: 1 };
 function logPerf_(e, out) {
   const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
   // מזהה הליד (שמירה / ניסיון / ↶↷ – מהתשובה) – כדי לדעת בוודאות באיזה ליד מדובר
@@ -377,14 +380,16 @@ function opDupOut_(dup, ctx) {
 /** כמה שינויים ברצף, לפי הסדר (כשיוצאים מהאפליקציה / בפתיחה הבאה). שינוי שכבר הוחל – מדולג. */
 const BATCH_OK_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1,
   lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
-  finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1 };
+  finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1,
+  remCatSave: 1, remCatDelete: 1 };
 /**
  * פעולות שנכנסו לתור במכשיר (גרסה 48): אותה פעולה (אותו opId) מבוצעת פעם אחת בלבד –
  * גם אם הגיעה פעמיים (שליחה ביציאה מהאפליקציה בזמן שהבקשה המקורית עוד רצה, או שליחה חוזרת בפתיחה).
  * לפעולות שהיו בתור קודם (updateLead וכו') יש בדיקה משלהן, בתוך הנעילה.
  */
 const OP_ONCE_ = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
-  finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1 };
+  finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1,
+  remCatSave: 1, remCatDelete: 1 };
 function runAction_(action, req, ctx) {
   const fn = ACTIONS[action].fn;
   if (!OP_ONCE_[action] || !req.opId) return fn(req, ctx);
