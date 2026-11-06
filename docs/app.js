@@ -983,12 +983,27 @@
   // השרת מזהה שינוי שכבר הגיע (לפי המזהה) ולא מחיל אותו פעמיים.
   function newOpId() { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9); }
   function obAll() { return store.get('outbox') || []; }
-  function obAdd(item) { const l = obAll(); l.push(item); store.set('outbox', l.slice(-60)); }
+  function obAdd(item) { const l = obAll(); l.push(item); store.set('outbox', l.slice(-200)); }
   function obRemove(opId) { const l = obAll(); const n = l.filter((x) => x.opId !== opId); if (n.length !== l.length) store.set('outbox', n); }
   // פעולה שחיכתה בתור יותר מ-25 יום לא נשלחת לבד: השרת זוכר פעולות שבוצעו 30 יום, ואחרי זה הוא לא יכול לזהות שליחה חוזרת
-  const OB_STALE_MS = 25 * 864e5;
+  // תזכורות (כולל ↶/↷ שלהן): 30 יום – לפי ההחלטה של ליאל (06/11/2026)
+  const OB_STALE_MS = 25 * 864e5, OB_STALE_REM_MS = 30 * 864e5;
   function obTime(x) { const t = x.at || parseInt(String(x.opId || '').split('-')[0], 36); return t > 1.7e12 ? t : Date.now(); }
-  function obIsStale(x) { return Date.now() - obTime(x) > OB_STALE_MS; }
+  function obIsRem(x) { return /^reminder/.test(x.action || '') || !!x.rem; }
+  function obIsStale(x) { return Date.now() - obTime(x) > (obIsRem(x) ? OB_STALE_REM_MS : OB_STALE_MS); }
+  /** המזהה של התזכורת שהפעולה בתור נוגעת בה (אם זו פעולה על תזכורת) */
+  function obRemId(x) { return x.rem ? x.rem.id : (/^reminder/.test(x.action || '') && x.params ? (x.params.id || x.params.newId) : ''); }
+  function obRemScope(x) { return x.rem ? x.rem.scope : (x.params && x.params.list === 'home' ? 'home' : 'fin'); }
+  /** יש בתור פעולה על תזכורת / ↶ / ↷ שנוצרה לפני הפעולה הזו ועוד לא נשלחה – הסדר חשוב, לכן שולחים הכול יחד לפי הסדר */
+  function obEarlierRem(opId) {
+    const l = obAll(); const i = l.findIndex((x) => x.opId === opId);
+    return l.slice(0, i < 0 ? l.length : i).some((x) => obIsRem(x) || x.action === 'undo' || x.action === 'redo');
+  }
+  const offlineNow = () => navigator.onLine === false;
+  let offToastAt = 0;
+  /** בלי חיבור: השינוי כבר על המסך ונשמר במכשיר – הודעה שקטה (פעם ב-20 שניות לכל היותר), בלי חלון */
+  function savedOffline() { if (Date.now() - offToastAt > 20000) { offToastAt = Date.now(); toast('📱 נשמר במכשיר – יסונכרן לבד כשיהיה חיבור'); } }
+  function kickSync() { setTimeout(() => { if (!offlineNow()) replayOutbox(); }, 400); }
   function obFresh() { return obAll().filter((x) => !obIsStale(x)); }
   let staleShownAt = 0;
   function showStaleOutbox() {
@@ -996,14 +1011,19 @@
     if (!stale.length || Date.now() - staleShownAt < 10 * 60000) return;
     staleShownAt = Date.now();
     const sh = openSheet(`<div class="row"><b class="grow">⏳ שינויים ישנים שלא נשלחו</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
-      <div class="small">השינויים האלה חיכו במכשיר יותר מ-25 יום ולא נשלחו לשרת. אחרי זמן כזה השרת כבר לא יכול לדעת אם הם בוצעו – לכן הם לא נשלחים לבד. החלט לכל אחד:</div>
+      <div class="small">השינויים האלה חיכו במכשיר זמן רב (יותר מ-25 יום, בתזכורות יותר מ-30 יום) ולא נשלחו לשרת. אחרי זמן כזה השרת כבר לא יכול לדעת אם הם בוצעו – לכן הם לא נשלחים לבד. החלט לכל אחד:</div>
       <div class="ob-stale">${stale.map((x) => `<div class="row" data-ob="${esc(x.opId)}" style="align-items:center;gap:8px;margin:8px 0">
         <div class="grow small"><b>${esc(x.desc || x.action)}</b><div class="muted">${esc(new Date(obTime(x)).toLocaleDateString('he-IL'))}</div></div>
         <button class="btn small" data-ob-send>שלח</button><button class="btn small secondary" data-ob-del>מחק</button></div>`).join('')}</div>`);
     sh.el.addEventListener('click', async (ev) => {
       const row = ev.target.closest('[data-ob]'); if (!row) return;
       const it = obAll().find((x) => x.opId === row.dataset.ob); if (!it) { row.remove(); return; }
-      if (ev.target.closest('[data-ob-del]')) { obRemove(it.opId); row.remove(); toast('נמחק מהתור'); }
+      if (ev.target.closest('[data-ob-del]')) {
+        obRemove(it.opId); row.remove(); toast('נמחק מהתור');
+        // תזכורת: השינוי שנמחק מהתור יורד גם מהמסך (חוזר למה שיש בשרת)
+        const rid = obRemId(it);
+        if (rid && !obAll().some((x) => obRemId(x) === rid)) { const sc = obRemScope(it); delete remOv()[sc][rid]; remSaveOv(); redrawStage2(); redrawHome(); softRefresh(); }
+      }
       else if (ev.target.closest('[data-ob-send]')) {
         row.querySelectorAll('button').forEach((b) => { b.disabled = true; });
         try {
@@ -1051,7 +1071,7 @@
         if ((!r.ok && r.code === 'BUSY') || (r.ok && r.data && r.data.duplicate && r.data.running)) { busy++; return; }   // עסוק / עדיין רץ – נשאר בתור, יישלח שוב בפעם הבאה
         obRemove(it.opId);
         // תזכורת שחיכתה בתור – עכשיו השרת אישר
-        if (/^reminder/.test(it.action) && it.params) remConfirm(it.params.list === 'home' ? 'home' : 'fin', it.params.id || it.params.newId);
+        if (obRemId(it)) remConfirm(obRemScope(it), obRemId(it));
         if (!r.ok || (r.data && r.data.done === false)) failed.push({ desc: it.desc, why: r.ok ? (r.data && r.data.message) : r.error });
       });
       if (failed.length) {
@@ -1061,12 +1081,22 @@
           <div class="muted small">בדקו את הלידים האלה ושמרו שוב אם צריך.</div>
           <button class="btn" data-x>הבנתי</button>`);
       } else if (busy) busyQueued();
-      else toast('✓ נשמרו ' + items.length + ' שינויים שחיכו מהפעם הקודמת');
+      else toast('✓ סונכרנו ' + items.length + ' שינויים שחיכו במכשיר');
       leadsFetchedAt = 0; softRefresh(); refetchUndoCounts();
     }).catch(() => { /* אין חיבור – נשאר בתור, ננסה שוב בחזרה לאפליקציה */ })
-      .finally(() => { syncEnd(); replayP = null; });
+      .finally(() => {
+        syncEnd(); replayP = null;
+        // נוספו לתור פעולות בזמן הסנכרון – סבב נוסף מיד (בלי לחכות ל-45 שניות)
+        const sent = {}; items.forEach((x) => { sent[x.opId] = 1; });
+        if (!offlineNow() && obFresh().some((x) => !sent[x.opId] && (obIsRem(x) || x.action === 'undo' || x.action === 'redo'))) setTimeout(replayOutbox, 1500);
+      });
     return replayP;
   }
+  // סנכרון ברקע: כשהחיבור חוזר, וכל 45 שניות כשהאפליקציה פתוחה ויש משהו בתור
+  window.addEventListener('online', () => { if (state.session) setTimeout(replayOutbox, 800); });
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && state.session && !syncN && !offlineNow() && obFresh().length) replayOutbox();
+  }, 45000);
   window.addEventListener('pagehide', flushOutboxOnExit);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushOutboxOnExit(); });
 
@@ -1263,7 +1293,8 @@
     else { state.redoCount = Math.max(0, state.redoCount - 1); state.undoCount++; }
     updateUndoBtn();
     const opId = newOpId();
-    obAdd({ opId, action: isUndo ? 'undo' : 'redo', desc: opDesc(isUndo ? 'undo' : 'redo', {}, current), at: Date.now(), params: { opId } });
+    const remEntry = entry && entry.kind === 'rem' ? { id: entry.id, scope: entry.scope || 'fin' } : null;
+    obAdd(Object.assign({ opId, action: isUndo ? 'undo' : 'redo', desc: opDesc(isUndo ? 'undo' : 'redo', {}, current) + (remEntry ? ' – תזכורת' : ''), at: Date.now(), params: { opId } }, remEntry ? { rem: remEntry } : {}));
     if (!entry) toast(isUndo ? 'מבטל…' : 'מבצע שוב…');
     const revert = () => {
       if (coachBack) { stage2Local(coachBack.back); if (entry && entry.kind === 'rem') remConfirm(entry.scope || 'fin', entry.id); redrawStage2(); redrawHome(); }
@@ -1279,6 +1310,8 @@
     undoChain = undoChain.then(async () => {
       await Promise.allSettled(Object.values(queueByLead).concat(replayP ? [replayP] : []));
       try {
+        // ↶/↷ של תזכורת בלי חיבור (או אחרי פעולות על תזכורות שעוד בתור): נשאר בתור ונשלח יחד איתן לפי הסדר
+        if (remEntry && (offlineNow() || obEarlierRem(opId))) { if (offlineNow()) savedOffline(); kickSync(); return; }
         const d = await apiBusyRetry(isUndo ? 'undo' : 'redo', { opId, _lt: lt, _qw: Math.round(performance.now() - tQueued) });
         obRemove(opId);
         syncUndoCounts(d);
@@ -1298,6 +1331,7 @@
         }
       } catch (e) {
         if (e.code === 'BUSY') { busyQueued(); return; }   // נשאר בתור ועל המסך
+        if (!e.code && remEntry) { savedOffline(); return; }   // תזכורת בלי חיבור: נשאר בתור ועל המסך, יסונכרן לבד
         obRemove(opId);
         revert();
         if (e.code !== 'AUTH') toast('השמירה נכשלה – נסה שוב · ' + e.message, true);
@@ -2859,6 +2893,7 @@
   // נשמר גם במכשיר – כך שאחרי סגירה ופתיחה (כשהפעולה עוד בתור) הפריט לא "חוזר"
   let remOverlay = null;
   function remOv() { if (!remOverlay) { try { remOverlay = JSON.parse(LS.get('lf_rem_overlay') || 'null'); } catch (e) { remOverlay = null; } remOverlay = remOverlay || { fin: {}, home: {} }; } return remOverlay; }
+  function remQueued(id) { return obAll().some((x) => obRemId(x) === id); }
   function remSaveOv() { try { LS.set('lf_rem_overlay', JSON.stringify(remOv())); } catch (e) { /* */ } }
   function remMark(scope, id, st) { remOv()[scope][id] = { st: st, at: Date.now(), ok: 0 }; remSaveOv(); }
   function remConfirm(scope, id) { const o = remOv()[scope] && remOv()[scope][id]; if (o) { o.ok = Date.now(); remSaveOv(); } }
@@ -2868,7 +2903,8 @@
     const ov = remOv()[scope] || {};
     Object.keys(ov).forEach((id) => {
       const o = ov[id];
-      if ((o.ok && Date.now() - o.ok > REM_GRACE_MS) || (!o.ok && Date.now() - o.at > 864e5)) { delete ov[id]; return; }
+      // לא אושר: נשאר כל עוד יש בתור פעולה על התזכורת הזו (גם ימים בלי חיבור); בלי תור – עד יום (ביטחון)
+      if ((o.ok && Date.now() - o.ok > REM_GRACE_MS) || (!o.ok && Date.now() - o.at > 864e5 && !remQueued(id))) { delete ov[id]; return; }
       const i = out.findIndex((r) => r.id === id);
       if (!o.st || o.st.status !== REM_ACTIVE) { if (i >= 0) out.splice(i, 1); return; }
       const cur = i >= 0 ? out[i] : null;
@@ -2976,6 +3012,8 @@
     syncStart();
     undoChain = undoChain.then(async () => {
       try {
+        // בלי חיבור, או שיש לפניה בתור פעולות על תזכורות שעוד לא נשלחו: נשארת בתור (על המסך ובמכשיר), ונשלחת יחד איתן לפי הסדר
+        if (offlineNow() || obEarlierRem(opId)) { if (offlineNow()) savedOffline(); kickSync(); return; }
         const d = await remSend(action, p);
         obRemove(opId); syncUndoCounts(d);
         remConfirm(scope, id);
@@ -2987,7 +3025,7 @@
       } catch (e) {
         if (!e.code || e.code === 'BUSY') {
           // אין חיבור / השרת עסוק גם אחרי הניסיונות החוזרים: נשאר בתור ועל המסך כפי שעשית – נשלח לבד כשחוזרים לאפליקציה / כשיש חיבור
-          if (e.code === 'BUSY') busyQueued(); else remFailNotice(desc, (after || before || {}).text, false);
+          if (e.code === 'BUSY') busyQueued(); else savedOffline();
           return;
         }
         if (e.code !== 'AUTH') obRemove(opId);
