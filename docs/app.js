@@ -378,12 +378,75 @@
     return state.leads ? state.leads.filter((l) => l.untreated).length : 0;
   }
 
+  // ---------- שמירת מצב בין לשוניות ----------
+  // כל לשונית בתפריט זוכרת את המסך האחרון שלה (למשל ליד פתוח) ואת מיקום הגלילה.
+  // לחיצה על לשונית אחרת → חוזרים בדיוק לשם. לחיצה על הלשונית שכבר נמצאים בה → לרשימה הראשית (ושם – לראש הדף).
+  let curTab = '';                 // הלשונית שאליה שייך המסך הנוכחי (#/leads וכו')
+  const tabLast = {};              // לשונית → המסך האחרון בה
+  const scrollPos = {};            // מסך (hash) → מיקום גלילה אחרון
+  let restoreY = null, restoreHash = '', restoreUntil = 0;   // גלילה שצריך להחזיר אחרי שהמסך מצויר
+  function tabRoots() { const r = {}; navItems().forEach((n) => { r[n.h] = 1; }); return r; }
+  /** לאיזו לשונית שייך מסך שנפתח ישירות (למשל מהתראה) – רק כשאין לשונית נוכחית */
+  function tabOfPage(page) {
+    const roots = tabRoots();
+    if (roots['#/' + page]) return '#/' + page;
+    const m = isAdmin() ? { lead: '#/leads', untreated: '#/leads', ghosting: '#/leads', coach: '#/coaches', month: '#/more', onboard: '#/more', settings: '#/more', status: '#/more' }
+      : { lead: '#/leads' };
+    return m[page] || '';
+  }
+  /** נקרא בכל מעבר מסך (route) – לפני הציור */
+  function tabTrack() {
+    // יוצאים מהמסך הקודם: שומרים איפה הוא היה גלול (המסך עוד לא הוחלף, אז זו הגלילה שלו)
+    if (lastShellHash && lastShellHash !== location.hash) scrollPos[lastShellHash] = window.scrollY;
+    const page = location.hash.replace(/^#\/?/, '').split('/')[0] || '';
+    const roots = tabRoots();
+    if (roots['#/' + page]) curTab = '#/' + page;
+    else if (!curTab || !roots[curTab]) curTab = tabOfPage(page);
+    if (curTab) tabLast[curTab] = location.hash;
+    // חזרה לרשימה (גם ב"חזרה") – למיקום הגלילה שהיה בה
+    if (roots['#/' + page] && restoreHash !== location.hash && scrollPos[location.hash] != null) {
+      restoreY = scrollPos[location.hash]; restoreHash = location.hash; restoreUntil = Date.now() + 5000;
+    }
+  }
+  // המשתמש התחיל לגלול בעצמו – מפסיקים להחזיר
+  ['touchstart', 'wheel'].forEach((t) => window.addEventListener(t, () => { restoreY = null; }, { passive: true }));
+  /** לחיצה על לשונית בתפריט (למטה / למעלה במחשב) */
+  function onTabClick(ev) {
+    const a = ev.target.closest('a[href^="#/"]');
+    if (!a || ev.metaKey || ev.ctrlKey) return;
+    const h = a.getAttribute('href');
+    if (!tabRoots()[h]) return;
+    ev.preventDefault();
+    if (h === curTab) {
+      // כבר בלשונית הזו: ממסך פנימי → לרשימה הראשית; כבר ברשימה → לראש הדף
+      if (location.hash === h) { window.scrollTo(0, 0); scrollPos[h] = 0; return; }
+      scrollPos[h] = scrollPos[h] || 0;
+      location.hash = h;
+      return;
+    }
+    const to = tabLast[h] || h;
+    curTab = h;   // המסך הפנימי (למשל ליד) שייך ללשונית שנלחצה
+    if (scrollPos[to] != null) { restoreY = scrollPos[to]; restoreHash = to; restoreUntil = Date.now() + 5000; }
+    if (location.hash === to) route(); else location.hash = to;
+  }
+
+  function tryRestore() {
+    if (restoreY == null || restoreHash !== location.hash) return;
+    if (Date.now() > restoreUntil || isEditing()) { restoreY = null; return; }
+    window.scrollTo(0, restoreY);
+    if (Math.abs(window.scrollY - restoreY) < 2) restoreY = null;   // הגענו – סיימנו
+  }
+
   let lastShellHash = '';
   function shell(title, content, opts) {
     opts = opts || {};
-    const keepY = lastShellHash === location.hash ? window.scrollY : null;
+    let keepY = lastShellHash === location.hash ? window.scrollY : null;
+    // חזרה למסך שמור: ממשיכים להחזיר את הגלילה עד שהמסך המלא מצויר (מסך "טוען" קצר מדי)
+    if (restoreY != null && restoreHash === location.hash) {
+      if (Date.now() < restoreUntil) keepY = restoreY; else restoreY = null;
+    }
     lastShellHash = location.hash;
-    const cur = '#/' + (location.hash.replace(/^#\/?/, '').split('/')[0] || '');
+    const cur = curTab || ('#/' + (location.hash.replace(/^#\/?/, '').split('/')[0] || ''));
     const nav = navItems();
     const link = (n) => `<a href="${n.h}" class="${cur === n.h ? 'active' : ''}"><span class="ico">${n.ico}</span><span>${esc(n.t)}</span>${n.badge ? `<span class="badge">${n.badge}</span>` : ''}</a>`;
     // תפריט עליון (מחשב בלבד): כל הפריטים בשורה, ומה שלא נכנס עובר ל"עוד" (fitTopNav)
@@ -418,6 +481,10 @@
     const back = $app.querySelector('[data-act="back"]');
     if (back) back.onclick = () => (history.length > 1 ? history.back() : (location.hash = '#/leads'));
     if (keepY != null) window.scrollTo(0, keepY);
+    // חלק מהמסכים מציירים את התוכן רק אחרי המסגרת (למשל רשימת הלידים) – מנסים שוב כמה פעמים קצרות
+    if (restoreY != null && restoreHash === location.hash) [0, 60, 200, 500, 1200].forEach((ms) => setTimeout(tryRestore, ms));
+    $app.querySelector('.bottomnav').onclick = onTabClick;
+    const tn = $app.querySelector('.topnav'); if (tn) tn.addEventListener('click', onTabClick);
     fitTopNav();
     renderSync();
   }
@@ -3635,6 +3702,7 @@
   function route() {
     navSeq++;
     if (!state.session) return renderLogin();
+    tabTrack();
     const parts = location.hash.replace(/^#\/?/, '').split('/');
     const page = parts[0];
     if (page === 'home' && isAdmin()) return viewHome();
