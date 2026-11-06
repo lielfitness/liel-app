@@ -14,6 +14,7 @@ const COL_ = {
   callResult: 6, call1Date: 7, call1Time: 8, call2: 9, wa1: 10, call3: 11, wa2: 12, wa3: 13,
   status: 14, summary: 15, zoomResult: 16, notes: 17, zoomDate: 18, reward: 19,
   source: 20, age: 21, cert: 22, difficulty: 23, improve: 24, change: 25, insta: 26,
+  utmSource: 27, utmMedium: 28,   // AA, AB (קריאה בלבד – לסינון "ממומן")
 };
 const CALL_COLS_ = [COL_.call1Date, COL_.call2, COL_.call3];
 const WA_COLS_ = [COL_.wa1, COL_.wa2, COL_.wa3];
@@ -156,6 +157,9 @@ function buildLead_(row, v, d, prevEntry, upCol, shaiCol) {
     if (t > last && x.getTime() <= Date.now()) last = t;
   });
   const status = g(COL_.status);
+  // "ממומן" = הגיע מהפרסום הממומן בפייסבוק: utm_source=facebook ו-utm_medium=paid, או "מקור הגעה" = פייסבוק
+  const paid = (g(COL_.utmSource).toLowerCase() === 'facebook' && g(COL_.utmMedium).toLowerCase() === 'paid') ||
+    g(COL_.source).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim() === 'פייסבוק';
   const calls = CALL_COLS_.filter(function (c) { return g(c); }).length;
   const was = WA_COLS_.filter(function (c) { return g(c); }).length;
 
@@ -175,6 +179,7 @@ function buildLead_(row, v, d, prevEntry, upCol, shaiCol) {
     updatedAt: updated ? updated.getTime() : 0,
     lastActivity: last,
     untreated: UNTREATED_STATUSES_.indexOf(canonicalStatus_(status)) >= 0 && (!last || Date.now() - last > UNTREATED_MS_),
+    paid: paid ? 1 : 0,
     _entryDate: entry,
   };
 }
@@ -371,7 +376,7 @@ function rereadLead_(cfg, id, row) {
 
 // ---------- מטמון בשרת (CacheService) לרשימת הלידים ----------
 // נשמר ל-45 שניות, ומתרוקן בכל כתיבה מהאפליקציה ובכל עריכה ידנית בגיליון.
-const LEADS_CACHE_KEY_ = 'leads_v4';
+const LEADS_CACHE_KEY_ = 'leads_v5';   // v5: + paid (2026-11-06)
 const LEADS_CACHE_SEC_ = 120;
 
 function cachedLeads_(cfg) {

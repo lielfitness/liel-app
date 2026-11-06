@@ -514,6 +514,15 @@ button.fin-month { text-align: start; font: inherit; color: inherit; cursor: poi
 @keyframes syncspin { to { transform: rotate(360deg); } }
 .month-toggle-row { display: flex; align-items: center; gap: 8px; margin: -2px 0 10px; }
 .chip.month-toggle.on { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 700; }
+.month-toggle-row { flex-wrap: wrap; }
+/* בחירת חודש: נראה כמו כפתור, נפתח כבחירה של הטלפון */
+.chip.month-pick { position: relative; padding: 0; display: inline-flex; align-items: center; }
+.chip.month-pick select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; font: inherit; color: inherit;
+  padding: 6px 14px; padding-inline-end: 26px; border-radius: 999px; cursor: pointer; }
+.chip.month-pick::after { content: '▾'; position: absolute; inset-inline-end: 10px; pointer-events: none; font-size: 11px; opacity: .7; }
+.chip.month-pick.on { background: var(--brand); color: #fff; border-color: var(--brand); font-weight: 700; }
+.chip.month-pick.on select option { color: #111; }
+.chip.zero:not(.on) { opacity: .45; }
 .ghost-sec { margin: 22px 0 4px; font-size: 16px; }
 .ghost-left td { color: #8a8a8a; }
 .ghost-left td:not(:first-child) { text-decoration: line-through; }

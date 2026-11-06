@@ -744,12 +744,43 @@
   // שורות שנערכו במסך הזה נשארות גלויות גם אם כבר לא מתאימות לסינון (עד שמחליפים סינון/חיפוש)
   let stickyIds = new Set();
   // "החודש" (ליאל בלבד): רק לידים שנכנסו מה-1 בחודש הנוכחי ועד היום – חל על הקבוצות, המונים והרשימה
-  let monthOnly = LS.get('lf_month_only') === '1';
-  function monthStartIso() { const d = new Date(); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-01`; }
+  // (ליאל בלבד) חודש כניסה: '' = כל החודשים, 'YYYY-MM' = חודש מסוים (נוכחי או קודם). "ממומן" = רק לידים מהפרסום הממומן בפייסבוק.
+  // שניהם חלים על כפתורי הסינון, המונים והרשימה.
+  let leadsMonth = LS.get('lf_leads_month') || (LS.get('lf_month_only') === '1' ? isoToday().slice(0, 7) : '');
+  let paidOnly = LS.get('lf_paid_only') === '1';
+  const MONTH_HE = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+  function monthLabelHe(ym) { const [y, m] = ym.split('-'); return MONTH_HE[Number(m) - 1] + ' ' + y; }
+  /** החודשים שיש בהם לידים (החדש ראשון) + החודש הנוכחי תמיד */
+  function leadMonths() {
+    const set = {}; set[isoToday().slice(0, 7)] = 1;
+    (state.leads || []).forEach((l) => { if (l.entry && /^\d{4}-\d{2}/.test(l.entry)) set[l.entry.slice(0, 7)] = 1; });
+    return Object.keys(set).sort().reverse();
+  }
+  function leadsScoped() { return isAdmin() && (!!leadsMonth || paidOnly); }
   function baseLeads() {
-    if (!monthOnly || !isAdmin()) return state.leads;
-    const from = monthStartIso(), to = isoToday();
-    return state.leads.filter((l) => l.entry && l.entry >= from && l.entry <= to);
+    if (!isAdmin() || (!leadsMonth && !paidOnly)) return state.leads;
+    const today = isoToday();
+    return state.leads.filter((l) => (!paidOnly || l.paid) &&
+      (!leadsMonth || (l.entry && l.entry.slice(0, 7) === leadsMonth && l.entry <= today)));
+  }
+  function bindScopeRow() {
+    const rerender = () => { stickyIds = new Set(); const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y); };
+    const mp = $app.querySelector('[data-act="leads-month"]');
+    if (mp) mp.onchange = () => { leadsMonth = mp.value; LS.set('lf_leads_month', leadsMonth); LS.del('lf_month_only'); mp.blur(); rerender(); };
+    const po = $app.querySelector('[data-act="paid-only"]');
+    if (po) po.onclick = () => { paidOnly = !paidOnly; LS.set('lf_paid_only', paidOnly ? '1' : '0'); rerender(); };
+  }
+  function scopeRowHtml() {
+    if (!isAdmin()) return '';
+    const cur = isoToday().slice(0, 7);
+    const opts = [`<option value="">📅 כל החודשים</option>`].concat(leadMonths().map((ym) =>
+      `<option value="${ym}" ${ym === leadsMonth ? 'selected' : ''}>📅 ${esc(monthLabelHe(ym))}${ym === cur ? ' (החודש)' : ''}</option>`));
+    const n = leadsScoped() ? baseLeads().length : 0;
+    return `<div class="month-toggle-row">
+      <label class="chip month-pick ${leadsMonth ? 'on' : ''}"><select data-act="leads-month" aria-label="חודש כניסה">${opts.join('')}</select></label>
+      <button class="chip month-toggle ${paidOnly ? 'on' : ''}" data-act="paid-only" aria-pressed="${paidOnly}">💰 ממומן${paidOnly ? ' ✕' : ''}</button>
+      ${leadsScoped() ? `<span class="muted small">${n} לידים</span>` : ''}
+    </div>`;
   }
   function leadsListNow() {
     const list = baseLeads().filter((l) => stickyIds.has(l.id) || (matchesFilter(l, state.filter) && matchSearch(l, state.search)));
@@ -766,8 +797,9 @@
       .concat(state.meta.waitingFilter ? [{ k: 'waiting', t: 'ממתינים', n: waitingN }] : [])
       .concat(isAdmin() ? [{ k: 'untreated', t: '⏰ לא טופלו', n: all.filter((l) => l.untreated).length, top: untreatedCount() }] : [])
       .concat(state.meta.closedFilter ? [{ k: 'closed', t: 'נסגר', n: all.filter((l) => matchesFilter(l, 'closed')).length }] : [])
-      .concat(statuses.filter((st) => counts[st]).map((st) => ({ k: 's:' + st, t: st, n: counts[st] })));
-    return chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}${c.top != null ? ' chip-alert' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span>${c.top ? `<span class="badge">${c.top}</span>` : ''}</button>`).join('');
+      // בתצוגת חודש / ממומן – כל הסטטוסים מוצגים (גם 0, באפור), כדי שכל אפשרויות הסינון יהיו שם
+      .concat(statuses.filter((st) => counts[st] || leadsScoped() || state.filter === 's:' + st).map((st) => ({ k: 's:' + st, t: st, n: counts[st] })));
+    return chips.map((c) => `<button class="chip ${state.filter === c.k ? 'on' : ''}${c.top != null ? ' chip-alert' : ''}${!c.n ? ' zero' : ''}" data-f="${esc(c.k)}">${esc(c.t)}<span class="n">${c.n}</span>${c.top ? `<span class="badge">${c.top}</span>` : ''}</button>`).join('');
   }
   function rowFromHtml(l) {
     const t = document.createElement('div'); t.innerHTML = gridRowHtml(l).trim(); return t.firstChild;
@@ -794,6 +826,8 @@
     if (location.hash !== '#/leads' || !document.getElementById('results') || !state.leads) return;
     const c = document.getElementById('chips');
     if (c) c.innerHTML = chipsHtml();
+    const sr = document.getElementById('scope-row');
+    if (sr && !sr.contains(document.activeElement)) { sr.innerHTML = scopeRowHtml(); bindScopeRow(); }
     drawResults();
   }
 
@@ -810,7 +844,7 @@
         <button class="btn add-lead" data-act="add-lead">＋ ליד</button>
       </div>
       <div class="chips" id="chips">${chipsHtml()}</div>
-      ${isAdmin() ? `<div class="month-toggle-row"><button class="chip month-toggle ${monthOnly ? 'on' : ''}" data-act="month-only">${monthOnly ? 'החודש ✕' : '📅 החודש'}</button>${monthOnly ? '<span class="muted small">מוצגים רק לידים שנכנסו מה-1 בחודש</span>' : ''}</div>` : ''}
+      <div id="scope-row">${scopeRowHtml()}</div>
       <div id="results"></div>`);
 
     bindGrid(document.getElementById('results'));
@@ -818,12 +852,7 @@
     $app.querySelector('[data-act="add-lead"]').onclick = openAddLead;
     const q = document.getElementById('q');
     q.oninput = () => { state.search = q.value.trim(); stickyIds = new Set(); drawResults(); };
-    const mt = $app.querySelector('[data-act="month-only"]');
-    if (mt) mt.onclick = () => {
-      monthOnly = !monthOnly; LS.set('lf_month_only', monthOnly ? '1' : '0');
-      stickyIds = new Set();
-      const y = window.scrollY; renderLeadsView(); window.scrollTo(0, y);
-    };
+    bindScopeRow();
     document.getElementById('chips').onclick = (ev) => {
       const b = ev.target.closest('.chip[data-f]');
       if (!b) return;
