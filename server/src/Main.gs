@@ -199,8 +199,10 @@ function logPerf_(e, out) {
     });
   }
   // כישלונות רשת שהמכשיר רשם (קריאות שלא הגיעו / לא ענו) – נשלחים עם הבקשה הבאה; שורה לכל כישלון
-  if (Array.isArray(req.netFails)) {
-    const who = (function () { try { return String(checkSession_(req.session) || '').split('@')[0]; } catch (x) { return ''; } })();
+  // רק ממשתמש מחובר (בלי התחברות – לא נרשם כלום)
+  const nfWho = Array.isArray(req.netFails) ? (function () { try { return String(checkSession_(req.session) || '').split('@')[0]; } catch (x) { return ''; } })() : '';
+  if (nfWho) {
+    const who = nfWho;
     // אותו כישלון שנשלח פעמיים (הבקשה הגיעה אבל התשובה לא חזרה) – נרשם פעם אחת
     const nfKey = function (x) { return 'nf:' + who + ':' + [x.t, x.a, x.n, x.kind].join('|').slice(0, 200); };
     const nfList = req.netFails.slice(0, 20).filter(function (x) { return x && typeof x === 'object'; });
