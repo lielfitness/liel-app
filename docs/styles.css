@@ -239,6 +239,13 @@ dl.info dd { margin: 0; word-break: break-word; }
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 #toast.error { background: var(--danger); }
+/* אין חיבור אחרי 3 ניסיונות – שורה אפורה קטנה (לא אדומה); לחיצה = ניסיון נוסף */
+#net-stale {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--nav-h) + var(--safe-b) + 8px); z-index: 40;
+  background: #eceef1; color: #555; border: 1px solid var(--line); border-radius: 999px;
+  padding: 5px 12px; font-size: 13px; font-family: inherit; cursor: pointer; white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
 
 .picker { margin-top: 10px; display: grid; gap: 6px; max-height: 260px; overflow: auto; }
 .picker button {

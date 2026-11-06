@@ -162,7 +162,52 @@
   const WRITE_ACTIONS = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
     finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1,
     addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1 };
+  // ---------- חיבור: קריאות (לא שמירות) – הגבלת זמן, ניסיון חוזר לבד, ושורה אפורה רק אחרי 3 כישלונות ----------
+  // קריאה לא משנה כלום בשרת, לכן בטוח לנסות שוב. שמירות לא כאן (יש להן תור משלהן).
+  const READ_ACTIONS = { me: 1, listLeads: 1, listGhosting: 1, month: 1, zoomAlerts: 1, home: 1, getLead: 1, undoCount: 1,
+    notifications: 1, coaches: 1, coach: 1, finance: 1, onboardList: 1, perfLog: 1 };
+  const READ_TIMEOUT_MS = 15000, READ_WAITS = [1500, 4000];
+  let lastVisibleAt = 0;   // חזרה מהרקע (לא פתיחה ראשונה)
+  const appStartAt = Date.now();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') lastVisibleAt = Date.now(); });
+  /** כישלונות רשת נרשמים במכשיר ונשלחים לשרת עם הבקשה הבאה שמצליחה (שורת netFail ב"ביצועים") */
+  function netFailLog(x) {
+    try { const l = JSON.parse(LS.get('lf_netfail') || '[]'); l.push(x); LS.set('lf_netfail', JSON.stringify(l.slice(-20))); } catch (e) { /* */ }
+  }
+  function isNetErr(e) { return e && e.code === 'NET'; }
+  async function apiRead(action, params) {
+    // חזרה מהרקע: הרשת באייפון צריכה רגע להתעורר – הבקשה הראשונה מחכה עד חצי שנייה מהחזרה
+    const sinceVis = Date.now() - lastVisibleAt;
+    if (sinceVis < 500) await new Promise((r) => setTimeout(r, 500 - sinceVis));
+    for (let i = 0; ; i++) {
+      const t0 = Date.now();
+      try {
+        const d = await apiRaw(action, params, READ_TIMEOUT_MS);
+        if (i > 0) netFailLog({ t: Date.now(), a: action, kind: 'recovered', n: i + 1 });
+        netOk();
+        return d;
+      } catch (e) {
+        if (!isNetErr(e)) throw e;
+        netFailLog({ t: t0, a: action, kind: e.kind || 'network', n: i + 1, vis: t0 - (lastVisibleAt || appStartAt), ret: lastVisibleAt ? 1 : 0,
+          on: navigator.onLine ? 1 : 0, ms: Date.now() - t0 });
+        if (i >= READ_WAITS.length) { netDown(); throw e; }
+        await new Promise((r) => setTimeout(r, READ_WAITS[i]));
+      }
+    }
+  }
+  /** שורה אפורה קטנה: "לא מעודכן – אין חיבור". נעלמת לבד בקריאה הבאה שמצליחה. */
+  function netDown() {
+    let el = document.getElementById('net-stale');
+    if (!el) {
+      el = document.createElement('button'); el.id = 'net-stale'; el.type = 'button';
+      el.textContent = 'אין חיבור · לחץ לנסות שוב';
+      el.onclick = () => { el.textContent = 'מנסה…'; softRefresh(); setTimeout(() => { if (el.isConnected) el.textContent = 'אין חיבור · לחץ לנסות שוב'; }, 6000); };
+      document.body.appendChild(el);
+    }
+  }
+  function netOk() { const el = document.getElementById('net-stale'); if (el) el.remove(); }
   function api(action, params) {
+    if (READ_ACTIONS[action]) return apiRead(action, params);
     const p = apiRaw(action, params);
     if (!WRITE_ACTIONS[action]) return p;
     syncStart();
@@ -203,24 +248,47 @@
       }
     }
   }
-  async function apiRaw(action, params) {
+  async function apiRaw(action, params, timeoutMs) {
     if (!CFG.apiUrl) throw new Error('האתר עוד לא מחובר לשרת (חסר apiUrl ב-config.js)');
     const body = Object.assign({ action, session: state.session, v: APP_VERSION }, params || {});
     if (state.viewAs && action !== 'login') body.viewAs = state.viewAs;
     if (LS.get('lf_debug') === '1') body.debug = true;
+    // כישלונות רשת קודמים – נשלחים עם הבקשה הזו (רק לרישום ב"ביצועים"); נמחקים מהמכשיר אחרי תשובה תקינה
+    // רק בקשה אחת בכל רגע נושאת אותם (כדי שלא יירשמו פעמיים)
+    let nf = null;
+    if (action !== 'login' && !apiRaw.nfBusy) { try { nf = JSON.parse(LS.get('lf_netfail') || 'null'); } catch (e) { nf = null; } }
+    if (nf && nf.length) { body.netFails = nf; apiRaw.nfBusy = true; } else nf = null;
     let res;
     const t0 = performance.now();
-    try {
-      res = await fetch(CFG.apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(body),
-      });
-    } catch (e) {
-      throw new Error('אין חיבור לשרת. בדקו אינטרנט ונסו שוב.');
-    }
+    const ctl = timeoutMs && typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+    const netErr = (kind) => Object.assign(new Error(kind === 'timeout' ? 'השרת לא ענה בזמן. נסו שוב.' : 'אין חיבור לשרת. בדקו אינטרנט ונסו שוב.'), { code: 'NET', kind });
     let out;
-    try { out = await res.json(); } catch (e) { throw new Error('תשובה לא תקינה מהשרת'); }
+    try {
+      try {
+        res = await fetch(CFG.apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(body),
+          signal: ctl ? ctl.signal : undefined,
+        });
+      } catch (e) {
+        throw netErr(ctl && ctl.signal.aborted ? 'timeout' : 'network');
+      }
+      try { out = await res.json(); } catch (e) {
+        if (ctl && ctl.signal.aborted) throw netErr('timeout');
+        // דף שגיאה של גוגל במקום תשובה – בקריאה זה נחשב תקלה זמנית (ניסיון חוזר)
+        if (timeoutMs) throw Object.assign(new Error('תשובה לא תקינה מהשרת'), { code: 'NET', kind: 'bad-response ' + res.status });
+        throw new Error('תשובה לא תקינה מהשרת');
+      }
+    } finally { if (timer) clearTimeout(timer); if (nf) apiRaw.nfBusy = false; }
+    if (nf) {
+      try {
+        const sent = {}; nf.forEach((x) => { sent[x.t + '|' + x.a + '|' + x.n + '|' + x.kind] = 1; });
+        const left = JSON.parse(LS.get('lf_netfail') || '[]').filter((x) => !sent[x.t + '|' + x.a + '|' + x.n + '|' + x.kind]);
+        if (left.length) LS.set('lf_netfail', JSON.stringify(left)); else LS.del('lf_netfail');
+      } catch (e) { /* */ }
+    }
     logTiming(action, performance.now() - t0, out.ms, out.data && out.data.phases);
     if (PERF_LOCAL[action]) {
       try {
@@ -489,7 +557,7 @@
   function revalidateLeads(onChange) {
     const seq = navSeq;
     refreshLeads(false).then((changed) => { if (changed && seq === navSeq) onChange(); })
-      .catch((e) => { if (seq === navSeq && e.code !== 'AUTH') toast('לא הצלחתי לרענן: ' + e.message, true); });
+      .catch((e) => { if (seq === navSeq && e.code !== 'AUTH' && !isNetErr(e)) toast('לא הצלחתי לרענן: ' + e.message, true); });   // אין חיבור: השורה האפורה בלבד
   }
 
   /** מסכים שלא מבוססים על רשימת הלידים: מציג מהזיכרון מיד ומרענן ברקע. */
@@ -509,7 +577,7 @@
       }
     } catch (e) {
       if (seq !== navSeq || e.code === 'AUTH') return;
-      if (!cached) errorView(title, e); else toast('לא הצלחתי לרענן: ' + e.message, true);
+      if (!cached) errorView(title, e); else if (!isNetErr(e)) toast('לא הצלחתי לרענן: ' + e.message, true);
     }
   }
 

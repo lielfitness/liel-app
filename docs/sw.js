@@ -1,6 +1,6 @@
 // Service worker: רשת קודם (כדי שעדכונים יופיעו מיד), מטמון רק כגיבוי לקבצי האתר.
 // לא נוגע בקריאות ל-API (POST) ולא בגוגל. מציג גם התראות Push (Firebase שולח, אנחנו מציגים).
-const CACHE = 'lf-shell-v65';
+const CACHE = 'lf-shell-v66';
 
 self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => {
@@ -11,13 +11,21 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
-  e.respondWith(
-    fetch(req).then((res) => {
-      const copy = res.clone();
-      caches.open(CACHE).then((c) => c.put(req, copy));
-      return res;
-    }).catch(() => caches.match(req))
-  );
+  // רשת קודם – אבל רשת חלשה לא תוקעת את הפתיחה: אחרי 2.5 שניות (אם יש עותק שמור) מציגים את השמור.
+  // הבקשה לרשת ממשיכה ברקע ומעדכנת את השמור לפעם הבאה. קובץ שאין לו עותק – מחכים לרשת כרגיל.
+  const net = fetch(req).then((res) => {
+    if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
+    return res;
+  });
+  e.respondWith(new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => { if (!done && r) { done = true; resolve(r); } };
+    const fallback = () => caches.match(req).then((c) => { if (c) finish(c); return c; });
+    const timer = setTimeout(fallback, 2500);
+    net.then((res) => { clearTimeout(timer); finish(res); })
+      .catch(() => { clearTimeout(timer); fallback().then((c) => { if (!c) finish(Response.error()); }); });
+  }));
+  e.waitUntil(net.then(() => {}, () => {}));   // העדכון של העותק השמור מסתיים גם אם כבר הוצג השמור
 });
 
 // ---------- התראות ----------

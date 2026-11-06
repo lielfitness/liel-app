@@ -198,6 +198,28 @@ function logPerf_(e, out) {
       add.push(en);
     });
   }
+  // כישלונות רשת שהמכשיר רשם (קריאות שלא הגיעו / לא ענו) – נשלחים עם הבקשה הבאה; שורה לכל כישלון
+  if (Array.isArray(req.netFails)) {
+    const who = (function () { try { return String(checkSession_(req.session) || '').split('@')[0]; } catch (x) { return ''; } })();
+    // אותו כישלון שנשלח פעמיים (הבקשה הגיעה אבל התשובה לא חזרה) – נרשם פעם אחת
+    const nfKey = function (x) { return 'nf:' + who + ':' + [x.t, x.a, x.n, x.kind].join('|').slice(0, 200); };
+    const nfList = req.netFails.slice(0, 20).filter(function (x) { return x && typeof x === 'object'; });
+    let nfSeen = {};
+    try { nfSeen = CacheService.getScriptCache().getAll(nfList.map(nfKey)) || {}; } catch (x) { nfSeen = {}; }
+    const nfNew = {};
+    nfList.forEach(function (x) {
+      const k = nfKey(x);
+      if (nfSeen[k] || nfNew[k]) return;
+      nfNew[k] = '1';
+      const rec = x.kind === 'recovered';
+      add.push({ t: Number(x.t) || Date.now(), a: 'netFail', f: String(x.a || '').slice(0, 40), ms: Number(x.ms) || 0, v: req.v || '', ok: rec,
+        ph: (rec ? 'הצליח בניסיון ' + (Number(x.n) || 0) : String(x.kind || '').slice(0, 30) + ' · ניסיון ' + (Number(x.n) || 0)) +
+          (x.vis != null && !rec ? ' · ' + Math.round(Number(x.vis) / 1000) + 'ש׳ ' + (x.ret ? 'אחרי חזרה מהרקע' : 'אחרי פתיחת האפליקציה') : '') +
+          (x.on === 0 ? ' · offline' : '') + (who ? ' · ' + who : ''),
+        lt: '', qw: '' });
+    });
+    try { if (Object.keys(nfNew).length) CacheService.getScriptCache().putAll(nfNew, 21600); } catch (x) { /* */ }
+  }
   if (!add.length) return;
   // נעילה קצרה למשתמש: שתי בקשות במקביל לא ימחקו זו לזו את הרישום
   const lock = LockService.getUserLock();
