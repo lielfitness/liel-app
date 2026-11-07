@@ -432,6 +432,8 @@ function monthLists_(vals, yy, mm) {
     if (!m || Number(m[2]) !== mm || Number(m[3]) !== yy) return;
     if (String(r[TX_.biz - 1]).trim() !== 'כן') return;
     const item = { id: r[TX_.id - 1], date: r[0], day: Number(m[1]), amount: amt(r[TX_.amount - 1]) };
+    // נוסף מהאפליקציה (הכנסה/הוצאה ידנית) → אפשר למחוק אותו מהרשימה עצמה
+    if (/^manual-/.test(String(item.id)) && /^נרשם מהאפליקציה/.test(String(r[10] || ''))) item.app = 1;
     if (r[TX_.type - 1] === 'הכנסה') {
       item.name = String(r[2]).replace(/^עסקה\s*-\s*/, '').replace(/\s*\(\d+\s*תשלומים\)\s*$/, '').trim();
       const src = String(r[1]), cat = String(r[5]);

@@ -397,7 +397,29 @@
     return m[page] || '';
   }
   /** נקרא בכל מעבר מסך (route) – לפני הציור */
+  // ---------- הודעות ↶ ביטול: מופיעות רק כמה שניות אחרי הפעולה, רק בזיכרון (לא נשמרות בשום מקום) ----------
+  const UNDO_MS = 7000;
+  const undoLiveUntil = new Map();   // 'סוג:מזהה' → עד מתי מציגים את ה-↶
+  let undoTimer = 0, undoPage = '';
+  /** מתחיל את 7 השניות של הודעת ↶ (קורא שוב → מתחיל מחדש) */
+  function undoMark(ns, k) {
+    undoLiveUntil.set(ns + ':' + k, Date.now() + UNDO_MS);
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(undoSweep, UNDO_MS + 50);
+  }
+  function undoLive(ns, k) { const t = undoLiveUntil.get(ns + ':' + k); return !!t && t > Date.now(); }
+  function undoDrop(ns, k) { undoLiveUntil.delete(ns + ':' + k); }
+  function undoSweep() {
+    const now = Date.now();
+    let next = 0, gone = false;
+    undoLiveUntil.forEach((t, k) => { if (t <= now) { undoLiveUntil.delete(k); gone = true; } else if (!next || t < next) next = t; });
+    if (next) undoTimer = setTimeout(undoSweep, next - now + 50);
+    if (gone && !isEditing()) { redrawStage2(); redrawHome(); }
+  }
   function tabTrack() {
+    // יוצאים מהמסך: הודעות ↶ שלו נעלמות (לא חוזרות כשחוזרים)
+    const pg = location.hash.replace(/^#\/?/, '').split('/')[0] || '';
+    if (pg !== undoPage) { undoLiveUntil.clear(); undoPage = pg; }
     // יוצאים מהמסך הקודם: שומרים איפה הוא היה גלול (המסך עוד לא הוחלף, אז זו הגלילה שלו)
     if (lastShellHash && lastShellHash !== location.hash) scrollPos[lastShellHash] = window.scrollY;
     const page = location.hash.replace(/^#\/?/, '').split('/')[0] || '';
@@ -2435,7 +2457,7 @@
           : '<div class="mrun-text muted">עוד אין דוח – יופיע אחרי ההורדה הבאה</div>'}
       </details>
       <div class="section-title">ביטולים מאוחרים${open.length ? ` – ${open.length} לא חויבו` : ''}</div>
-      ${Object.keys(lateUndo).map((id) => `<div class="card mrow decided"><div class="grow small">נוקה: <b>${esc(lateUndo[id].coach)}</b> · ${esc(lateUndo[id].date)}</div><button class="btn small ghost" data-unclear="${esc(id)}">↶ ביטול</button></div>`).join('')}
+      ${Object.keys(lateUndo).filter((id) => undoLive('late', id)).map((id) => `<div class="card mrow decided"><div class="grow small">נוקה: <b>${esc(lateUndo[id].coach)}</b> · ${esc(lateUndo[id].date)}</div><button class="btn small ghost" data-unclear="${esc(id)}">↶ ביטול</button></div>`).join('')}
       ${late.length ? `<div class="mlist">${late.map((m) => `
         <div class="card mrow ${m.charged === 'לא' ? 'late-open' : ''}" data-late="${esc(m.id)}">
           <div class="grow">
@@ -2444,7 +2466,7 @@
             <div class="small">${m.charged === 'כן' ? '💳 חויב – ירדה פגישה' : 'לא חויב'}</div>
           </div>
           ${m.charged === 'לא' ? '<button class="btn small danger" data-charge="1">לחייב</button><button class="btn small ghost" data-clear>נקה</button>' : '<button class="btn small ghost" data-charge="0">לבטל חיוב</button>'}
-        </div>`).join('')}</div>` : (Object.keys(lateUndo).length ? '' : '<div class="card muted">אין ביטולים מאוחרים</div>')}
+        </div>`).join('')}</div>` : (Object.keys(lateUndo).some((id) => undoLive('late', id)) ? '' : '<div class="card muted">אין ביטולים מאוחרים</div>')}
       ${gapSectionHtml(d)}
       <div class="row" style="margin:16px 0 6px;align-items:center;flex-wrap:wrap;gap:6px">
         <div class="grow"><div class="section-title" style="margin:0">מאמנים בליווי</div>${d.count ? `<div class="muted small coach-count">מאמנים ובוגרי ליווי – <b>${d.count.total}</b></div>` : ''}</div>
@@ -2535,7 +2557,7 @@
 
   /** נקה: ראיתי, לא מחייבים – יורד מהרשימה (D לא משתנה). ↶ מחזיר. */
   function clearLate(m) {
-    lateUndo[m.id] = m;
+    lateUndo[m.id] = m; undoMark('late', m.id);
     patchStore('coaches', (dd) => { dd.late = dd.late.filter((x) => x.id !== m.id); });
     redrawStage2();
     sendWrite('lateClear', { id: m.id, coach: m.coach, date: m.date + ' ' + m.time }).then(() => { toast('נוקה ✓'); markDerivedStale(); })
@@ -2652,13 +2674,17 @@
   const money = (n) => (n == null ? '—' : ils(Math.round(n)));
   const decided = {};    // id → { business, undo } – החלטות "לבדיקה" מהמסך הזה
   const debtUndo = {};   // key → פריט חוב שנוקה (להצגת ↶)
-  function finAdded() { return store.get('finAdded') || []; }   // הכנסות/הוצאות ידניות שנוספו מהאפליקציה (ל-↶)
+  // הכנסות/הוצאות ידניות שנוספו עכשיו מהאפליקציה – להודעת ↶ של כמה שניות. רק בזיכרון (עד v71 נשמר במכשיר, ולכן ההודעה חזרה כל פעם)
+  let finAddedMem = [];
+  try { Object.keys(localStorage).filter((k) => /^lf_c:.*:finAdded$/.test(k)).forEach((k) => localStorage.removeItem(k)); } catch (e) { /* */ }   // ניקוי מה שנשמר בגרסאות קודמות
+  function finAdded() { return finAddedMem; }
+  function setFinAdded(l) { finAddedMem = l; }
 
-  function monthDetails(title, items, total, sheetTotal, withSource) {
+  function monthDetails(title, items, total, sheetTotal, withSource, canDel) {
     const diff = sheetTotal != null && Math.abs(Math.round(total) - Math.round(sheetTotal)) > 1;
     return `<details class="card month-list"><summary>${esc(title)} – ${money(total)}</summary>
       ${diff ? `<div class="notice small">בלשונית 2026: ${money(sheetTotal)} (ההפרש מתעדכן בעדכון הפיננסים הבא)</div>` : ''}
-      ${items.length ? `<table class="mtable"><tbody>${items.map((x) => `<tr><td class="nowrap">${esc(x.date.slice(0, 5))}</td><td>${esc(x.name)}</td>${withSource ? `<td class="muted small">${esc(x.source || '')}</td>` : ''}<td class="nowrap amt">${money(x.amount)}</td></tr>`).join('')}</tbody></table>` : '<div class="muted small">אין</div>'}
+      ${items.length ? `<table class="mtable"><tbody>${items.map((x) => `<tr><td class="nowrap">${esc(x.date.slice(0, 5))}</td><td>${esc(x.name)}</td>${withSource ? `<td class="muted small">${esc(x.source || '')}</td>` : ''}<td class="nowrap amt">${money(x.amount)}</td>${canDel ? `<td class="nowrap">${x.app && !/^tmp-/.test(x.id) ? `<button type="button" class="icon-btn small" data-delman="${esc(x.id)}" aria-label="מחיקה" title="מחיקה">🗑</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody></table>` : '<div class="muted small">אין</div>'}
     </details>`;
   }
 
@@ -2738,7 +2764,7 @@
     const sumOf = (a) => a.reduce((s, x) => s + (Number(x.amount) || 0), 0);
     const debts = d.summary && d.summary.debts;
     const debtItems = debts ? (debts.items || []).filter((it) => !it.key || (!it.cleared && !debtUndo[it.key])) : [];
-    const added = finAdded();
+    const added = finAdded().filter((a) => a.pending || undoLive('add', a.id));
     const anom = d.summary && d.summary.anomalies && d.summary.anomalies.items ? d.summary.anomalies : null;
     const anomItems = anom ? anom.items.filter((it) => !it.cleared && !anomUndo[it.key]) : [];
     shell('פיננסים', `
@@ -2764,7 +2790,7 @@
       ${added.length ? `<div class="mlist">${added.map((a) => `<div class="card mrow decided"><div class="grow small">נוספה ${a.kind === 'exp' ? 'הוצאה' : 'הכנסה'} ידנית: <b>${esc(a.desc)}</b> · ${money(a.amount)}${a.pending ? ' · שומר…' : ''}</div>${a.pending ? '' : `<button class="btn small ghost" data-unadd="${esc(a.id)}">↶ ביטול</button>`}</div>`).join('')}</div>` : ''}
       ${remSectionHtml(d)}
       <div class="section-title" style="margin:14px 0 6px">לבדיקה (${review.length})</div>
-      ${(d.review || []).length ? `<div class="mlist">${(d.review || []).map((r) => {
+      ${(d.review || []).filter((r) => !decided[r.id] || decided[r.id].pending || undoLive('dec', r.id)).length ? `<div class="mlist">${(d.review || []).filter((r) => !decided[r.id] || decided[r.id].pending || undoLive('dec', r.id)).map((r) => {
         const dc = decided[r.id];
         return `<div class="card tx-row ${dc ? 'decided' : ''}" data-rid="${esc(r.id)}">
           <div class="tx-top"><b class="grow">${r.bit ? '<span class="pill">ביט</span> ' : ''}${esc(r.desc)}</b><b class="ltr-text">₪${esc(r.amount)}</b></div>
@@ -2776,19 +2802,19 @@
         </div>`;
       }).join('')}</div>` : '<div class="card muted">אין תנועות לבדיקה 🎉</div>'}
       ${debts ? `<div class="section-title">🔴 ${esc(debts.title)}</div><div class="card debts">
-        ${Object.keys(debtUndo).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(debtUndo[k].name)} · ${money(debtUndo[k].amount)}</span><button class="btn small ghost" data-undebt="${esc(k)}">↶ ביטול</button></div>`).join('')}
+        ${Object.keys(debtUndo).filter((k) => undoLive('debt', k)).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(debtUndo[k].name)} · ${money(debtUndo[k].amount)}</span><button class="btn small ghost" data-undebt="${esc(k)}">↶ ביטול</button></div>`).join('')}
         ${debtItems.map((it) => it.head ? `<div class="debt-head">${esc(it.head)}${it.note ? ` <span class="debt-note">${esc(it.note)}</span>` : ''}</div>`
           : it.key ? `<div class="debt-row" data-debt="${esc(it.key)}"><span class="grow"><b>${esc(it.name)}</b> · ${money(it.amount)} · ${esc(it.date)}${it.extra ? `<div class="muted small">${esc(it.extra)}</div>` : ''}</span><button class="btn small ghost" data-clear>נקה</button></div>`
           : `<div class="small">${esc(it.text)}</div>`).join('')}
       </div>` : ''}
       ${anom ? `<div class="section-title">⚠️ ${esc(anom.title)}</div><div class="card debts">
-        ${Object.keys(anomUndo).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(anomUndo[k].text)}</span><button class="btn small ghost" data-unanom="${esc(k)}">↶ ביטול</button></div>`).join('')}
-        ${anomItems.length ? anomItems.map((it) => `<div class="debt-row" data-anom="${esc(it.key)}"><span class="grow small">${esc(it.text)}</span><button class="btn small ghost" data-clear>נקה</button></div>`).join('') : (Object.keys(anomUndo).length ? '' : '<div class="muted small">אין חריגים</div>')}
+        ${Object.keys(anomUndo).filter((k) => undoLive('anom', k)).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(anomUndo[k].text)}</span><button class="btn small ghost" data-unanom="${esc(k)}">↶ ביטול</button></div>`).join('')}
+        ${anomItems.length ? anomItems.map((it) => `<div class="debt-row" data-anom="${esc(it.key)}"><span class="grow small">${esc(it.text)}</span><button class="btn small ghost" data-clear>נקה</button></div>`).join('') : (Object.keys(anomUndo).some((k) => undoLive('anom', k)) ? '' : '<div class="muted small">אין חריגים</div>')}
       </div>` : ''}
       ${d.summary && d.summary.invoices ? `<div class="section-title">🧾 ${esc(d.summary.invoices.title)}</div><div class="card">${pre(d.summary.invoices.body)}</div>` : ''}`}
       <div class="section-title">${isPrev ? esc(cur.label) : 'החודש'}</div>
-      ${monthDetails(isPrev ? 'הכנסות ' + cur.label : 'הכנסות החודש', ml.income, sumOf(ml.income), cur ? cur.income : null, true)}
-      ${monthDetails(isPrev ? 'הוצאות ' + cur.label : 'הוצאות החודש', ml.expenses, sumOf(ml.expenses), cur ? cur.expenses : null, false)}
+      ${monthDetails(isPrev ? 'הכנסות ' + cur.label : 'הכנסות החודש', ml.income, sumOf(ml.income), cur ? cur.income : null, true, !isPrev && ml.income.some((x) => x.app))}
+      ${monthDetails(isPrev ? 'הוצאות ' + cur.label : 'הוצאות החודש', ml.expenses, sumOf(ml.expenses), cur ? cur.expenses : null, false, !isPrev && ml.expenses.some((x) => x.app))}
       ${!isPrev && d.summary && d.summary.text ? `<details class="card"><summary>הצגת הסיכום המלא${d.summary.at ? ` · ${esc(d.summary.at)}` : ''}</summary>${pre(d.summary.text)}</details>` : ''}
       ${finYearHtml(d, viewY)}
       ${d.fixed ? `<div class="section-title">נספחים</div>
@@ -2822,6 +2848,7 @@
     $app.querySelectorAll('[data-anom] [data-clear]').forEach((b) => { b.onclick = () => clearAnom(anomItems.find((x) => x.key === b.closest('[data-anom]').dataset.anom), true); });
     $app.querySelectorAll('[data-unanom]').forEach((b) => { b.onclick = () => clearAnom(anomUndo[b.dataset.unanom], false); });
     $app.querySelectorAll('[data-unadd]').forEach((b) => { b.onclick = () => undoManualTx(b.dataset.unadd); });
+    $app.querySelectorAll('[data-delman]').forEach((b) => { b.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); const id = b.dataset.delman; const it = ml.income.find((x) => x.id === id) || ml.expenses.find((x) => x.id === id); if (it) undoManualTx(id, { kind: ml.expenses.includes(it) ? 'exp' : 'inc', desc: it.name, amount: it.amount }); }; });
   }
 
   const BIT_EXPENSE_CATS = ['שיווק - תוכן', 'שיווק - פרסום ממומן', 'שיווק - לידים', 'תוכנות ומנויים', 'ציוד', 'תקשורת', 'רואה חשבון', 'שכר', 'עמלות סליקה'];
@@ -2839,6 +2866,7 @@
     redrawStage2();
     sendWrite('finDecide', Object.assign({ id: r.id, business }, cat ? { cat } : {})).then((res) => {
       decided[r.id] = { business, cat: decided[r.id] && decided[r.id].cat, undo: res.undo };
+      undoMark('dec', r.id); redrawStage2();
       toast(business ? `✅ עסקי – ${r.desc}` : `❌ פרטי – ${r.desc}`);
       markDerivedStale();
     }).catch((e) => { delete decided[r.id]; redrawStage2(); toast('לא נשמר: ' + e.message, true); });
@@ -2856,7 +2884,7 @@
   function clearAnom(it, clear) {
     if (!it) return;
     const set = (v) => patchStore('finance', (dd) => { const x = dd.summary && dd.summary.anomalies && (dd.summary.anomalies.items || []).find((y) => y.key === it.key); if (x) x.cleared = v; });
-    if (clear) anomUndo[it.key] = it; else delete anomUndo[it.key];
+    if (clear) { anomUndo[it.key] = it; undoMark('anom', it.key); } else delete anomUndo[it.key];
     set(clear); redrawStage2();
     sendWrite('anomClear', { key: it.key, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – לא יוצג שוב' : '↶ חזר לרשימה'))
       .catch((e) => { if (clear) delete anomUndo[it.key]; else anomUndo[it.key] = it; set(!clear); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
@@ -2866,7 +2894,7 @@
   }
   function clearDebt(it) {
     if (!it) return;
-    debtUndo[it.key] = it; setDebtCleared(it.key, true); redrawStage2();
+    debtUndo[it.key] = it; undoMark('debt', it.key); setDebtCleared(it.key, true); redrawStage2();
     sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date }).then(() => toast('נוקה ✓ – לא יופיע שוב בסיכום'))
       .catch((e) => { delete debtUndo[it.key]; setDebtCleared(it.key, false); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
@@ -3290,6 +3318,15 @@
     });
   }
 
+  /** הרשימות של החודש הנוכחי במסך (גם במבנה החדש – ym – וגם בישן) */
+  function curMonthLists(d) {
+    const out = [];
+    const nm = new Date().getMonth() + 1;
+    if (d.month) out.push(d.month);
+    const cm = d.ym && d.ym.months && d.ym.months.find((x) => x.m === nm);
+    if (cm) { cm.lists = cm.lists || { income: [], expenses: [] }; out.push(cm.lists); }
+    return out;
+  }
   /** הכנסה / הוצאה ידנית ל"תנועות" */
   function openManualTx(kind) {
     const exp = kind === 'exp';
@@ -3317,37 +3354,39 @@
       if (!f.desc) { warn.hidden = false; warn.textContent = exp ? 'חסר שם הוצאה' : 'חסר תיאור'; return; }
       sh.close();
       const tmp = { id: 'tmp-' + Date.now(), kind, desc: f.desc, amount: Number(f.amount), pending: true };
-      store.set('finAdded', finAdded().concat([tmp]));
+      setFinAdded(finAdded().concat([tmp]));
       // מיד גם ברשימת החודש (אם זה החודש הנוכחי)
       const [y, m, dd] = f.date.split('-');
       const now = new Date();
       const inMonth = Number(y) === now.getFullYear() && Number(m) === now.getMonth() + 1;
-      const row = { id: tmp.id, date: `${dd}/${m}/${y}`, day: Number(dd), name: f.desc, amount: Number(f.amount), source: exp ? '' : { bit: 'ביט', bank: 'העברה בנקאית', cash: 'מזומן' }[f.source] };
-      if (inMonth) patchStore('finance', (d) => { d.month = d.month || { income: [], expenses: [] }; d.month[exp ? 'expenses' : 'income'].push(row); d.month[exp ? 'expenses' : 'income'].sort((a, b) => a.day - b.day); });
+      const row = { id: tmp.id, app: 1, date: `${dd}/${m}/${y}`, day: Number(dd), name: f.desc, amount: Number(f.amount), source: exp ? '' : { bit: 'ביט', bank: 'העברה בנקאית', cash: 'מזומן' }[f.source] };
+      if (inMonth) patchStore('finance', (d) => { if (!d.ym) d.month = d.month || { income: [], expenses: [] }; curMonthLists(d).forEach((L) => { const k = exp ? 'expenses' : 'income'; L[k] = (L[k] || []).concat([Object.assign({}, row)]).sort((a, b) => a.day - b.day); }); });
       redrawStage2();
       sendWrite(exp ? 'finAddExpense' : 'finAddIncome', f).then((r) => {
-        store.set('finAdded', finAdded().map((a) => (a.id === tmp.id ? { id: r.id, kind, desc: r.desc, amount: r.amount } : a)));
-        patchStore('finance', (d) => { const it = d.month && d.month[exp ? 'expenses' : 'income'].find((x) => x.id === tmp.id); if (it) it.id = r.id; });
+        setFinAdded(finAdded().map((a) => (a.id === tmp.id ? { id: r.id, kind, desc: r.desc, amount: r.amount } : a)));
+        undoMark('add', r.id);
+        patchStore('finance', (d) => { curMonthLists(d).forEach((L) => { const it = (L[exp ? 'expenses' : 'income'] || []).find((x) => x.id === tmp.id); if (it) it.id = r.id; }); });
         redrawStage2();
         toast(`✅ נוספה ${exp ? 'הוצאה' : 'הכנסה'} ${money(Number(f.amount))}`);
         markDerivedStale();
       }).catch((e) => {
-        store.set('finAdded', finAdded().filter((a) => a.id !== tmp.id));
-        patchStore('finance', (d) => { if (d.month) d.month[exp ? 'expenses' : 'income'] = d.month[exp ? 'expenses' : 'income'].filter((x) => x.id !== tmp.id); });
+        setFinAdded(finAdded().filter((a) => a.id !== tmp.id));
+        patchStore('finance', (d) => { curMonthLists(d).forEach((L) => { const k = exp ? 'expenses' : 'income'; L[k] = (L[k] || []).filter((x) => x.id !== tmp.id); }); });
         redrawStage2();
         toast(`ה${exp ? 'הוצאה' : 'הכנסה'} לא נוספה: ` + e.message, true);
       });
     };
   }
-  function undoManualTx(id) {
-    const a = finAdded().find((x) => x.id === id);
+  function undoManualTx(id, fromList) {
+    const a = finAdded().find((x) => x.id === id) || fromList;
     if (!a || !confirm(`למחוק מ"תנועות" את ${a.kind === 'exp' ? 'ההוצאה' : 'ההכנסה'} "${a.desc}" (${money(a.amount)})?`)) return;
     const snapAdded = finAdded(), snapFin = JSON.stringify(store.get('finance'));
-    store.set('finAdded', snapAdded.filter((x) => x.id !== id));
-    patchStore('finance', (d) => { if (d.month) ['income', 'expenses'].forEach((k) => { d.month[k] = d.month[k].filter((x) => x.id !== id); }); });
+    setFinAdded(snapAdded.filter((x) => x.id !== id));
+    undoDrop('add', id);
+    patchStore('finance', (d) => { curMonthLists(d).forEach((L) => ['income', 'expenses'].forEach((k) => { L[k] = (L[k] || []).filter((x) => x.id !== id); })); });
     redrawStage2();
     sendWrite('finRemoveManual', { id, desc: a.desc, amount: a.amount }).then(() => { toast('↶ נמחק מ"תנועות"'); markDerivedStale(); })
-      .catch((e) => { store.set('finAdded', snapAdded); store.set('finance', JSON.parse(snapFin)); redrawStage2(); toast('לא נמחק: ' + e.message, true); });
+      .catch((e) => { setFinAdded(snapAdded); store.set('finance', JSON.parse(snapFin)); redrawStage2(); toast('לא נמחק: ' + e.message, true); });
   }
 
   // ---------- שלב 3: קליטת מאמן ----------
@@ -3519,7 +3558,7 @@
     if (!g) return '<div class="section-title">לא בוצעה פגישה 3 שבועות</div><div class="card muted small">מחושב ברקע מהיומן – יופיע תוך כמה דקות</div>';
     const rows = g.rows.filter((r) => !gapUndo[gapKeyOf(r)]);
     return `<div class="section-title">לא בוצעה פגישה 3 שבועות${rows.length ? ` (${rows.length})` : ''}</div>
-      ${Object.keys(gapUndo).map((k) => `<div class="card mrow decided"><div class="grow small">נוקה: <b>${esc(gapUndo[k].name)}</b></div><button class="btn small ghost" data-ungap="${esc(k)}">↶ ביטול</button></div>`).join('')}
+      ${Object.keys(gapUndo).filter((k) => undoLive('gap', k)).map((k) => `<div class="card mrow decided"><div class="grow small">נוקה: <b>${esc(gapUndo[k].name)}</b></div><button class="btn small ghost" data-ungap="${esc(k)}">↶ ביטול</button></div>`).join('')}
       ${rows.length ? `<div class="mlist">${rows.map((r) => `
         <div class="card mrow late-open" data-gap="${esc(gapKeyOf(r))}">
           <div class="grow">
@@ -3528,13 +3567,13 @@
             ${r.next ? `<div class="small">📅 יש פגישה ב-${ddmm(r.next)}</div>` : ''}
           </div>
           <button class="btn small ghost" data-clear>נקה</button>
-        </div>`).join('')}</div>` : (Object.keys(gapUndo).length ? '' : '<div class="card muted">כל המאמנים נפגשו ב-3 השבועות האחרונים 👏</div>')}`;
+        </div>`).join('')}</div>` : (Object.keys(gapUndo).some((k) => undoLive('gap', k)) ? '' : '<div class="card muted">כל המאמנים נפגשו ב-3 השבועות האחרונים 👏</div>')}`;
   }
   function clearGap(key, clear) {
     const d = store.get('coaches');
     const r = clear ? d && d.gap && d.gap.rows.find((x) => gapKeyOf(x) === key) : gapUndo[key];
     if (!r) return;
-    if (clear) gapUndo[key] = r; else delete gapUndo[key];
+    if (clear) { gapUndo[key] = r; undoMark('gap', key); } else delete gapUndo[key];
     redrawStage2();
     sendWrite('gapClear', { name: r.name, last: r.last, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – יחזור אם לא תהיה פגישה 3 שבועות אחרי הפגישה הבאה' : '↶ חזר לרשימה'))
       .catch((e) => { if (clear) delete gapUndo[key]; else gapUndo[key] = r; redrawStage2(); toast('לא נשמר: ' + e.message, true); });
