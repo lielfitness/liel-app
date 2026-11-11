@@ -224,7 +224,7 @@
     const p = Object.assign({}, params, { opId });
     const who = params.coach || params.name || params.desc || '';
     obAdd({ opId, action, desc: (WRITE_LABELS[action] || action) + (params.undo ? ' (↶)' : '') + (who ? ' – ' + who : ''), at: Date.now(), params: p });
-    return apiBusyRetry(action, p).then((d) => {
+    return writeNetRetry(action, p).then((d) => {
       obRemove(opId);
       // הפעולה כבר בוצעה בעבר (רישום קבוע בשרת) – אין תוצאה מלאה להחיל; המסך נשאר כפי שהוא ומתרענן מהשרת
       if (d && d.duplicate && d.durable) { softRefresh(); return new Promise(() => {}); }
@@ -233,6 +233,29 @@
       if (e.code === 'BUSY') { busyQueued(); return new Promise(() => {}); }   // נשאר בתור; המסך נשאר כפי שהוא
       if (e.code !== 'AUTH') obRemove(opId); throw e;
     });
+  }
+  /**
+   * שמירה דרך sendWrite: הבקשה לא הגיעה לשרת / התשובה לא חזרה (בעיית רשת, למשל רגע אחרי חזרה מהרקע) –
+   * עוד 2 ניסיונות לבד (אותו opId – השרת מבצע פעם אחת). שגיאה מהשרת עצמו (עם code) – מוצגת מיד כמו שהיא.
+   * כל כישלון רשת נרשם ב"ביצועים" (netFail) כדי שאפשר יהיה לראות מה קרה.
+   */
+  async function writeNetRetry(action, p) {
+    const waits = [1500, 4000];
+    const sinceVis = Date.now() - lastVisibleAt;
+    if (sinceVis < 500) await new Promise((r) => setTimeout(r, 500 - sinceVis));
+    for (let i = 0; ; i++) {
+      const t0 = Date.now();
+      try {
+        const d = await apiBusyRetry(action, p);
+        if (i > 0) netFailLog({ t: Date.now(), a: action, kind: 'recovered', n: i + 1 });
+        return d;
+      } catch (e) {
+        if (e.code) throw e;   // תשובה מהשרת (שגיאה אמיתית / עסוק / הרשאה)
+        netFailLog({ t: t0, a: action, kind: 'write', n: i + 1, vis: t0 - (lastVisibleAt || appStartAt), ret: lastVisibleAt ? 1 : 0, on: navigator.onLine === false ? 0 : 1 });
+        if (i >= waits.length) throw new Error(e.message === 'תשובה לא תקינה מהשרת' ? 'תשובה לא תקינה מהשרת (ניסיתי 3 פעמים)' : 'אין חיבור לשרת (ניסיתי 3 פעמים). בדקו אינטרנט ונסו שוב.');
+        await new Promise((r) => setTimeout(r, waits[i]));
+      }
+    }
   }
   /** אחרי 3 תשובות "עסוק": השינוי נשאר בתור ועל המסך, ונשלח שוב לבד (בחזרה לאפליקציה / בפתיחה הבאה) – לא שגיאה */
   function busyQueued() { toast('⏳ השרת עסוק – השינוי שמור בתור ויישלח שוב לבד'); }
@@ -2897,14 +2920,14 @@
   function clearDebt(it) {
     if (!it) return;
     debtUndo[it.key] = it; undoMark('debt', it.key); setDebtCleared(it.key, true); redrawStage2();
-    sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date }).then(() => toast('נוקה ✓ – לא יופיע שוב בסיכום'))
+    sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date, extra: it.extra || '' }).then(() => toast('נוקה ✓ – לא יופיע שוב בסיכום'))
       .catch((e) => { delete debtUndo[it.key]; setDebtCleared(it.key, false); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
   }
   function unclearDebt(key) {
     const it = debtUndo[key];
     if (!it) return;
     delete debtUndo[key]; setDebtCleared(key, false); redrawStage2();
-    sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date, undo: true }).then(() => toast('↶ חזר לדוח'))
+    sendWrite('debtClear', { type: it.type, name: it.name, amount: it.amount, date: it.date, extra: it.extra || '', undo: true }).then(() => toast('↶ חזר לדוח'))
       .catch((e) => { debtUndo[key] = it; setDebtCleared(key, true); redrawStage2(); toast('לא בוצע: ' + e.message, true); });
   }
 

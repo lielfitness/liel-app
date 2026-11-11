@@ -263,7 +263,8 @@ function actionFinance_(req, ctx) {
   const parts = splitSummary_(text);
   const cleared = clearedDebts_(ss);
   const debts = parts['🔴'] ? parseDebts_(parts['🔴'].body).map(function (it) {
-    return it.key ? Object.assign(it, { cleared: !!cleared[it.key] }) : it;
+    // legacyKey: שורה בלי שם שנוקתה לפני 12/11/2026 נשמרה לפי שם+סכום+תאריך – נשארת מנוקה
+    return it.key ? Object.assign(it, { cleared: !!(cleared[it.key] || (it.legacyKey && cleared[it.legacyKey])) }) : it;
   }) : null;
   return {
     months: months,
@@ -450,7 +451,7 @@ function monthLists_(vals, yy, mm) {
 
 // ---------- דוח חייבים: פריטים + "נקה" ----------
 const DEBT_TAB_ = 'חייבים שנוקו (מערכת)';
-const DEBT_HEAD_ = ['תאריך ניקוי', 'סוג', 'שם לקוח', 'סכום', 'תאריך החוב'];
+const DEBT_HEAD_ = ['תאריך ניקוי', 'סוג', 'שם לקוח', 'סכום', 'תאריך החוב', 'זיהוי (בלי שם / ₪0)'];
 
 /** "עסקאות שלא עברו:\nללא שם - ₪8,800 - 18/10 - 12 תשלומים, …" → פריטים */
 function parseDebts_(body) {
@@ -466,14 +467,33 @@ function parseDebts_(body) {
     if (m && type) {
       const amount = Number(m[2].replace(/,/g, ''));
       items.push({ type: type, name: m[1].trim(), amount: amount, date: m[3], extra: m[4].trim(), text: t,
-        key: debtKey_(type, m[1].trim(), amount, m[3]) });
+        key: debtKey_(type, m[1].trim(), amount, m[3], debtReason_(m[4])),
+        legacyKey: amount > 0 ? debtKey_(type, m[1].trim(), amount, m[3]) : '' });
     } else items.push({ text: t });
   });
   return items;
 }
-function debtKey_(type, name, amount, date) {
+/**
+ * מפתח של שורת חוב (לניקוי). שורה רגילה: סוג + שם + סכום + תאריך (כמו תמיד – ניקויים ישנים נשארים תקפים).
+ * שורה בלי שם ("ללא שם") או בסכום 0: אין לפי מה להבדיל – לכן לפי מזהה העסקה של קארדקום אם יש,
+ * ואחרת לפי התאריך + סיבת הכישלון + מספר הניסיונות (reason – ראו debtReason_).
+ */
+function debtNameless_(name, amount) { name = String(name || '').trim(); return !name || name === 'ללא שם' || !(Number(amount) > 0); }
+function debtKey_(type, name, amount, date, reason) {
   const d = String(date).split('/');
-  return [type, String(name).trim(), Number(amount), Number(d[0]) + '/' + Number(d[1])].join('|');
+  const dm = Number(d[0]) + '/' + Number(d[1]);
+  if (debtNameless_(name, amount) && reason) return [type, '#' + reason, dm].join('|');
+  return [type, String(name).trim(), Number(amount), dm].join('|');
+}
+/** "אין הסכם לסליקת המותג (4 ניסיונות, כנראה בדיקת כרטיס)" → "אין הסכם לסליקת המותג·4". מזהה קארדקום (6+ ספרות) – "id:…" */
+function debtReason_(extra) {
+  const t = String(extra || '').trim();
+  if (!t) return '';
+  const id = t.match(/(?:עסקה|מזהה|מס['׳]?|#)\s*(?:מס['׳]?\s*)?(\d{6,})/);
+  if (id) return 'id:' + id[1];
+  const reason = t.replace(/\(.*$/, '').replace(/[.\s]+$/, '').replace(/\s+/g, ' ').trim();
+  const n = (t.match(/(\d+)\s*ניסיונות/) || [])[1] || '1';
+  return reason ? reason + '·' + n : '';
 }
 function debtSheet_(ss, create) {
   let sh = ss.getSheetByName(DEBT_TAB_);
@@ -482,7 +502,7 @@ function debtSheet_(ss, create) {
   sh.getRange(1, 1, 1, DEBT_HEAD_.length).setValues([DEBT_HEAD_]).setFontWeight('bold');
   sh.setFrozenRows(1);
   sh.setRightToLeft(true);
-  sh.getRange('A:E').setNumberFormat('@');
+  sh.getRange('A:F').setNumberFormat('@');
   sh.hideSheet();
   return sh;
 }
@@ -490,29 +510,36 @@ function clearedDebts_(ss) {
   const sh = debtSheet_(ss, false);
   const out = {};
   if (!sh || sh.getLastRow() < 2) return out;
-  sh.getRange(2, 1, sh.getLastRow() - 1, 5).getDisplayValues().forEach(function (r) {
-    out[debtKey_(r[1], r[2], Number(String(r[3]).replace(/[,₪\s]/g, '')), r[4])] = 1;
+  sh.getRange(2, 1, sh.getLastRow() - 1, 6).getDisplayValues().forEach(function (r) {
+    out[debtKey_(r[1], r[2], Number(String(r[3]).replace(/[,₪\s]/g, '')), r[4], r[5])] = 1;
   });
   return out;
 }
 function actionDebtClear_(req, ctx) {
   const type = req.type === 'הוראת קבע' ? 'הוראת קבע' : 'עסקה שלא עברה';
-  const name = String(req.name || '').trim(), amount = Number(req.amount), date = String(req.date || '').trim();
-  if (!name || !(amount > 0) || !date) throw apiError_('BAD_REQUEST', 'פריט לא תקין');
-  const key = debtKey_(type, name, amount, date);
+  // בלי שם / סכום 0 מותר (למשל ניסיונות סליקה שנכשלו) – מזוהה לפי התאריך + סיבת הכישלון + מספר הניסיונות
+  const name = String(req.name || '').trim() || 'ללא שם', amount = Number(req.amount), date = String(req.date || '').trim();
+  if (!(amount >= 0) || !isFinite(amount)) throw apiError_('BAD_REQUEST', 'סכום לא תקין בשורת החוב');
+  if (!/^\d{1,2}\/\d{1,2}/.test(date)) throw apiError_('BAD_REQUEST', 'חסר תאריך בשורת החוב');
+  const reason = debtNameless_(name, amount) ? debtReason_(req.extra) : '';
+  if (debtNameless_(name, amount) && !reason) throw apiError_('BAD_REQUEST', 'שורה בלי שם ובלי סיבת כישלון – אין לפי מה לזהות אותה');
+  const key = debtKey_(type, name, amount, date, reason);
   let out = null;
   finLock_(function () {
     const sh = debtSheet_(finSs_(), true);
     const n = sh.getLastRow() - 1;
-    const vals = n > 0 ? sh.getRange(2, 1, n, 5).getDisplayValues() : [];
+    const vals = n > 0 ? sh.getRange(2, 1, n, 6).getDisplayValues() : [];
+    const legacy = amount > 0 ? debtKey_(type, name, amount, date) : '';
     const rowOf = function () {
       for (let i = vals.length - 1; i >= 0; i--) {
-        if (debtKey_(vals[i][1], vals[i][2], Number(String(vals[i][3]).replace(/[,₪\s]/g, '')), vals[i][4]) === key) return i + 2;
+        const k = debtKey_(vals[i][1], vals[i][2], Number(String(vals[i][3]).replace(/[,₪\s]/g, '')), vals[i][4], vals[i][5]);
+        if (k === key || (legacy && !vals[i][5] && k === legacy)) return i + 2;
       }
       return 0;
     };
     if (req.undo) { const r = rowOf(); if (r) sh.deleteRow(r); out = { ok: true }; return; }
-    if (!rowOf()) sh.appendRow([Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy'), type, name, String(amount), date]);
+    if (sh.getRange(1, 6).getValue() !== DEBT_HEAD_[5]) sh.getRange(1, 6).setValue(DEBT_HEAD_[5]).setFontWeight('bold');   // לשונית ישנה – כותרת לעמודה החדשה
+    if (!rowOf()) sh.appendRow([Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy'), type, name, String(amount), date, reason]);
     out = { ok: true };
   });
   return out;
