@@ -592,3 +592,8 @@ details.rem-cat[open] .rem-caret { transform: rotate(90deg); }
 .rc-colors { display: flex; flex-wrap: wrap; gap: 10px; }
 .rc-swatch { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #fff; background: rgb(var(--rc)); box-shadow: 0 0 0 1px var(--line); cursor: pointer; padding: 0; }
 .rc-swatch.on { box-shadow: 0 0 0 3px rgb(var(--rc)); }
+
+/* 📅 הוספה ליומן (בשורת התזכורת): כבוי – אפור וחלש; דלוק – צבע מלא על רקע אדום בהיר */
+.rem-calbtn { filter: grayscale(1); opacity: .45; }
+.rem-calbtn.on { filter: none; opacity: 1; background: rgba(213, 0, 0, .14); border-color: rgba(213, 0, 0, .55); }
+.toggle-row[hidden] { display: none; }

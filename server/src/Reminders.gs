@@ -105,20 +105,21 @@ function actionReminderSave_(req, ctx) {
     date = parseIsoTz_(today + 'T' + time + ':00').getTime() > Date.now() ? today
       : Utilities.formatDate(new Date(Date.now() + DAY_MS_), TZ_, 'yyyy-MM-dd');
   }
-  let out = null, calRow = null, calHad = false;
+  let out = null, calRow = null, calHad = false, calPrevWant = false;
   withLock_(function () {
     CACHE_PATCH_ = 'skip';
     const d = remRows_();
     // הוספה שכבר קרתה (אותו newId) – למשל שליחה חוזרת מהתור אחרי יותר מ-6 שעות: לא יוצרים שורה שנייה, לא משנים כלום
     const dupNew = !req.id && req.newId ? remLatest_(remAllById_(d, String(req.newId))) : null;
-    if (dupNew) { out = { duplicate: true, reminder: dupNew.status === REM_ACTIVE_ ? remPublic_(dupNew) : null }; calRow = dupNew.cal ? dupNew : null; calHad = !!dupNew.cal; return; }
+    if (dupNew) { out = { duplicate: true, reminder: dupNew.status === REM_ACTIVE_ ? remPublic_(dupNew) : null }; calRow = dupNew.cal ? dupNew : null; calHad = !!dupNew.cal; calPrevWant = remCalWant_(dupNew); return; }
     const rows = req.id ? remAllById_(d, req.id).filter(function (r) { return remCanTouch_(r, ctx); }) : [];
     let x = remLatest_(rows);
     if (req.id && !x) throw apiError_('NOT_FOUND', 'התזכורת לא נמצאה');
     // עריכה ישנה (נוצרה לפני השינוי האחרון בשורה) – לא דורסת (למשל לא מחזירה תזכורת שנמחקה)
     const opT = remOpTime_(req);
-    if (x && opT && opT < x.updated - REM_STALE_MS_) { out = { duplicate: true, stale: true, reminder: x.status === REM_ACTIVE_ ? remPublic_(x) : null }; calRow = x.cal ? x : null; calHad = !!x.cal; return; }
+    if (x && opT && opT < x.updated - REM_STALE_MS_) { out = { duplicate: true, stale: true, reminder: x.status === REM_ACTIVE_ ? remPublic_(x) : null }; calRow = x.cal ? x : null; calHad = !!x.cal; calPrevWant = remCalWant_(x); return; }
     const before = remState_(x);
+    calPrevWant = remCalWant_(x);   // לפני השינוי: האם האירוע אמור היה להיות ביומן
     if (!x) x = { row: d.sh.getLastRow() + 1, id: String(req.newId || Utilities.getUuid().slice(0, 10)), created: Date.now(), status: REM_ACTIVE_, notified: '',
       list: list, owner: list === 'home' ? ctx.email : '' };
     x.text = text; x.date = date; x.time = time; x.status = REM_ACTIVE_;
@@ -134,8 +135,9 @@ function actionReminderSave_(req, ctx) {
     pushUndoEntry_(ctx.email, { kind: 'rem', id: x.id, before: before, after: remState_(x), desc: before ? 'עריכת תזכורת' : 'תזכורת חדשה', changes: [] });
     out = { reminder: remPublic_(x) };
   });
-  const cal = calRow ? remCalSync_(calRow, calHad) : null;   // אחרי הנעילה (קריאה ליומן לוקחת זמן)
+  const cal = calRow ? remCalSync_(calRow, calHad, calPrevWant) : null;   // אחרי הנעילה (קריאה ליומן לוקחת זמן)
   if (cal && cal.error) out.calError = cal.error;
+  if (cal && cal.off) { remCalOff_(calRow.id); out.calOff = true; if (out.reminder) out.reminder.cal = false; }
   if (out.duplicate) return Object.assign(out, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
   remSchedule_();   // פיננסים: אם זמן ההתראה כבר עבר – נשלחת עכשיו
   const fresh = remLatest_(remAllById_(remRows_(), out.reminder.id));
@@ -173,17 +175,18 @@ function remUndoRedo_(e, to, verb, ctx) {
   if (!x) return { done: false, message: 'התזכורת לא נמצאה' };
   const cur = remState_(x);
   const target = e.before || { text: x.text, date: x.date, time: x.time, status: REM_DELETED_ };   // לפני ההוספה = לא קיימת
+  const calHad = !!x.cal, calPrevWant = remCalWant_(x);   // לפני השינוי (האם האירוע אמור היה להיות ביומן)
   x.text = target.text; x.date = target.date; x.time = target.time || ''; x.status = target.status;
   if (target.cat != null) x.cat = target.cat;   // רשומות ישנות (לפני הקטגוריות) – הקטגוריה לא משתנה
-  const calHad = !!x.cal;
   if (target.cal != null) x.cal = target.cal;     // רשומות ישנות (לפני היומן) – לא משתנה
   remWrite_(d.sh, x);
   rows.forEach(function (r) { if (r.row !== x.row && r.status === REM_ACTIVE_) { r.status = REM_DELETED_; remWrite_(d.sh, r); } });
   pushStack_(to, ctx.email, { kind: 'rem', id: e.id, before: cur, after: target, desc: e.desc, changes: [] });
   remSchedule_(true);   // בתוך הנעילה – ההתראה (אם הגיע זמנה) תצא בבדיקה של הדקה הבאה
-  const cal = (x.cal || calHad) ? remCalSync_(x, calHad) : null;   // ↶ בוצע/מחיקה → האירוע חוזר; ↶ עריכה → הזמן הקודם
+  const cal = (x.cal || calHad) ? remCalSync_(x, calHad, calPrevWant) : null;   // ↶ בוצע/מחיקה → האירוע חוזר; ↶ עריכה → הזמן הקודם
+  if (cal && cal.off) { x.cal = ''; remWrite_(d.sh, x); }   // נמחק ידנית ביומן – רק מכבים את הסימון
   return Object.assign({ done: true, message: verb + ': ' + (e.desc || 'תזכורת'), rem: true, reminder: target.status === REM_ACTIVE_ ? remPublic_(x) : null, remId: e.id },
-    cal && cal.error ? { calError: cal.error } : {});
+    cal && cal.error ? { calError: cal.error } : {}, cal && cal.off ? { calOff: true } : {});
 }
 
 // ---------- התראות ----------
@@ -341,10 +344,13 @@ function remCalId_(id) {
 }
 function remCalWant_(x) { return !!(x && x.cal && x.list === 'home' && x.status === REM_ACTIVE_ && x.date && x.time); }
 /**
- * מביא את היומן למצב של התזכורת: צריך אירוע → יוצר/מעדכן (גם אירוע שנמחק קודם חוזר); לא צריך → מוחק.
+ * מביא את היומן למצב של התזכורת – בכיוון אחד בלבד (אפליקציה → יומן): צריך אירוע → יוצר/מעדכן; לא צריך → מוחק.
+ * prevWant: לפני השינוי האירוע אמור היה להיות ביומן. אם כן והוא נמחק שם (status cancelled) – ליאל מחק אותו ידנית:
+ *   לא יוצרים מחדש ולא מציגים שגיאה, רק מחזירים { off } כדי לכבות את הסימון בתזכורת.
+ *   (אירוע שהאפליקציה עצמה הורידה – בוצע / מחיקה / ביטול סימון / בלי שעה – prevWant=false, ולכן ↶ / סימון מחדש מחזירים אותו.)
  * לא זורק: כשל ביומן לא מפיל את שמירת התזכורת – מחזיר { error }.
  */
-function remCalSync_(x, had) {
+function remCalSync_(x, had, prevWant) {
   const want = remCalWant_(x);
   if (!want && !had) return null;
   const calId = 'primary', evId = x.cal || remCalId_(x.id);
@@ -352,6 +358,7 @@ function remCalSync_(x, had) {
     const notFound = function (e) { return /not ?found|404|410|deleted/i.test(String(e && e.message || e)); };
     let ev = null;
     try { ev = Calendar.Events.get(calId, evId); } catch (e) { if (!notFound(e)) throw e; }
+    if (want && prevWant && ev && ev.status === 'cancelled') return { off: true };
     if (want) {
       const start = parseIsoTz_(x.date + 'T' + x.time + ':00');
       const end = new Date(start.getTime() + 30 * 60000);
@@ -372,4 +379,13 @@ function remCalSync_(x, had) {
     console.warn('יומן – תזכורת ' + x.id + ': ' + (e && e.message || e));
     return { error: String(e && e.message || e).slice(0, 200) };
   }
+}
+
+/** האירוע נמחק ידנית ביומן – מכבים את "ביומן" בתזכורת (בכל השורות עם המזהה) */
+function remCalOff_(id) {
+  withLock_(function () {
+    CACHE_PATCH_ = 'skip';
+    const d = remRows_();
+    remAllById_(d, id).forEach(function (r) { if (r.cal) { r.cal = ''; remWrite_(d.sh, r); } });
+  });
 }

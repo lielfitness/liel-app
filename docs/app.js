@@ -2997,8 +2997,9 @@
         <div class="rem-swipe ${r.alerted ? 'alerted' : ''}" data-rem="${esc(r.id)}" data-scope="${scope}">
           <button type="button" class="rem-del-bg" data-rem-del tabindex="-1">מחק</button>
           <div class="rem-row">
-            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${past ? 'past' : ''}">${esc(fmtIso(r.date))}${r.time ? ' · ' + esc(r.time) : ''}${r.cal && r.time ? ' <span class="rem-cal" title="ביומן" aria-label="ביומן">📅</span>' : ''}${past ? ' · עבר' : ''}</div>` : ''}</div>
+            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${past ? 'past' : ''}">${esc(fmtIso(r.date))}${r.time ? ' · ' + esc(r.time) : ''}${past ? ' · עבר' : ''}</div>` : ''}</div>
             ${scope === 'home' && remAlarmOn(r) ? `<a class="rem-btn rem-alarm" href="${esc(remAlarmUrl(r))}" aria-label="שעון מעורר" title="שעון מעורר (קיצור הדרך Liel Alarm)">⏰</a>` : ''}
+            ${scope === 'home' && remCanCal() ? `<button type="button" class="rem-btn rem-calbtn ${r.cal ? 'on' : ''}" data-rem-cal aria-pressed="${!!r.cal}" aria-label="${r.cal ? 'ביומן – להסיר מהיומן' : 'הוספה ליומן'}" title="${r.cal ? 'ביומן – לחיצה מסירה' : 'הוספה ליומן'}">📅</button>` : ''}
             <button type="button" class="rem-btn rem-hover-del" data-rem-del aria-label="מחיקה" title="מחיקה">🗑</button>
             <button type="button" class="rem-btn" data-rem-edit aria-label="עריכה" title="עריכה">✎</button>
             <button type="button" class="rem-btn" data-rem-done aria-label="בוצע" title="בוצע">✓</button>
@@ -3108,7 +3109,7 @@
         <div class="rem-swipe ${r.alerted ? 'alerted' : ''}" data-rem="${esc(r.id)}" data-scope="${scope}">
           <button type="button" class="rem-del-bg" data-rem-del tabindex="-1">מחק</button>
           <div class="rem-row">
-            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${past ? 'past' : ''}">${esc(fmtIso(r.date))}${r.time ? ' · ' + esc(r.time) : ''}${r.cal && r.time ? ' <span class="rem-cal" title="ביומן" aria-label="ביומן">📅</span>' : ''}${past ? ' · עבר' : ''}</div>` : ''}</div>
+            <div class="grow rem-main"><div class="rem-text">${esc(r.text)}</div>${r.date ? `<div class="rem-date ${past ? 'past' : ''}">${esc(fmtIso(r.date))}${r.time ? ' · ' + esc(r.time) : ''}${past ? ' · עבר' : ''}</div>` : ''}</div>
             ${scope === 'home' && remAlarmOn(r) ? `<a class="rem-btn rem-alarm" href="${esc(remAlarmUrl(r))}" aria-label="שעון מעורר" title="שעון מעורר (קיצור הדרך Liel Alarm)">⏰</a>` : ''}
             <button type="button" class="rem-btn rem-hover-del" data-rem-del aria-label="מחיקה" title="מחיקה">🗑</button>
             <button type="button" class="rem-btn" data-rem-edit aria-label="עריכה" title="עריכה">✎</button>
@@ -3145,7 +3146,49 @@
   function remFind(id, scope) { scope = scope || 'fin'; const d = store.get(REM_STORE[scope]); return d ? remView(d.reminders || [], scope).find((r) => r.id === id) : null; }
   function remStateOf(r) { return r ? { text: r.text, date: r.date || '', time: r.time || '', status: REM_ACTIVE, cat: r.cat || '', cal: !!r.cal } : null; }
   /** "הוספה ליומן" נכשלה בשרת – התזכורת עצמה נשמרה */
-  function calErrNotice(d) { if (d && d.calError) toast('התזכורת נשמרה · ההוספה ליומן נכשלה', true); }
+  function calErrNotice(d) {
+    if (d && d.calError) toast('התזכורת נשמרה · ההוספה ליומן נכשלה', true);
+    // האירוע נמחק ידנית ביומן → השרת כיבה את "ביומן" (בשקט, בלי שגיאה). הסנכרון הוא רק מהאפליקציה ליומן.
+    const id = d && d.calOff && (d.reminder ? d.reminder.id : d.remId);
+    if (id) { patchStore('home', (f) => { const r = (f.reminders || []).find((x) => x.id === id); if (r) r.cal = false; }); redrawHome(); }
+  }
+  /** "הוספה ליומן" – רק ליאל (לא שי, לא במצב "כמו שי") */
+  function remCanCal() { return isAdmin() && !state.viewAs; }
+  /** השעה העגולה הבאה (תאריך + שעה) – ברירת המחדל בבחירת מועד ליומן */
+  function nextRoundHour() { const d = new Date(Date.now() + 36e5); d.setMinutes(0, 0, 0); return { date: remIso(d), time: p2(d.getHours()) + ':00' }; }
+  /** תזכורת בלי שעה: קודם בוחרים מתי. onPick(date, time); סגירה בלי בחירה – onCancel (לא קורה כלום) */
+  function openCalPick(curDate, onPick, onCancel) {
+    const def = nextRoundHour();
+    const sh = openSheet(`
+      <div class="row"><b class="grow">📅 הוספה ליומן – מתי?</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="row">
+        <div class="field grow"><label for="cp-date">תאריך</label><input id="cp-date" type="date" value="${esc(curDate || def.date)}"></div>
+        <div class="field grow"><label for="cp-time">שעה</label><input id="cp-time" type="time" value="${esc(def.time)}"></div>
+      </div>
+      <div class="notice small" id="cp-warn" hidden></div>
+      <button class="btn" data-ok>הוספה ליומן</button>`);
+    const $ = (q) => sh.el.querySelector(q);
+    let picked = false;
+    const obs = new MutationObserver(() => { if (!sh.el.isConnected) { obs.disconnect(); if (!picked && onCancel) onCancel(); } });
+    obs.observe(document.body, { childList: true });
+    $('[data-ok]').onclick = () => {
+      const date = $('#cp-date').value, time = $('#cp-time').value;
+      if (!date || !time) { const w = $('#cp-warn'); w.hidden = false; w.textContent = 'בחר תאריך ושעה'; return; }
+      picked = true; sh.close(); onPick(date, time);
+    };
+  }
+  /** 📅 בשורה: מדליק / מכבה – אותה שמירה בדיוק כמו התיבה בחלון (אותו סנכרון ואותו ↶) */
+  function remCalToggle(id) {
+    const r = remFind(id, 'home'); if (!r || !remCanCal()) return;
+    const save = (date, time, cal) => {
+      remOp('reminderSave', { id: r.id, text: r.text, date, time, cat: r.cat || '', cal }, r.id, remStateOf(r),
+        Object.assign({ text: r.text, date, time, status: REM_ACTIVE, cat: r.cat || '', cal }), cal ? 'הוספה ליומן' : 'הסרה מהיומן', 'home');
+      toast(cal ? '📅 נוסף ליומן · ↶ לביטול' : 'הוסר מהיומן · ↶ לביטול');
+    };
+    if (r.cal) return save(r.date || '', r.time || '', false);
+    if (r.time && r.date) return save(r.date, r.time, true);
+    openCalPick(r.date, (date, time) => save(date, time, true));
+  }
   /** מחיל מצב של תזכורת במסך (null / לא פעיל = יורדת מהרשימה) */
   function remApply(id, st, scope) {
     scope = scope || 'fin';
@@ -3190,7 +3233,7 @@
         calErrNotice(d);
         // התשובה מהשרת: התאריך שחושב (שעה בלי תאריך) ואם ההתראה כבר יצאה/עבר הזמן – אדום
         if (d.reminder) {
-          patchStore(REM_STORE[scope], (f) => { const r = (f.reminders || []).find((x) => x.id === d.reminder.id); if (r) Object.assign(r, { date: d.reminder.date, time: d.reminder.time || '', fireAt: d.reminder.fireAt, alerted: !!d.reminder.alerted }); });
+          patchStore(REM_STORE[scope], (f) => { const r = (f.reminders || []).find((x) => x.id === d.reminder.id); if (r) Object.assign(r, { date: d.reminder.date, time: d.reminder.time || '', fireAt: d.reminder.fireAt, alerted: !!d.reminder.alerted }, d.reminder.cal !== undefined ? { cal: !!d.reminder.cal } : {}); });
           redrawStage2(); if (scope === 'home') redrawHome();
         }
       } catch (e) {
@@ -3241,7 +3284,7 @@
     const r = id ? remFind(id, scope) : null;
     const cats = home ? remCats(store.get('home') || {}) : [];
     const curCat = r ? (cats.some((c) => c.id === (r.cat || '')) ? (r.cat || '') : '') : (catId || '');
-    const canCal = home && isAdmin() && !state.viewAs;   // "הוספה ליומן" – רק ליאל (לא שי, לא במצב "כמו שי")
+    const canCal = home && remCanCal();   // "הוספה ליומן" – רק ליאל (לא שי, לא במצב "כמו שי")
     const sh = openSheet(`
       <div class="row"><b class="grow">${r ? 'עריכת תזכורת' : 'תזכורת חדשה'}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
       <div class="field"><label for="rm-text">מה לזכור</label><textarea id="rm-text" rows="3" placeholder="${home ? 'למשל: להתקשר לרון' : 'למשל: לגבות מדנה את התשלום השני'}">${r ? esc(r.text) : ''}</textarea></div>
@@ -3249,15 +3292,24 @@
         <div class="field grow"><label for="rm-date">תאריך (רשות)</label><input id="rm-date" type="date" value="${r ? esc(r.date || '') : ''}"></div>
         ${home ? `<div class="field grow"><label for="rm-time">שעה (רשות)</label><input id="rm-time" type="time" value="${r ? esc(r.time || '') : ''}"></div>` : ''}
       </div>
-      ${canCal ? `<label class="toggle-row" id="rm-cal-row" ${r && r.time ? '' : 'hidden'}><input type="checkbox" id="rm-cal" ${r && r.cal ? 'checked' : ''}> 📅 הוספה ליומן</label>` : ''}
+      ${canCal ? `<label class="toggle-row" id="rm-cal-row"><input type="checkbox" id="rm-cal" ${r && r.cal ? 'checked' : ''}> 📅 הוספה ליומן</label>` : ''}
       ${cats.length > 1 ? `<div class="field"><label for="rm-cat">קטגוריה</label><select id="rm-cat">${cats.map((c) => `<option value="${esc(c.id)}" ${c.id === curCat ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>` : ''}
       <div class="muted small">${home ? 'עם שעה – התראה בדיוק בשעה הזו (גם בלילה). שעה בלי תאריך – הפעם הבאה שהשעה מגיעה. תאריך בלי שעה – ערב לפני ב-18:00.' : 'עם תאריך – תגיע התראה יום לפני ב-15:00.'}</div>
       <div class="notice small" id="rm-warn" hidden></div>
       <button class="btn" data-save>${r ? 'שמירה' : 'הוספה'}</button>`);
     const $ = (q) => sh.el.querySelector(q);
     setTimeout(() => $('#rm-text').focus(), 50);
-    // התיבה מופיעה רק כשיש שעה (שעה בלי תאריך → התאריך מחושב: היום / מחר)
-    if (canCal) { const tm = $('#rm-time'); const sync = () => { $('#rm-cal-row').hidden = !tm.value; }; tm.addEventListener('input', sync); tm.addEventListener('change', sync); }
+    // "הוספה ליומן" בלי שעה: קודם בוחרים תאריך ושעה. סגירה בלי בחירה – התיבה נשארת כבויה.
+    // מחיקת השעה בזמן שהתיבה מסומנת – התיבה נכבית (אין אירוע בלי שעה).
+    if (canCal) {
+      const cb = $('#rm-cal'), tm = $('#rm-time'), dt = $('#rm-date');
+      cb.addEventListener('change', () => {
+        if (!cb.checked || (tm.value && dt.value)) return;
+        cb.checked = false;
+        openCalPick(dt.value, (date, time) => { dt.value = date; tm.value = time; cb.checked = true; });
+      });
+      tm.addEventListener('input', () => { if (!tm.value) cb.checked = false; });
+    }
     $('[data-save]').onclick = () => {
       const text = $('#rm-text').value.trim();
       let date = $('#rm-date').value;
@@ -3301,6 +3353,7 @@
       const row = el.querySelector('.rem-row');
       el.querySelector('[data-rem-edit]').onclick = () => openReminder(id, scope);
       el.querySelector('[data-rem-done]').onclick = () => remDone(id, scope);
+      const cb = el.querySelector('[data-rem-cal]'); if (cb) cb.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); remCalToggle(id); };
       el.querySelectorAll('[data-rem-del]').forEach((b) => { b.onclick = () => remDelete(id, scope); });
       // בעברית "מחק" בצד שמאל → גוררים ימינה (כמו באייפון בעברית)
       let x0 = 0, y0 = 0, base = 0, dx = 0, mode = '';
