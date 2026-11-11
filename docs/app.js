@@ -3439,13 +3439,39 @@
       <button class="btn" data-save>הוספה ל"תנועות"</button>`);
     const $ = (q) => sh.el.querySelector(q);
     setTimeout(() => $('#mt-amount').focus(), 50);
-    $('[data-save]').onclick = () => {
+    const saveBtn = $('[data-save]');
+    saveBtn.onclick = () => {
+      if (saveBtn.disabled) return;
+      saveBtn.disabled = true;   // ננעל מיד – לחיצה כפולה מהירה לא שולחת שתי פעולות
       const f = { date: $('#mt-date').value, amount: $('#mt-amount').value, desc: $('#mt-desc').value.trim() };
       if (exp) { f.method = $('#mt-src').value; f.vat = $('#mt-vat').checked; } else f.source = $('#mt-src').value;
       const warn = $('#mt-warn');
-      if (!f.date) { warn.hidden = false; warn.textContent = 'חסר תאריך'; return; }
-      if (!(Number(f.amount) > 0)) { warn.hidden = false; warn.textContent = 'סכום לא תקין'; return; }
-      if (!f.desc) { warn.hidden = false; warn.textContent = exp ? 'חסר שם הוצאה' : 'חסר תיאור'; return; }
+      const bad = (t) => { warn.hidden = false; warn.textContent = t; saveBtn.disabled = false; };
+      if (!f.date) return bad('חסר תאריך');
+      if (!(Number(f.amount) > 0)) return bad('סכום לא תקין');
+      if (!f.desc) return bad(exp ? 'חסר שם הוצאה' : 'חסר תיאור');
+      // כבר יש שורה באותו תאריך, סכום ואמצעי (בהוצאה: תאריך + סכום) – שואלים, לא חוסמים
+      const [yy, mo, dd0] = f.date.split('-');
+      const dmy = `${dd0}/${mo}/${yy}`;
+      const srcLabel = exp ? '' : { bit: 'ביט', bank: 'העברה בנקאית', cash: 'מזומן' }[f.source];
+      const fin = store.get('finance');
+      const same = fin ? curMonthLists(fin).some((L) => (L[exp ? 'expenses' : 'income'] || []).some((x) =>
+        x.date === dmy && Math.abs(Number(x.amount) - Number(f.amount)) < 0.01 && (exp || x.source === srcLabel))) : false;
+      if (same) {
+        const when = f.date === isoToday() ? 'היום' : 'ב-' + dd0 + '/' + mo;
+        const q = openSheet(`
+          <div class="row"><b class="grow">⚠️ ${exp ? 'הוצאה' : 'הכנסה'} דומה כבר קיימת</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+          <div>כבר יש ${exp ? 'הוצאה' : 'הכנסה'} של ${money(Number(f.amount))}${exp ? '' : ' ב' + esc(srcLabel)} ${when} – להוסיף בכל זאת?</div>
+          <div class="row" style="margin-top:12px"><button class="btn grow" data-ok>הוספה</button><button class="btn ghost" data-x>ביטול</button></div>`);
+        let ok = false;
+        const okBtn = q.el.querySelector('[data-ok]');
+        okBtn.onclick = () => { if (okBtn.disabled) return; okBtn.disabled = true; ok = true; q.close(); doAdd(); };
+        const mo2 = new MutationObserver(() => { if (!q.el.isConnected) { mo2.disconnect(); if (!ok) saveBtn.disabled = false; } });
+        mo2.observe(document.body, { childList: true });
+        return;
+      }
+      doAdd();
+      function doAdd() {
       sh.close();
       const tmp = { id: 'tmp-' + Date.now(), kind, desc: f.desc, amount: Number(f.amount), pending: true };
       setFinAdded(finAdded().concat([tmp]));
@@ -3469,6 +3495,7 @@
         redrawStage2();
         toast(`ה${exp ? 'הוצאה' : 'הכנסה'} לא נוספה: ` + e.message, true);
       });
+      }
     };
   }
   function undoManualTx(id, fromList) {

@@ -367,6 +367,16 @@ const BIT_PENDING_CAT_ = 'ביט - לאישור';
 const BIT_EXPENSE_CATS_ = ['שיווק - תוכן', 'שיווק - פרסום ממומן', 'שיווק - לידים', 'תוכנות ומנויים', 'ציוד', 'תקשורת', 'רואה חשבון', 'שכר', 'עמלות סליקה'];
 function isBitPending_(r) { return String(r[TX_.cat - 1]).trim() === BIT_PENDING_CAT_; }
 
+/**
+ * סיומת למזהה של הכנסה/הוצאה ידנית (מ-12/11/2026): קטע ממזהה הפעולה (opId) שנוצר במכשיר בלחיצה על "הוספה".
+ * שליחה חוזרת של אותה פעולה → אותו מזהה → לא נוספת שורה שנייה. שתי הוספות אמיתיות זהות → שני מזהים → שתי שורות.
+ * בלי opId (גרסה ישנה של האפליקציה) – המזהה הישן, בלי סיומת. ההתאמה לבנק וה-🗑 מזהים שורה ידנית לפי ההתחלה manual-.
+ */
+function manualSfx_(req) {
+  const r = String((req && req.opId) || '').split('-')[1] || '';
+  const s = r.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 7);
+  return s.length >= 4 ? '-' + s : '';
+}
 /** הכנסה ידנית: שורה חדשה בסוף "תנועות", באותו פורמט כמו השורות manual-… שליאל הוסיף */
 const INCOME_SRC_ = {
   bit:  { b: 'ביט',      cat: 'הכנסות ביט' },
@@ -382,11 +392,13 @@ function actionFinAddIncome_(req, ctx) {
   if (!m) throw apiError_('BAD_REQUEST', 'תאריך לא תקין');
   const desc = String(req.desc || '').trim().slice(0, 200);
   if (!desc) throw apiError_('BAD_REQUEST', 'חסר תיאור');
-  const id = 'manual-' + req.source + '-' + m[1] + m[2] + m[3] + '-' + (amount % 1 ? String(amount) : String(Math.round(amount)));
+  const id = 'manual-' + req.source + '-' + m[1] + m[2] + m[3] + '-' + (amount % 1 ? String(amount) : String(Math.round(amount))) + manualSfx_(req);
   let out = null;
   finLock_(function () {
     const sh = finTab_(finSs_(), 'tx');
-    if (txRow_(sh, id)) throw apiError_('DUPLICATE', 'כבר קיימת הכנסה ידנית באותו תאריך, מקור וסכום (' + id + ')');
+    const ex = txRow_(sh, id);
+    if (ex && manualSfx_(req)) { out = { ok: true, already: true, id: id, row: ex, desc: desc, amount: amount }; return; }   // אותה פעולה שנשלחה שוב – כבר נוספה
+    if (ex) throw apiError_('DUPLICATE', 'כבר קיימת הכנסה ידנית באותו תאריך, מקור וסכום (' + id + ')');
     const last = sh.getLastRow();
     const note = 'נרשם מהאפליקציה ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy');
     sh.appendRow([new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12), src.b, desc, 'הכנסה', amount, src.cat, 'כן', 'לא', 'בוצע', id, note]);
@@ -556,11 +568,13 @@ function actionFinAddExpense_(req, ctx) {
   if (!m) throw apiError_('BAD_REQUEST', 'תאריך לא תקין');
   const desc = String(req.desc || '').trim().slice(0, 200);
   if (!desc) throw apiError_('BAD_REQUEST', 'חסר שם הוצאה');
-  const id = 'manual-exp-' + m[1] + m[2] + m[3] + '-' + (amount % 1 ? String(amount) : String(Math.round(amount)));
+  const id = 'manual-exp-' + m[1] + m[2] + m[3] + '-' + (amount % 1 ? String(amount) : String(Math.round(amount))) + manualSfx_(req);
   let out = null;
   finLock_(function () {
     const sh = finTab_(finSs_(), 'tx');
-    if (txRow_(sh, id)) throw apiError_('DUPLICATE', 'כבר קיימת הוצאה ידנית באותו תאריך ובאותו סכום (' + id + ')');
+    const ex = txRow_(sh, id);
+    if (ex && manualSfx_(req)) { out = { ok: true, already: true, id: id, row: ex, desc: desc, amount: amount }; return; }   // אותה פעולה שנשלחה שוב – כבר נוספה
+    if (ex) throw apiError_('DUPLICATE', 'כבר קיימת הוצאה ידנית באותו תאריך ובאותו סכום (' + id + ')');
     const last = sh.getLastRow();
     const note = 'נרשם מהאפליקציה ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy') + ' · אמצעי: ' + method;
     sh.appendRow([new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12), method, desc, 'הוצאה', amount, 'הוצאה ידנית', 'כן', req.vat ? 'כן' : 'לא', 'בוצע', id, note]);
