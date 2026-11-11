@@ -239,7 +239,13 @@
    * עוד 2 ניסיונות לבד (אותו opId – השרת מבצע פעם אחת). שגיאה מהשרת עצמו (עם code) – מוצגת מיד כמו שהיא.
    * כל כישלון רשת נרשם ב"ביצועים" (netFail) כדי שאפשר יהיה לראות מה קרה.
    */
+  // רק פעולות שהשרת מבצע "פעם אחת" לפי opId (OP_ONCE_ ב-server/src/Main.gs) מקבלות ניסיון חוזר אוטומטי.
+  // פעולה חדשה שלא ברשימה – בלי ניסיון חוזר (שגיאת רשת מוצגת מיד), עד שתתווסף גם לכאן וגם ל-OP_ONCE_ בשרת.
+  const NET_RETRY_OK = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+    finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1,
+    remCatSave: 1, remCatDelete: 1 };
   async function writeNetRetry(action, p) {
+    if (!NET_RETRY_OK[action] || !p.opId) return apiBusyRetry(action, p);
     const waits = [1500, 4000];
     const sinceVis = Date.now() - lastVisibleAt;
     if (sinceVis < 500) await new Promise((r) => setTimeout(r, 500 - sinceVis));
