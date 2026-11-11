@@ -6,13 +6,14 @@
  *     נוצרה אחרי שזמן ההתראה עבר → מסומנת מיד (אדום), בלי Push.
  *   מזהה | טקסט | תאריך | נוצר | עודכן | מצב | התראה נשלחה ל- | רשימה | משתמש | שעה | קטגוריה
  *   קטגוריה (K, נוסף 06/11/2026): ריק = ברירת המחדל ("תזכורות"). הקטגוריות עצמן – בלשונית "קטגוריות תזכורות (מערכת)".
+ *   אירוע ביומן (L, נוסף 11/11/2026): מזהה האירוע ביומן של ליאל כשסומן "הוספה ליומן" (ריק = לא ביומן). ראו remCalSync_.
  * מחיקה ו"בוצע" לא מוחקים שורה – רק משנים מצב (כך ↶ יכול להחזיר).
  * רץ מתוך הבדיקה של כל דקה (גם בלילה – בדיקה זולה מהזיכרון) – בלי טריגר נוסף.
  */
-const REM_TAB_ = { name: 'תזכורות (מערכת)', head: ['מזהה', 'טקסט', 'תאריך', 'נוצר', 'עודכן', 'מצב', 'התראה נשלחה ל-', 'רשימה', 'משתמש', 'שעה', 'קטגוריה'] };
+const REM_TAB_ = { name: 'תזכורות (מערכת)', head: ['מזהה', 'טקסט', 'תאריך', 'נוצר', 'עודכן', 'מצב', 'התראה נשלחה ל-', 'רשימה', 'משתמש', 'שעה', 'קטגוריה', 'אירוע ביומן'] };
 const REM_ACTIVE_ = 'פעיל', REM_DONE_ = 'בוצע', REM_DELETED_ = 'נמחק';
 const REM_NEXT_KEY_ = 'REM_NEXT_V3';   // מתי ההתראה הקרובה (ms). שם חדש = הלוח מחושב מחדש פעם אחת לפי הכללים הנוכחיים
-const REM_COLS_ = 11;
+const REM_COLS_ = 12;
 
 function remSheet_() {
   const ss = systemSs_();
@@ -34,7 +35,7 @@ function remRows_() {
   const rows = n < 2 ? [] : sh.getRange(2, 1, n - 1, REM_COLS_).getDisplayValues();
   return { sh: sh, list: rows.map(function (r, i) {
     return { row: i + 2, id: r[0], text: r[1], date: r[2], created: Number(r[3]) || 0, updated: Number(r[4]) || 0, status: r[5] || REM_ACTIVE_,
-      notified: r[6], list: r[7] === 'home' ? 'home' : '', owner: String(r[8] || '').toLowerCase(), time: r[9] || '', cat: r[10] || '' };
+      notified: r[6], list: r[7] === 'home' ? 'home' : '', owner: String(r[8] || '').toLowerCase(), time: r[9] || '', cat: r[10] || '', cal: r[11] || '' };
   }) };
 }
 /** המפתח של "התראה נשלחה": תאריך (+ שעה). שינוי תאריך/שעה = מפתח חדש = ההתראה מתוזמנת מחדש */
@@ -42,11 +43,11 @@ function remKey_(x) { return x.date ? x.date + (x.time ? ' ' + x.time : '') : ''
 // alerted = כבר נשלחה (או עבר הזמן) – השורה אדומה עד ✓ / מחיקה / מועד חדש
 function remPublic_(x) {
   const f = remFireAt_(x);
-  return { id: x.id, text: x.text, date: x.date, time: x.time, cat: x.cat || '', created: x.created, fireAt: f ? f.getTime() : null, alerted: !!x.date && x.notified === remKey_(x) };
+  return { id: x.id, text: x.text, date: x.date, time: x.time, cat: x.cat || '', cal: !!x.cal, created: x.created, fireAt: f ? f.getTime() : null, alerted: !!x.date && x.notified === remKey_(x) };
 }
 function remWrite_(sh, x) {
   sh.getRange(x.row, 1, 1, REM_COLS_).setValues([[x.id, x.text, x.date || '', String(x.created || ''), String(Date.now()), x.status, x.notified || '',
-    x.list || '', x.owner || '', x.time || '', x.cat || '']]);
+    x.list || '', x.owner || '', x.time || '', x.cat || '', x.cal || '']]);
 }
 /** list: '' = פיננסים, 'home' = הבית של המשתמש */
 function remList_(list, email) {
@@ -59,7 +60,7 @@ function remList_(list, email) {
 }
 
 /** רק מצב התזכורת – למחסנית ↶/↷ */
-function remState_(x) { return x ? { text: x.text, date: x.date || '', time: x.time || '', status: x.status, cat: x.cat || '' } : null; }
+function remState_(x) { return x ? { text: x.text, date: x.date || '', time: x.time || '', status: x.status, cat: x.cat || '', cal: x.cal || '' } : null; }
 /** מזהה קטגוריה: ריק / default = ברירת המחדל */
 function cleanRemCat_(c) {
   c = String(c == null ? '' : c).trim();
@@ -104,24 +105,27 @@ function actionReminderSave_(req, ctx) {
     date = parseIsoTz_(today + 'T' + time + ':00').getTime() > Date.now() ? today
       : Utilities.formatDate(new Date(Date.now() + DAY_MS_), TZ_, 'yyyy-MM-dd');
   }
-  let out = null;
+  let out = null, calRow = null, calHad = false;
   withLock_(function () {
     CACHE_PATCH_ = 'skip';
     const d = remRows_();
     // הוספה שכבר קרתה (אותו newId) – למשל שליחה חוזרת מהתור אחרי יותר מ-6 שעות: לא יוצרים שורה שנייה, לא משנים כלום
     const dupNew = !req.id && req.newId ? remLatest_(remAllById_(d, String(req.newId))) : null;
-    if (dupNew) { out = { duplicate: true, reminder: dupNew.status === REM_ACTIVE_ ? remPublic_(dupNew) : null }; return; }
+    if (dupNew) { out = { duplicate: true, reminder: dupNew.status === REM_ACTIVE_ ? remPublic_(dupNew) : null }; calRow = dupNew.cal ? dupNew : null; calHad = !!dupNew.cal; return; }
     const rows = req.id ? remAllById_(d, req.id).filter(function (r) { return remCanTouch_(r, ctx); }) : [];
     let x = remLatest_(rows);
     if (req.id && !x) throw apiError_('NOT_FOUND', 'התזכורת לא נמצאה');
     // עריכה ישנה (נוצרה לפני השינוי האחרון בשורה) – לא דורסת (למשל לא מחזירה תזכורת שנמחקה)
     const opT = remOpTime_(req);
-    if (x && opT && opT < x.updated - REM_STALE_MS_) { out = { duplicate: true, stale: true, reminder: x.status === REM_ACTIVE_ ? remPublic_(x) : null }; return; }
+    if (x && opT && opT < x.updated - REM_STALE_MS_) { out = { duplicate: true, stale: true, reminder: x.status === REM_ACTIVE_ ? remPublic_(x) : null }; calRow = x.cal ? x : null; calHad = !!x.cal; return; }
     const before = remState_(x);
     if (!x) x = { row: d.sh.getLastRow() + 1, id: String(req.newId || Utilities.getUuid().slice(0, 10)), created: Date.now(), status: REM_ACTIVE_, notified: '',
       list: list, owner: list === 'home' ? ctx.email : '' };
     x.text = text; x.date = date; x.time = time; x.status = REM_ACTIVE_;
     if (list === 'home' && req.cat !== undefined) x.cat = cleanRemCat_(req.cat);   // לא נשלח = הקטגוריה לא משתנה
+    calHad = !!x.cal;
+    if (req.cal !== undefined && remCalAllowed_(x, ctx)) x.cal = req.cal ? remCalId_(x.id) : '';   // לא נשלח = לא משתנה
+    if (x.cal || calHad) calRow = x;
     // בבית: אם זמן ההתראה כבר עבר – מסומנת מיד (אדום), בלי Push
     const f = remFireAt_(x);
     if (x.list === 'home' && f && f.getTime() <= Date.now()) x.notified = remKey_(x);
@@ -130,6 +134,8 @@ function actionReminderSave_(req, ctx) {
     pushUndoEntry_(ctx.email, { kind: 'rem', id: x.id, before: before, after: remState_(x), desc: before ? 'עריכת תזכורת' : 'תזכורת חדשה', changes: [] });
     out = { reminder: remPublic_(x) };
   });
+  const cal = calRow ? remCalSync_(calRow, calHad) : null;   // אחרי הנעילה (קריאה ליומן לוקחת זמן)
+  if (cal && cal.error) out.calError = cal.error;
   if (out.duplicate) return Object.assign(out, { undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) });
   remSchedule_();   // פיננסים: אם זמן ההתראה כבר עבר – נשלחת עכשיו
   const fresh = remLatest_(remAllById_(remRows_(), out.reminder.id));
@@ -141,6 +147,7 @@ function actionReminderSave_(req, ctx) {
 function actionReminderSet_(req, ctx) {
   const status = req.op === 'done' ? REM_DONE_ : req.op === 'delete' ? REM_DELETED_ : '';
   if (!status) throw apiError_('BAD_REQUEST', 'פעולה לא מוכרת');
+  let calRow = null;
   withLock_(function () {
     CACHE_PATCH_ = 'skip';
     const d = remRows_();
@@ -150,10 +157,12 @@ function actionReminderSet_(req, ctx) {
     if (!x) return;   // כבר ירדה (שליחה חוזרת)
     const before = remState_(x);
     rows.forEach(function (r) { if (r.status === REM_ACTIVE_) { r.status = status; remWrite_(d.sh, r); } });
+    if (x.cal) calRow = x;   // בוצע / מחיקה → האירוע יורד מהיומן (מזהה האירוע נשאר, כדי ש-↶ יחזיר אותו)
     pushUndoEntry_(ctx.email, { kind: 'rem', id: x.id, before: before, after: remState_(x), desc: status === REM_DONE_ ? 'תזכורת בוצעה' : 'מחיקת תזכורת', changes: [] });
   });
+  const cal = calRow ? remCalSync_(calRow, true) : null;
   remSchedule_();
-  return { ok: true, undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) };
+  return Object.assign({ ok: true, undoCount: undoCount_(ctx.email), redoCount: redoCount_(ctx.email) }, cal && cal.error ? { calError: cal.error } : {});
 }
 
 /** ↶/↷ (מתוך undoRedo_, בתוך הנעילה): מחזיר את התזכורת למצב ששמור ברשומה */
@@ -166,11 +175,15 @@ function remUndoRedo_(e, to, verb, ctx) {
   const target = e.before || { text: x.text, date: x.date, time: x.time, status: REM_DELETED_ };   // לפני ההוספה = לא קיימת
   x.text = target.text; x.date = target.date; x.time = target.time || ''; x.status = target.status;
   if (target.cat != null) x.cat = target.cat;   // רשומות ישנות (לפני הקטגוריות) – הקטגוריה לא משתנה
+  const calHad = !!x.cal;
+  if (target.cal != null) x.cal = target.cal;     // רשומות ישנות (לפני היומן) – לא משתנה
   remWrite_(d.sh, x);
   rows.forEach(function (r) { if (r.row !== x.row && r.status === REM_ACTIVE_) { r.status = REM_DELETED_; remWrite_(d.sh, r); } });
   pushStack_(to, ctx.email, { kind: 'rem', id: e.id, before: cur, after: target, desc: e.desc, changes: [] });
   remSchedule_(true);   // בתוך הנעילה – ההתראה (אם הגיע זמנה) תצא בבדיקה של הדקה הבאה
-  return { done: true, message: verb + ': ' + (e.desc || 'תזכורת'), rem: true, reminder: target.status === REM_ACTIVE_ ? remPublic_(x) : null, remId: e.id };
+  const cal = (x.cal || calHad) ? remCalSync_(x, calHad) : null;   // ↶ בוצע/מחיקה → האירוע חוזר; ↶ עריכה → הזמן הקודם
+  return Object.assign({ done: true, message: verb + ': ' + (e.desc || 'תזכורת'), rem: true, reminder: target.status === REM_ACTIVE_ ? remPublic_(x) : null, remId: e.id },
+    cal && cal.error ? { calError: cal.error } : {});
 }
 
 // ---------- התראות ----------
@@ -317,4 +330,46 @@ function actionRemCatDelete_(req, ctx) {
     });
   });
   return { ok: true, moved: moved };
+}
+
+// ---------- "הוספה ליומן" (ליאל בלבד): אירוע אדום של 30 דקות ביומן הראשי, בלי התראת יומן (ההתראה היא ה-Push) ----------
+/** רק ליאל (אדמין, לא במצב "כמו שי"), רק בתזכורות הבית שלו */
+function remCalAllowed_(x, ctx) { return x.list === 'home' && ctx.role === 'admin' && ctx.realRole === 'admin' && x.owner === ctx.email; }
+/** מזהה אירוע קבוע לכל תזכורת (hex של המזהה) – שליחה חוזרת / ניסיון חוזר מעדכנים את אותו אירוע ולא יוצרים כפול */
+function remCalId_(id) {
+  return 'lfrem' + String(id).split('').map(function (c) { return ('0' + (c.charCodeAt(0) & 255).toString(16)).slice(-2); }).join('');
+}
+function remCalWant_(x) { return !!(x && x.cal && x.list === 'home' && x.status === REM_ACTIVE_ && x.date && x.time); }
+/**
+ * מביא את היומן למצב של התזכורת: צריך אירוע → יוצר/מעדכן (גם אירוע שנמחק קודם חוזר); לא צריך → מוחק.
+ * לא זורק: כשל ביומן לא מפיל את שמירת התזכורת – מחזיר { error }.
+ */
+function remCalSync_(x, had) {
+  const want = remCalWant_(x);
+  if (!want && !had) return null;
+  const calId = 'primary', evId = x.cal || remCalId_(x.id);
+  try {
+    const notFound = function (e) { return /not ?found|404|410|deleted/i.test(String(e && e.message || e)); };
+    let ev = null;
+    try { ev = Calendar.Events.get(calId, evId); } catch (e) { if (!notFound(e)) throw e; }
+    if (want) {
+      const start = parseIsoTz_(x.date + 'T' + x.time + ':00');
+      const end = new Date(start.getTime() + 30 * 60000);
+      const f = function (d) { return Utilities.formatDate(d, TZ_, "yyyy-MM-dd'T'HH:mm:ssXXX"); };
+      const body = { summary: x.text, description: 'נוצר מהאפליקציה', colorId: '11', status: 'confirmed',
+        start: { dateTime: f(start), timeZone: TZ_ }, end: { dateTime: f(end), timeZone: TZ_ },
+        reminders: { useDefault: false, overrides: [] } };
+      if (ev) Calendar.Events.update(body, calId, evId);
+      else {
+        try { Calendar.Events.insert(Object.assign({ id: evId }, body), calId); }
+        catch (e) { if (/already exists|409|duplicate/i.test(String(e && e.message || e))) Calendar.Events.update(body, calId, evId); else throw e; }
+      }
+    } else if (ev && ev.status !== 'cancelled') {
+      try { Calendar.Events.remove(calId, evId); } catch (e) { if (!notFound(e)) throw e; }
+    }
+    return { ok: true };
+  } catch (e) {
+    console.warn('יומן – תזכורת ' + x.id + ': ' + (e && e.message || e));
+    return { error: String(e && e.message || e).slice(0, 200) };
+  }
 }

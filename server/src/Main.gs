@@ -166,6 +166,7 @@ function roleOf_(email, cfg) {
 }
 
 // ---------- מדידת זמני שמירה (לבדיקת מהירות) ----------
+const PERF_ON_ = false;   // כבוי (2026-11-11): המדידה הסתיימה – לא נרשמות שורות זמנים ו-propsSize; netFail ממשיך להירשם
 const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1,
   lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
   finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1,
@@ -187,9 +188,9 @@ function logPerf_(e, out) {
       lt: p._lt != null ? p._lt : '', qw: p._qw != null ? p._qw : '' };
   };
   let add = [];
-  if (PERF_ACTIONS_[req.action]) add.push(entry(req, !!out.ok, out.ms, ''));
+  if (PERF_ON_ && PERF_ACTIONS_[req.action]) add.push(entry(req, !!out.ok, out.ms, ''));
   // שמירות שנשלחו מהתור (ביציאה מהאפליקציה / בפתיחה מחדש) – שורה לכל שמירה. הזמן הוא של כל הבקשה.
-  if (req.action === 'batch') {
+  if (PERF_ON_ && req.action === 'batch') {
     const res = (out.data && out.data.results) || [];
     (req.ops || []).slice(0, 40).forEach(function (op, i) {
       const p = Object.assign({}, op.params || {}, { action: op.action });
@@ -365,6 +366,7 @@ function propsSizeCheck_() {
   const block = total - (sizes.filter(function (x) { return x.k.indexOf(OPDONE_PFX_) === 0; }).reduce(function (a, x) { return a + x.b; }, 0)) + opTotal > PROPS_SAFE_;
   if (block) c.put('opdone_block', '1', 21600); else c.remove('opdone_block');
   const top = sizes.slice().sort(function (a, b) { return b.b - a.b; }).slice(0, 8).map(function (x) { return x.k + ' ' + (x.b / 1024).toFixed(1) + 'KB'; }).join(', ');
+  if (!PERF_ON_) return;   // המדידה כבויה – התקרות כבר נאכפו למעלה, רק השורה ל"ביצועים" לא נכתבת
   const entry = { t: Date.now(), a: 'propsSize', ms: 0, v: '', ok: !block, f: Math.round(total / 1024) + 'KB',
     ph: 'סה"כ ' + (total / 1024).toFixed(1) + 'KB · ' + sizes.length + ' מפתחות · רישום ' + (opTotal / 1024).toFixed(1) + 'KB (' + opKeys + ' מפתחות, ' + days + ' יום)' +
       (block ? ' · הרישום נעצר (מעל ' + PROPS_SAFE_ / 1000 + 'KB)' : '') + note + ' · הגדולים: ' + top };
