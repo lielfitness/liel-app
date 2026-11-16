@@ -2697,7 +2697,63 @@
   }
 
   // ---------- שלב 2: פיננסים ----------
-  const FIN_TASK_URL = 'https://claude.ai/scheduled-task/trig_01QP8CxvKDVccpZkYZg9xXca';
+  // ---------- "🔄 עדכן עכשיו": הסנכרון המלא של סקריפט הפיננסים, ברקע (בלי טלגרם). כבר רץ – לא מתחיל שוב ----------
+  const finSync = { running: false, doneAt: 0, checked: false, timer: 0, fails: 0, startedAt: 0 };
+  const fmtHM = (t) => { const d = new Date(t); return p2(d.getHours()) + ':' + p2(d.getMinutes()); };
+  function finSyncBtnHtml() {
+    return finSync.running ? '<button type="button" class="btn small secondary" data-act="fin-sync" disabled>⏳ מעדכן...</button>'
+      : '<button type="button" class="btn small secondary" data-act="fin-sync">🔄 עדכן עכשיו</button>';
+  }
+  function finSyncRedraw() { const b = $app.querySelector('[data-act="fin-sync"]'); if (b && !isEditing()) redrawStage2(); }
+  function finSyncFail(why) {
+    clearTimeout(finSync.timer); finSync.running = false; finSyncRedraw();
+    openSheet(`<div class="row"><b class="grow">⚠️ העדכון לא הצליח</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="small">${esc(why || 'סיבה לא ידועה')}</div>
+      <div class="muted small">הנתונים במסך הם מהעדכון הקודם. אפשר לנסות שוב.</div>
+      <button class="btn" data-x>הבנתי</button>`);
+  }
+  function finSyncPoll() {
+    clearTimeout(finSync.timer);
+    finSync.timer = setTimeout(() => {
+      api('finSyncStatus').then((st) => {
+        finSync.fails = 0;
+        if (st && st.state === 'running') {
+          if (Date.now() - finSync.startedAt > 10 * 60000) return finSyncFail('העדכון לא הסתיים אחרי 10 דקות');
+          return finSyncPoll();
+        }
+        if (st && st.state === 'error') return finSyncFail(st.error);
+        if (st && st.state === 'done') {
+          return refreshStage2('finance').then(() => {
+            finSync.running = false; finSync.doneAt = Date.now(); finSyncRedraw();
+            toast('✓ עודכן' + (st.stale ? ' – נתוני הבנק והכרטיסים מאתמול (Financy עוד לא משך היום)' : '') + (st.note ? ' · ' + st.note : ''));
+            markDerivedStale();
+          });
+        }
+        return finSyncFail('תשובה לא צפויה מהשרת');
+      }).catch((e) => {
+        if (e.code && e.code !== 'NET') return finSyncFail(e.message);
+        if (++finSync.fails >= 4) return finSyncFail('אין חיבור לשרת – העדכון אולי עדיין רץ. פתחו שוב את הפיננסים בעוד כמה דקות.');
+        finSyncPoll();
+      });
+    }, 4000);
+  }
+  function startFinSync() {
+    if (finSync.running) return;
+    finSync.running = true; finSync.startedAt = Date.now(); finSync.fails = 0; finSyncRedraw();
+    api('finSync').then((st) => {
+      if (st && st.state === 'error') return finSyncFail(st.error);
+      if (st && st.at) finSync.startedAt = Math.min(Date.now(), st.at);
+      finSyncPoll();
+    }).catch((e) => finSyncFail(e.message));
+  }
+  /** פעם אחת בכל פתיחה של האפליקציה: עדכון שהתחיל קודם (למשל לפני שהאפליקציה נסגרה) – ממשיכים לעקוב */
+  function finSyncResume() {
+    if (finSync.checked || !isAdmin() || state.viewAs) return;
+    finSync.checked = true;
+    api('finSyncStatus').then((st) => {
+      if (st && st.state === 'running' && !finSync.running) { finSync.running = true; finSync.startedAt = st.at || Date.now(); finSyncRedraw(); finSyncPoll(); }
+    }).catch(() => {});
+  }
   // בחירת שנה וחודש בפיננסים: finYear = null → השנה הנוכחית; finSel = null → החודש הנוכחי (בשנה קודמת – דצמבר)
   let finYear = null, finSel = null;
   const finKey = () => (finYear ? 'finance:' + finYear : 'finance');
@@ -2810,8 +2866,8 @@
       ${isPrev ? `<div class="prev-banner"><span class="grow">מוצג הדוח של <b>${esc(cur.label)}${d.pastYear ? ' ' + viewY : ''}</b></span><button class="btn small" data-fm="cur">← חזרה ל${esc(HEB_MONTHS[nowM - 1])}${d.pastYear ? ' ' + nowY : ''}</button></div>` : ''}
       ${finInfoHtml(d)}
       <div class="row" style="align-items:center;margin-top:6px">
-        <div class="muted small grow">עדכון פיננסים אחרון: ${esc(d.lastUpdate || '—')}</div>
-        <a class="btn small secondary" href="${FIN_TASK_URL}" target="_blank" rel="noopener">🔄 עדכון פיננסים עכשיו</a>
+        <div class="muted small grow">עדכון פיננסים אחרון: ${esc(d.lastUpdate || '—')}${finSync.doneAt && !finSync.running ? ` · <b>עודכן ב-${fmtHM(finSync.doneAt)}</b>` : ''}</div>
+        ${finSyncBtnHtml()}
       </div>
       ${isPrev ? `<div class="notice info small" style="margin-top:12px">"לבדיקה", דוח החייבים, החריגים והסיכום השבועי מגיעים מהעדכון השבועי האחרון, ולכן מוצגים בחודש הנוכחי.</div>` : `
       <div class="row" style="margin:14px 0 6px;align-items:center;flex-wrap:wrap;gap:6px;justify-content:flex-end">
@@ -2879,6 +2935,8 @@
     $app.querySelectorAll('[data-anom] [data-clear]').forEach((b) => { b.onclick = () => clearAnom(anomItems.find((x) => x.key === b.closest('[data-anom]').dataset.anom), true); });
     $app.querySelectorAll('[data-unanom]').forEach((b) => { b.onclick = () => clearAnom(anomUndo[b.dataset.unanom], false); });
     $app.querySelectorAll('[data-unadd]').forEach((b) => { b.onclick = () => undoManualTx(b.dataset.unadd); });
+    const fsb = $app.querySelector('[data-act="fin-sync"]'); if (fsb) fsb.onclick = (ev) => { ev.preventDefault(); startFinSync(); };
+    finSyncResume();
     $app.querySelectorAll('[data-delman]').forEach((b) => { b.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); const id = b.dataset.delman; const it = ml.income.find((x) => x.id === id) || ml.expenses.find((x) => x.id === id); if (it) undoManualTx(id, { kind: ml.expenses.includes(it) ? 'exp' : 'inc', desc: it.name, amount: it.amount }); }; });
   }
 

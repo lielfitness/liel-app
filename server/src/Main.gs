@@ -46,6 +46,8 @@ const ACTIONS = {
   lateCharge:     { roles: ['admin'], fn: actionLateCharge_ },
   coachRenew:     { roles: ['admin'], fn: actionCoachRenew_ },
   runMeetings:    { roles: ['admin'], fn: actionRunMeetings_ },
+  finSync:        { roles: ['admin'], fn: actionFinSync_ },
+  finSyncStatus:  { roles: ['admin'], fn: actionFinSyncStatus_ },
   finance:        { roles: ['admin'], fn: actionFinance_ },
   finDecide:      { roles: ['admin'], fn: actionFinDecide_ },
   finAddIncome:   { roles: ['admin'], fn: actionFinAddIncome_ },

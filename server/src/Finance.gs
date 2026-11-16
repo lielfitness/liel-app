@@ -205,6 +205,14 @@ function actionCoachRenew_(req, ctx) {
   CacheService.getScriptCache().remove('coach_v1');
   return r;
 }
+/** "🔄 עדכן עכשיו" בפיננסים: מתחיל את הסנכרון המלא בסקריפט הפיננסים (ברקע). כבר רץ – מחזיר את הריצה הקיימת. */
+function actionFinSync_(req, ctx) { return finCall_('syncStart'); }
+/** מצב הסנכרון: running / done / error (+ זמנים, סיבה) */
+function actionFinSyncStatus_(req, ctx) {
+  const st = finCall_('syncStatus') || {};
+  if (st.state === 'done') CacheService.getScriptCache().removeAll(['coach_v1', 'finrev_v1']);
+  return st;
+}
 function actionRunMeetings_(req, ctx) {
   try { finCall_('run'); } catch (e) {
     if (/timed? ?out|timeout|deadline/i.test(String(e.message))) return { ran: true, message: 'ההורדה עדיין רצה – הסיכום יגיע בטלגרם' };
