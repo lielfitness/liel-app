@@ -2902,6 +2902,7 @@
       <div class="section-title">${isPrev ? esc(cur.label) : 'החודש'}</div>
       ${monthDetails(isPrev ? 'הכנסות ' + cur.label : 'הכנסות החודש', ml.income, sumOf(ml.income), cur ? cur.income : null, true, !isPrev && ml.income.some((x) => x.app))}
       ${monthDetails(isPrev ? 'הוצאות ' + cur.label : 'הוצאות החודש', ml.expenses, sumOf(ml.expenses), cur ? cur.expenses : null, false, !isPrev && ml.expenses.some((x) => x.app))}
+      ${ml.car > 0 ? `<div class="card small">🚗 רכב ${isPrev ? esc(cur.label) : 'החודש'}: <b>${money(ml.car)}</b> (קיזוז מע״מ משוער: ${money(cur.carVat || 0)})<div class="muted small">לא נכלל בהוצאות העסקיות – רק מקטין את המע״מ לתשלום</div></div>` : ''}
       ${!isPrev && d.summary && d.summary.text ? `<details class="card"><summary>הצגת הסיכום המלא${d.summary.at ? ` · ${esc(d.summary.at)}` : ''}</summary>${pre(d.summary.text)}</details>` : ''}
       ${finYearHtml(d, viewY)}
       ${d.fixed ? `<div class="section-title">נספחים</div>
