@@ -41,7 +41,7 @@ function gapJoinDates_(cfg, coaches) {
   const take = function (key, t) { if (key && t && (!join[key] || t < join[key])) join[key] = t; };
   // 1. טופס הקליטה
   try {
-    const sh = SpreadsheetApp.openById(cfg.onboardSheetId).getSheets()[0];
+    const sh = onbResponsesSheet_(onbSs_());
     if (sh.getLastRow() > 1) {
       const vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
       const ce = vals[0].map(String).indexOf('מייל');

@@ -400,6 +400,7 @@ function watchNewLeads() {
     if (due.five) {
       step_('quiet', flushQuiet_);
       step_('coachDaily', dailyCoachCheck_);
+      step_('onbRelink', onbRelinkOnce_);   // חד-פעמי (17/11/2026): קישור טופס הקליטה לגיליון חדש + קליטת בדיקה
       step_('rewards', runRewardQueue_);   // גיבוי בלבד – הבונוס מחושב כבר בשמירה עצמה ובעריכה בגיליון
       step_('gap', function () { computeCoachGap_(false); });
       step_('ghost', function () { ghostReconcile_(false); });

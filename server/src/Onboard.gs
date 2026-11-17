@@ -79,8 +79,32 @@ function actionOnboardRerun_(req, ctx) {
   return actionOnboard_({ rerun: true, track: row.track, name: row.name, email: row.email, phone: row.phone, n: ONB_DEFAULT_[row.track] || 6 }, ctx);
 }
 
+// ---------- גיליון התשובות של טופס הקליטה: תמיד לפי הטופס, לא לפי ההגדרות (17/11/2026 – הגיליון הקודם נעלם) ----------
+function onbSheetId_() {
+  const c = CacheService.getScriptCache();
+  const hit = c.get('onb_dest1');
+  if (hit) return hit;
+  let id = '';
+  try { id = FormApp.openById(getConfig_().onboardFormId).getDestinationId(); } catch (e) { console.warn('form dest: ' + e); }
+  id = id || getConfig_().onboardSheetId;
+  c.put('onb_dest1', id, 3600);
+  return id;
+}
+/** הגיליון עצמו. נכשל → שגיאה ברורה (לא מסתירים) */
+function onbSs_() {
+  try { return SpreadsheetApp.openById(onbSheetId_()); }
+  catch (e) {
+    CacheService.getScriptCache().remove('onb_dest1');
+    throw apiError_('CONFIG', 'לא הצלחתי לפתוח את גיליון התשובות של טופס הקליטה (' + (e.message || e) + '). צריך לקשר את הטופס לגיליון: בטופס ← תשובות ← קישור ל-Sheets.');
+  }
+}
+/** לשונית התשובות (זו שמקושרת לטופס), לא לשונית ריקה או "קליטות (מערכת)" */
+function onbResponsesSheet_(ss) {
+  return ss.getSheets().filter(function (x) { return x.getFormUrl && x.getFormUrl(); })[0] || ss.getSheets()[0];
+}
+
 function onbRows_() {
-  const ss = SpreadsheetApp.openById(getConfig_().onboardSheetId);
+  const ss = onbSs_();
   const sh = ss.getSheetByName(ONB_TAB_);
   if (!sh || sh.getLastRow() < 2) return [];
   const n = Math.min(sh.getLastRow() - 1, 40);
@@ -120,6 +144,7 @@ function pollOnboard_() {
     const title = r.failed.length ? '⚠️ קליטה של ' + r.name + ' נכשלה בשלב ' + r.failed.join(', ') : '✅ ' + r.name + ' נקלט/ה' + (r.test ? ' (בדיקה)' : '');
     notify_('onboard', { title: title, text: r.test ? 'מצב בדיקה – בלי Wix ובלי קבצים' : (r.track + note), link: onbLink_(p.rid) }, { noQuiet: true, noPush: true, replaceLink: true });
     if (r.test) { try { FormApp.openById(getConfig_().onboardFormId).deleteResponse(p.rid); } catch (e) { /* */ } }
+    else if (!r.failed.length) CacheService.getScriptCache().remove(COACH_CNT_CACHE_);   // נקלט – המונה מתעדכן מיד
   });
   onbSavePending_(keep);
   if (!keep.length) CacheService.getScriptCache().remove('onb_hot');
@@ -178,7 +203,7 @@ function onbSetPackage_(email, n) {
 function onbTracks_() {
   const out = {};
   try {
-    const sh = SpreadsheetApp.openById(getConfig_().onboardSheetId).getSheets()[0];
+    const sh = onbResponsesSheet_(onbSs_());
     if (sh.getLastRow() < 2) return out;
     const vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
     const h = vals[0].map(function (x) { return String(x).trim(); });
@@ -196,31 +221,78 @@ function authorizeForms() {
 }
 
 // ---------- מונה "מאמנים ובוגרי ליווי" ----------
-// בסיס: Script Property COACH_COUNT_BASE = {"count":110,"from":"<זמן ISO>"} (אפשר לתקן ידנית).
-// מעליו: כל קליטה אמיתית ומוצלחת אחרי זמן הבסיס, מהאפליקציה או מהטופס (לשונית "קליטות (מערכת)"),
-// לפי מייל – מייל נספר פעם אחת; בדיקות, הרצה חוזרת והוספה ידנית לא נספרות.
+// בסיס: Script Property COACH_COUNT_BASE = {"count":110,"from":"<זמן ISO>"} (24/10/2026, לא משתנה).
+// מעליו (17/11/2026): כל מאמן שקובץ "ליווי מקצועי - <שם>" (או "ליווי מקצועי פרימיום - <שם>") שלו נוצר בדרייב אחרי זמן הבסיס –
+// קליטה מהטופס/מהאפליקציה וגם קליטה ידנית יוצרות את הקובץ. כל אדם נספר פעם אחת: שם שכבר היה לו קובץ לפני הבסיס,
+// או קובץ שני לאותו שם – לא נספרים שוב. לא תלוי בגיליון התשובות.
+// נכשל → { error } (האפליקציה מציגה הודעה במקום מספר). שמור 5 דקות, ומתאפס מיד אחרי קליטה מוצלחת.
+const COACH_CNT_CACHE_ = 'coach_cnt1';
 function coachCount_() {
-  const props = PropertiesService.getScriptProperties();
-  let base = readJsonProp_('COACH_COUNT_BASE', null);
-  if (!base) { base = { count: 110, from: new Date().toISOString(), note: '112 קבצי "ליווי מקצועי" פחות שחר בר ונועה בנאי (24/10/2026)' }; writeJsonProp_('COACH_COUNT_BASE', base); }
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get(COACH_CNT_CACHE_);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { /* */ } }
+  const base = readJsonProp_('COACH_COUNT_BASE', null);
+  if (!base || !(Number(base.count) > 0) || isNaN(new Date(base.from).getTime())) return { error: 'חסר הבסיס של המונה (COACH_COUNT_BASE) – לא אפשר לספור' };
   const from = new Date(base.from).getTime();
-  const seen = {};
-  let added = 0;
   try {
-    const ss = SpreadsheetApp.openById(getConfig_().onboardSheetId);
-    const sh = ss.getSheetByName(ONB_TAB_);
-    if (sh && sh.getLastRow() > 1) {
-      sh.getRange(2, 1, sh.getLastRow() - 1, 15).getDisplayValues().forEach(function (r) {
-        const m = String(r[0]).match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})/);
-        if (!m) return;
-        const t = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5])).getTime();
-        const email = String(r[ONB_COLS_.email]).trim().toLowerCase();
-        if (t <= from || r[ONB_COLS_.test] === 'כן' || !email || seen[email]) return;
-        const failed = ONB_STEPS_.some(function (s) { return /נכשל/.test(r[ONB_COLS_[s[0]]]); });
-        if (failed) return;
-        seen[email] = 1; added++;
-      });
+    const before = {}, after = {};
+    const it = DriveApp.searchFiles("title contains 'ליווי מקצועי' and trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'");
+    while (it.hasNext()) {
+      const f = it.next();
+      const m = String(f.getName()).match(/^ליווי מקצועי(?: פרימיום)?\s*-\s*(.+)$/);
+      if (!m || /^(טמפלט|בדיקת)/.test(m[1].trim())) continue;
+      const key = gapNorm_(m[1]);
+      if (!key) continue;
+      if (f.getDateCreated().getTime() <= from) before[key] = 1;
+      else if (!after[key]) after[key] = m[1].trim();
     }
-  } catch (e) { /* */ }
-  return { total: Number(base.count) + added, base: Number(base.count), added: added };
+    const names = Object.keys(after).filter(function (k) { return !before[k]; }).map(function (k) { return after[k]; });
+    const out = { total: Number(base.count) + names.length, base: Number(base.count), added: names.length, names: names };
+    cache.put(COACH_CNT_CACHE_, JSON.stringify(out), 300);
+    return out;
+  } catch (e) {
+    return { error: 'לא הצלחתי לספור את קבצי "ליווי מקצועי" בדרייב: ' + String(e.message || e).slice(0, 150) };
+  }
+}
+
+// ---------- חד-פעמי (17/11/2026, באישור ליאל): קישור הטופס לגיליון תשובות חדש + בדיקת קליטה במצב בדיקה ----------
+// רץ פעם אחת מהבדיקה של כל 5 דקות. רק אם גיליון היעד הנוכחי לא נפתח. התוצאה – ללשונית "קישור טופס הקליטה" בגיליון המערכת.
+function onbRelinkOnce_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('ONB_RELINK_DONE')) return;
+  props.setProperty('ONB_RELINK_DONE', new Date().toISOString());
+  const log = [['זמן', Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]];
+  try {
+    const form = FormApp.openById(getConfig_().onboardFormId);
+    const old = form.getDestinationId();
+    let ok = false;
+    try { SpreadsheetApp.openById(old); ok = true; } catch (e) { log.push(['היעד הקודם', old + ' – לא נפתח: ' + (e.message || e)]); }
+    if (ok) { log.push(['היעד הקודם', old + ' – נפתח, לא שיניתי כלום']); }
+    else {
+      const ss = SpreadsheetApp.create(form.getTitle() + ' (תשובות) – ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy'));
+      ss.setSpreadsheetTimeZone(TZ_);
+      form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
+      SpreadsheetApp.flush();
+      CacheService.getScriptCache().removeAll(['onb_dest1', COACH_CNT_CACHE_]);
+      log.push(['גיליון חדש', ss.getName() + ' · ' + ss.getUrl()]);
+      log.push(['יעד הטופס עכשיו', form.getDestinationId() + (form.getDestinationId() === ss.getId() ? ' ✓' : ' ✗')]);
+    }
+    const resp = form.getResponses();
+    const sh = onbResponsesSheet_(onbSs_());
+    log.push(['תשובות בטופס', String(resp.length)]);
+    log.push(['שורות בגיליון התשובות', String(Math.max(0, sh.getLastRow() - 1)) + ' (לשונית "' + sh.getName() + '")']);
+    const txt = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getDisplayValues().map(function (r) { return r.join(' | '); }).join('\n') : '';
+    ['שחר לוי', 'רז ויטלשטיין', 'כנרת שור'].forEach(function (n) { log.push([n, txt.indexOf(n) >= 0 ? 'נמצא בגיליון ✓' : 'לא נמצא ✗']); });
+    const c = coachCount_();
+    log.push(['מונה המאמנים', c.error ? 'שגיאה: ' + c.error : c.total + ' (110 + ' + c.added + ': ' + c.names.join(', ') + ')']);
+    try { const g = computeCoachGap_(true); log.push(['"3 שבועות בלי פגישה"', g.rows.length + ' מאמנים ברשימה (חושב עכשיו, עם גיליון התשובות החדש)']); }
+    catch (e) { log.push(['"3 שבועות בלי פגישה"', 'שגיאה: ' + (e.message || e)]); }
+    // בדיקת קליטה מקצה לקצה – מצב בדיקה ("בדיקת אפליקציה"): בלי Wix, בלי קבצים, בלי תפעול, בלי טלגרם/ווטסאפ/מייל
+    const r = actionOnboard_({ test: true }, {});
+    log.push(['קליטת בדיקה', 'נשלחה (' + r.rid + ') – הסטטוס יגיע לפעמון תוך דקה-שתיים']);
+  } catch (e) { log.push(['שגיאה', String(e.message || e)]); }
+  const sys = systemSs_();
+  const t = sys.getSheetByName('קישור טופס הקליטה') || sys.insertSheet('קישור טופס הקליטה');
+  t.clear();
+  t.getRange(1, 1, log.length, 2).setNumberFormat('@').setValues(log.map(function (x) { return [String(x[0]), String(x[1])]; }));
 }

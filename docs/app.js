@@ -2500,7 +2500,7 @@
         </div>`).join('')}</div>` : (Object.keys(lateUndo).some((id) => undoLive('late', id)) ? '' : '<div class="card muted">אין ביטולים מאוחרים</div>')}
       ${gapSectionHtml(d)}
       <div class="row" style="margin:16px 0 6px;align-items:center;flex-wrap:wrap;gap:6px">
-        <div class="grow"><div class="section-title" style="margin:0">מאמנים בליווי</div>${d.count ? `<div class="muted small coach-count">מאמנים ובוגרי ליווי – <b>${d.count.total}</b></div>` : ''}</div>
+        <div class="grow"><div class="section-title" style="margin:0">מאמנים בליווי</div>${d.count ? (d.count.error ? `<div class="small coach-count" style="color:var(--warn)">⚠️ ${esc(d.count.error)}</div>` : `<div class="muted small coach-count">מאמנים ובוגרי ליווי – <b>${d.count.total}</b></div>`) : ''}</div>
         <div class="chips" style="margin:0">${COACH_FILTERS.map((x) => `<button class="chip ${coachFilter === x.k ? 'on' : ''}" data-cf="${x.k}">${x.t}<span class="n">${(d.coaches || []).filter(x.f).length}</span></button>`).join('')}</div>
       </div>
       <div class="mlist">${list.length ? list.map((c) => `
