@@ -38,9 +38,11 @@ const SYS_TABS_ = {
   anomClear: { name: 'חריגים שנוקו', head: ['פריט', 'נוקה בתאריך'] },
   gapClear:  { name: 'מאמנים שנוקו (3 שבועות)', head: ['מאמן|פגישה אחרונה', 'נוקה בתאריך', 'מאמן'] },
   sent:      { name: 'התראות שנשלחו', head: ['מזהה', 'נשלח בתאריך'] },
+  pushLog:   { name: 'יומן Push', head: ['זמן', 'זמן (טקסט)', 'משתמש', 'סוג', 'כותרת', 'מכשיר', 'תוצאה', 'קוד', 'פרטים'] },
   usage:     { name: 'שימוש טריגרים', head: ['שעה', 'אפליקציה היום (דק׳)', 'פיננסים היום (דק׳)', 'בדיקת לידים (כל דקה)', 'יציאה מוקדמת', 'סריקת זומים', 'עריכה בגיליון', 'פילוח הבדיקה של כל דקה', 'פיננסים – פילוח', 'יום קודם'] },
 };
 const NOTIF_KEEP_DAYS_ = 60;
+const PUSH_LOG_KEEP_DAYS_ = 30;   // יומן Push – 30 יום (ליאל, 17/11/2026)
 const NOTIF_LIST_MAX_ = 60;
 
 // ---------- גיליון המערכת ----------
@@ -330,7 +332,11 @@ function fcmAuth_() {
 function pushToUser_(email, n) {
   const devs = myDevices_(email);
   const out = { sent: 0, failed: 0, error: '' };
-  if (!devs.length) return out;
+  if (!devs.length) {
+    pushLog_([[email, n, '', 'אין מכשיר רשום', '', '']]);
+    pushAlertAdmin_(email, 'nodev', 'אין טלפון רשום להתראות', 'ההתראה "' + n.title + '" נשמרה רק בפעמון. כדי לקבל לטלפון: לפתוח את האפליקציה מהאייקון במסך הבית ← הגדרות ← "הפעלת התראות בטלפון הזה".');
+    return out;
+  }
   const auth = fcmAuth_();
   if (!auth) { out.error = 'Push עוד לא הוגדר (חסר FCM_SERVICE_ACCOUNT)'; return out; }
   const reqs = devs.map(function (r) {
@@ -345,15 +351,23 @@ function pushToUser_(email, n) {
       } }),
     };
   });
+  const log = [], bad = [];
   UrlFetchApp.fetchAll(reqs).forEach(function (res, i) {
     const code = res.getResponseCode();
-    if (code === 200) { out.sent++; return; }
+    const dev = String(devs[i][2] || '') + ' · …' + String(devs[i][1]).slice(-6);   // סוף המזהה בלבד – לזיהוי המכשיר
+    if (code === 200) { out.sent++; log.push([email, n, dev, 'נשלח', code, '']); return; }
     out.failed++;
     const txt = res.getContentText();
-    if (code === 404 || /UNREGISTERED|registration-token-not-registered/.test(txt)) removeDevice_(devs[i][1]);
+    const gone = code === 404 || /UNREGISTERED|registration-token-not-registered/.test(txt);
+    if (gone) removeDevice_(devs[i][1]);
     else out.error = 'Firebase ' + code + ': ' + txt.slice(0, 200);
     console.warn('FCM ' + code + ' ' + txt.slice(0, 300));
+    log.push([email, n, dev, gone ? 'המכשיר לא רשום יותר – נמחק' : 'נכשל', code, txt.slice(0, 300)]);
+    bad.push(dev + ': ' + (gone ? 'המכשיר כבר לא רשום בגוגל (נמחק מהרשימה)' : 'Firebase ' + code));
   });
+  pushLog_(log);
+  if (bad.length) pushAlertAdmin_(email, 'fail', 'התראה לא נמסרה לטלפון', bad.join(' · ') + '. ההתראה: "' + n.title + '". ' +
+    (out.sent ? 'לטלפון אחר כן נשלחה.' : 'כדי לתקן: לפתוח את האפליקציה מהאייקון במסך הבית ← הגדרות ← "הפעלת התראות בטלפון הזה" (או "שליחת התראת בדיקה").'));
   return out;
 }
 
@@ -535,6 +549,7 @@ function pruneNotifs_() {
   let n = 0;
   while (n < d.rows.length && (Number(d.rows[n][1]) || 0) < cutoff) n++;
   if (n) d.sh.deleteRows(2, n);
+  try { prunePushLog_(); } catch (e) { console.warn('prunePushLog: ' + e); }
 }
 
 function notifyStatus_() {
@@ -688,4 +703,45 @@ function setupNotifications() {
   console.log('✅ גיליון המערכת: ' + ss.getName() + '\n' + ss.getUrl());
   console.log('✅ בדיקת לידים חדשים כל דקה ' + (has ? '(כבר הייתה פעילה)' : '(הותקנה עכשיו)'));
   console.log(PropertiesService.getScriptProperties().getProperty('FCM_SERVICE_ACCOUNT') ? '✅ Push מוגדר' : 'ℹ️ Push עוד לא מוגדר (FCM_SERVICE_ACCOUNT חסר) – מרכז ההתראות באפליקציה כבר עובד');
+}
+
+// ---------- יומן Push + התראה למנהל על כשל (ליאל, 17/11/2026) ----------
+/** rows: [email, n, מכשיר, תוצאה, קוד, פרטים] → שורה ב"יומן Push". לא זורק. */
+function pushLog_(rows) {
+  if (!rows.length) return;
+  try {
+    const now = new Date(), t = String(now.getTime()), txt = Utilities.formatDate(now, TZ_, 'dd/MM/yyyy HH:mm:ss');
+    const sh = sysTab_('pushLog');
+    const vals = rows.map(function (r) { return [t, txt, r[0], String(r[1].type || ''), String(r[1].title || '').slice(0, 120), r[2], r[3], String(r[4]), r[5]]; });
+    sh.getRange(sh.getLastRow() + 1, 1, vals.length, vals[0].length).setValues(vals);
+  } catch (e) { console.warn('pushLog: ' + e); }
+}
+/** מוחק מ"יומן Push" שורות ישנות מ-30 יום (פעם ביום, מתוך pruneNotifs_) */
+function prunePushLog_() {
+  const d = sysRows_('pushLog');
+  const cutoff = Date.now() - PUSH_LOG_KEEP_DAYS_ * DAY_MS_;
+  let n = 0;
+  while (n < d.rows.length && (Number(d.rows[n][0]) || 0) < cutoff) n++;
+  if (n) d.sh.deleteRows(2, n);
+}
+/**
+ * התראה בפעמון בלבד, רק למנהלים: Push של משתמש נכשל / המכשיר נמחק / אין לו טלפון רשום.
+ * לכל היותר פעם ביום לכל משתמש (ולכל סוג בעיה). לא שולחת Push – כדי שלא תהיה לולאה.
+ */
+function pushAlertAdmin_(email, kind, what, text) {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const day = Utilities.formatDate(new Date(), TZ_, 'yyyy-MM-dd');
+    const seen = JSON.parse(props.getProperty('PUSH_ALERT_DAY') || '{}');
+    const key = email + '|' + kind;
+    if (seen[key] === day) return;
+    seen[key] = day;
+    Object.keys(seen).forEach(function (k) { if (seen[k] !== day) delete seen[k]; });
+    props.setProperty('PUSH_ALERT_DAY', JSON.stringify(seen));
+    const cfg = getConfig_();
+    const who = (cfg.names && cfg.names[email]) || (typeof USER_NAMES_BY_ROLE_ !== 'undefined' && USER_NAMES_BY_ROLE_[cfg.users[email]]) || email.split('@')[0];
+    Object.keys(cfg.users).filter(function (e) { return cfg.users[e] === 'admin'; }).forEach(function (admin) {
+      notify_('system', { title: '⚠️ ' + what + ' – ' + who, text: text, link: '#/notifs' }, { only: admin, noPush: true });
+    });
+  } catch (e) { console.warn('pushAlertAdmin: ' + e); }
 }

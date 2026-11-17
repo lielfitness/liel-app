@@ -227,10 +227,9 @@ const TX_ = { date: 1, source: 2, desc: 3, type: 4, amount: 5, cat: 6, biz: 7, v
 
 function monthRow_(sh, d) {
   const row = d.getMonth() + 2;   // שורה 2 = ינואר
-  // עמודה O = קיזוז מע"מ רכב (מ-17/11/2026); לשונית ישנה בלי עמודה O – בלי
-  const v = sh.getRange(row, 1, 1, Math.min(15, sh.getMaxColumns())).getValues()[0];
+  const v = sh.getRange(row, 1, 1, 12).getValues()[0];
   const num = function (x) { return typeof x === 'number' ? x : null; };
-  return { label: String(v[11] || ''), net: num(v[0]), expenses: num(v[6]), expensesNet: num(v[5]), income: num(v[8]), incomeNet: num(v[7]), carVat: num(v[14]) };
+  return { label: String(v[11] || ''), net: num(v[0]), expenses: num(v[6]), expensesNet: num(v[5]), income: num(v[8]), incomeNet: num(v[7]) };
 }
 
 /** הסיכום השבועי מחולק לפי כותרות (🔴 דוח חייבים, 🧾 התאמת חשבוניות וכו') */
@@ -345,7 +344,6 @@ function actionFinDecide_(req, ctx) {
       sh.getRange(row, TX_.cat).setValue(p.cat);
       sh.getRange(row, TX_.biz).setValue(p.biz);
       sh.getRange(row, TX_.note).setValue(p.note);
-      if (p.vat !== undefined) sh.getRange(row, TX_.vat).setValue(p.vat);
       out = { ok: true, undone: true };
       CacheService.getScriptCache().remove('finrev_v1');
       return;
@@ -356,13 +354,9 @@ function actionFinDecide_(req, ctx) {
     const isBit = bitPending || (cur[TX_.type - 1] === 'הכנסה' && /ביט/.test(cur[TX_.source - 1] + ' ' + cur[TX_.desc - 1]));
     const note = 'החלטת ליאל ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy') + ' (מהאפליקציה): ' + (biz ? 'עסקי' : 'פרטי') +
       (isBit ? ' – החלטה חד-פעמית (ביט), לא להפוך לכלל' : '');
-    const prev = { cat: cur[TX_.cat - 1], biz: cur[TX_.biz - 1], note: cur[TX_.note - 1], vat: cur[TX_.vat - 1] };
-    // שורת "רכב - לבדיקה" (תחנה / חניון לא ברורים): עסקי → "רכב" (לא בהוצאות העסקיות, רק קיזוז מע"מ – ליאל, 17/11/2026)
-    const car = biz && /^רכב/.test(String(cur[TX_.cat - 1]).trim());
-    const wrote = car ? 'רכב' : (biz ? 'כן' : 'לא');
-    sh.getRange(row, TX_.biz).setValue(wrote);
-    if (car) { sh.getRange(row, TX_.cat).setValue('רכב - כללי'); sh.getRange(row, TX_.vat).setValue('כן'); }
-    else if (!biz) sh.getRange(row, TX_.cat).setValue('פרטי');
+    const prev = { cat: cur[TX_.cat - 1], biz: cur[TX_.biz - 1], note: cur[TX_.note - 1] };
+    sh.getRange(row, TX_.biz).setValue(biz ? 'כן' : 'לא');
+    if (!biz) sh.getRange(row, TX_.cat).setValue('פרטי');
     // ביט עסקי: הכנסה → "הכנסות ביט"; הוצאה → הקטגוריה שנבחרה (ברירת מחדל "שיווק - תוכן")
     else if (bitPending) {
       const income = String(cur[TX_.type - 1]).trim() === 'הכנסה';
@@ -370,7 +364,7 @@ function actionFinDecide_(req, ctx) {
       sh.getRange(row, TX_.cat).setValue(cat);
     }
     sh.getRange(row, TX_.note).setValue(prev.note ? prev.note + ' | ' + note : note);
-    out = { ok: true, car: car || undefined, undo: Object.assign({ wrote: wrote }, prev) };
+    out = { ok: true, undo: Object.assign({ wrote: biz ? 'כן' : 'לא' }, prev) };
     CacheService.getScriptCache().remove('finrev_v1');
   });
   return out;
@@ -454,12 +448,9 @@ function finReviewCount_() {
 function monthLists_(vals, yy, mm) {
   const amt = function (s) { return Number(String(s).replace(/[,₪\s]/g, '')) || 0; };
   const income = [], expenses = [];
-  let car = 0;
   vals.forEach(function (r) {
     const m = String(r[0]).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (!m || Number(m[2]) !== mm || Number(m[3]) !== yy) return;
-    // רכב (ליאל, 17/11/2026): לא בהוצאות העסקיות – רק סכום לשורה "🚗 רכב החודש"
-    if (String(r[TX_.biz - 1]).trim() === 'רכב' && r[TX_.type - 1] === 'הוצאה') { car += amt(r[TX_.amount - 1]); return; }
     if (String(r[TX_.biz - 1]).trim() !== 'כן') return;
     const item = { id: r[TX_.id - 1], date: r[0], day: Number(m[1]), amount: amt(r[TX_.amount - 1]) };
     // נוסף מהאפליקציה (הכנסה/הוצאה ידנית) → אפשר למחוק אותו מהרשימה עצמה
@@ -475,7 +466,7 @@ function monthLists_(vals, yy, mm) {
     }
   });
   const byDay = function (a, b) { return a.day - b.day; };
-  return { income: income.sort(byDay), expenses: expenses.sort(byDay), car: car };
+  return { income: income.sort(byDay), expenses: expenses.sort(byDay) };
 }
 
 // ---------- דוח חייבים: פריטים + "נקה" ----------
