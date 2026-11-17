@@ -259,8 +259,8 @@ function coachCount_() {
 // רץ פעם אחת מהבדיקה של כל 5 דקות. רק אם גיליון היעד הנוכחי לא נפתח. התוצאה – ללשונית "קישור טופס הקליטה" בגיליון המערכת.
 function onbRelinkOnce_() {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('ONB_RELINK_DONE')) return;
-  props.setProperty('ONB_RELINK_DONE', new Date().toISOString());
+  if (props.getProperty('ONB_RELINK_DONE2')) return;   // ניסיון שני (הראשון נכשל: הטופס עוד היה מקושר לגיליון שנמחק)
+  props.setProperty('ONB_RELINK_DONE2', new Date().toISOString());
   const log = [['זמן', Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]];
   try {
     const form = FormApp.openById(getConfig_().onboardFormId);
@@ -269,8 +269,14 @@ function onbRelinkOnce_() {
     try { SpreadsheetApp.openById(old); ok = true; } catch (e) { log.push(['היעד הקודם', old + ' – לא נפתח: ' + (e.message || e)]); }
     if (ok) { log.push(['היעד הקודם', old + ' – נפתח, לא שיניתי כלום']); }
     else {
-      const ss = SpreadsheetApp.create(form.getTitle() + ' (תשובות) – ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy'));
-      ss.setSpreadsheetTimeZone(TZ_);
+      // הגיליון שנוצר בניסיון הראשון (17/11) – משתמשים בו, לא יוצרים עוד אחד
+      const name = form.getTitle() + ' (תשובות) – ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy');
+      const it = DriveApp.getFilesByName(name);
+      let ss = null;
+      while (it.hasNext() && !ss) { const f = it.next(); if (!f.isTrashed()) ss = SpreadsheetApp.openById(f.getId()); }
+      if (!ss) { ss = SpreadsheetApp.create(name); ss.setSpreadsheetTimeZone(TZ_); }
+      // קודם מנתקים את הקישור לגיליון שנמחק (בלי זה גוגל מסרבת: "הגדרת יעד התגובה נכשלה"). התשובות נשמרות בטופס.
+      form.removeDestination();
       form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
       SpreadsheetApp.flush();
       CacheService.getScriptCache().removeAll(['onb_dest1', COACH_CNT_CACHE_]);
