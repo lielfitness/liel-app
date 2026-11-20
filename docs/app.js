@@ -2786,8 +2786,20 @@
         <div class="fin-line">הכנסות שנתיות <b>${money(t.income)}</b></div>
         <div class="fin-line">הוצאות שנתיות <b>${money(t.expenses)}</b></div>
         <div class="fin-line">רווח נטו שנתי <b>${money(t.net)}</b></div>
+        ${finAvgHtml(d)}
         <div class="muted small">${d.pastYear ? 'כל השנה' : 'מ-1 בינואר עד היום'}</div>
       </div>` : '<div class="card muted">אין נתונים לשנה הזו</div>'}`;
+  }
+  /** ממוצע הכנסות חודשי – מאותו מקור כמו "הכנסות שנתיות" (עמודת "סה״כ הכנסות" בלשונית השנה), רק חודשים מלאים:
+   *  השנה הנוכחית – מינואר עד החודש הקודם (החודש הנוכחי נכנס כשהוא נגמר); שנה קודמת – החודשים שיש בהם הכנסות (ליאל, 20/11/2026) */
+  const HEB_MONTHS_SHORT = ['ינו׳', 'פבר׳', 'מרץ', 'אפר׳', 'מאי', 'יוני', 'יולי', 'אוג׳', 'ספט׳', 'אוק׳', 'נוב׳', 'דצמ׳'];
+  function finAvgHtml(d) {
+    const nowM = new Date().getMonth() + 1;
+    const full = ((d.ym && d.ym.months) || []).filter((m) => typeof m.income === 'number' && (d.pastYear ? m.income > 0 : m.m < nowM));
+    if (!full.length) return '';
+    const avg = full.reduce((s, m) => s + m.income, 0) / full.length;
+    const a = HEB_MONTHS_SHORT[full[0].m - 1], b = HEB_MONTHS_SHORT[full[full.length - 1].m - 1];
+    return `<div class="fin-line">ממוצע הכנסות חודשי <b>${money(avg)}</b> <span class="muted small">(${full.length > 1 ? a + '–' + b : a})</span></div>`;
   }
   function renderFinanceEmpty(d, viewY) {
     shell('פיננסים', `<div class="card muted" style="margin-top:6px">אין נתונים לשנת ${viewY}</div>${finYearHtml(d, viewY)}`);
