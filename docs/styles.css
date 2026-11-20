@@ -597,3 +597,6 @@ details.rem-cat[open] .rem-caret { transform: rotate(90deg); }
 .rem-calbtn { filter: grayscale(1); opacity: .45; }
 .rem-calbtn.on { filter: none; opacity: 1; background: rgba(213, 0, 0, .14); border-color: rgba(213, 0, 0, .55); }
 .toggle-row[hidden] { display: none; }
+/* פופ-אפ קליטה */
+.onb-pop .onb-pop-text { max-height: 50vh; overflow: auto; margin: 10px 0 12px; font-size: 14px; }
+.onb-pop .btn.green { display: block; text-align: center; }

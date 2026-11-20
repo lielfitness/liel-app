@@ -219,6 +219,7 @@ function actionNotifications_(req, ctx) {
     types: types.map(function (k) { return { k: k, label: NOTIF_TYPES_[k].label, icon: NOTIF_TYPES_[k].icon }; }),
     settings: settings,
     push: { configured: !!PropertiesService.getScriptProperties().getProperty('FCM_SERVICE_ACCOUNT'), devices: myDevices_(ctx.email).length },
+    onbPopups: role === 'admin' && ctx.role === ctx.realRole ? onbPopups_() : [],   // פופ-אפ קליטה – רק לליאל, לא ב"כמו שי"
   };
 }
 
@@ -400,7 +401,6 @@ function watchNewLeads() {
     if (due.five) {
       step_('quiet', flushQuiet_);
       step_('coachDaily', dailyCoachCheck_);
-      step_('onbRelink', onbRelinkOnce_);   // חד-פעמי (17/11/2026): קישור טופס הקליטה לגיליון חדש + קליטת בדיקה
       step_('rewards', runRewardQueue_);   // גיבוי בלבד – הבונוס מחושב כבר בשמירה עצמה ובעריכה בגיליון
       step_('gap', function () { computeCoachGap_(false); });
       step_('ghost', function () { ghostReconcile_(false); });
@@ -408,6 +408,7 @@ function watchNewLeads() {
       step_('props', propsSizeCheck_);   // פעם ב-6 שעות (לפי cache) – גודל ה-Properties + תקרות הרישום
     }
     if (due.five || due.onb) step_('onboard', pollOnboard_);
+    step_('onbPopup', onbPopupScan_);   // פופ-אפ קליטה – כל דקה (20/11/2026)
     if (due.ten) step_('perf', flushPerf_);
     step_('reminders', remWatch_);
     return step_('leads', function () { return watchNewLeadsCore_(t0); });

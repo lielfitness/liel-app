@@ -60,6 +60,7 @@ const ACTIONS = {
   coachMinus:     { roles: ['admin'], fn: actionCoachMinus_ },
   anomClear:      { roles: ['admin'], fn: actionAnomClear_ },
   invClear:       { roles: ['admin'], fn: actionInvClear_ },
+  onbPopupClose:  { roles: ['admin'], fn: actionOnbPopupClose_ },
   online:         { roles: ['admin'], fn: actionOnline_ },
   onboard:        { roles: ['admin'], fn: actionOnboard_ },
   onboardList:    { roles: ['admin'], fn: actionOnboardList_ },

@@ -8,7 +8,7 @@
 
 const ONB_DEFAULT_ = { 'פרימיום': 12, 'בייסיק': 6 };
 const ONB_TAB_ = 'קליטות (מערכת)';
-const ONB_COLS_ = { at: 0, rid: 1, test: 2, name: 3, email: 4, phone: 5, track: 6, wix: 7, prog: 8, file: 9, share: 10, ops: 11, fileUrl: 12, wa: 13, errors: 14 };
+const ONB_COLS_ = { at: 0, rid: 1, test: 2, name: 3, email: 4, phone: 5, track: 6, wix: 7, prog: 8, file: 9, share: 10, ops: 11, fileUrl: 12, wa: 13, errors: 14, summary: 15 };
 const ONB_STEPS_ = [['wix', 'Wix'], ['prog', 'תכניות'], ['file', 'קובץ'], ['share', 'שיתוף'], ['ops', 'תפעול']];
 
 function onbPhoneOk_(p) {
@@ -255,50 +255,43 @@ function coachCount_() {
   }
 }
 
-// ---------- חד-פעמי (17/11/2026, באישור ליאל): קישור הטופס לגיליון תשובות חדש + בדיקת קליטה במצב בדיקה ----------
-// רץ פעם אחת מהבדיקה של כל 5 דקות. רק אם גיליון היעד הנוכחי לא נפתח. התוצאה – ללשונית "קישור טופס הקליטה" בגיליון המערכת.
-function onbRelinkOnce_() {
+// ---------- פופ-אפ קליטה (ליאל, 20/11/2026) ----------
+// כל דקה: כל השורות החדשות בלשונית "קליטות (מערכת)" (לפי מזהה התגובה – גם כמה קליטות באותה דקה), מהטופס או מהאפליקציה.
+// קליטה אמיתית → פופ-אפ פתוח (ONB_POPUPS) + Push לליאל. בדיקות לא. ריצה ראשונה: מה שכבר בלשונית = "נראה" (בלי פופ-אפים).
+// התשובות שהועתקו ל-Form Responses 1 לא נקראות כאן בכלל – רק שורות סטטוס שסקריפט הקליטה כותב על קליטה חדשה.
+function onbPopupScan_() {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('ONB_RELINK_DONE2')) return;   // ניסיון שני (הראשון נכשל: הטופס עוד היה מקושר לגיליון שנמחק)
-  props.setProperty('ONB_RELINK_DONE2', new Date().toISOString());
-  const log = [['זמן', Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]];
-  try {
-    const form = FormApp.openById(getConfig_().onboardFormId);
-    const old = form.getDestinationId();
-    let ok = false;
-    try { SpreadsheetApp.openById(old); ok = true; } catch (e) { log.push(['היעד הקודם', old + ' – לא נפתח: ' + (e.message || e)]); }
-    if (ok) { log.push(['היעד הקודם', old + ' – נפתח, לא שיניתי כלום']); }
-    else {
-      // הגיליון שנוצר בניסיון הראשון (17/11) – משתמשים בו, לא יוצרים עוד אחד
-      const name = form.getTitle() + ' (תשובות) – ' + Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy');
-      const it = DriveApp.getFilesByName(name);
-      let ss = null;
-      while (it.hasNext() && !ss) { const f = it.next(); if (!f.isTrashed()) ss = SpreadsheetApp.openById(f.getId()); }
-      if (!ss) { ss = SpreadsheetApp.create(name); ss.setSpreadsheetTimeZone(TZ_); }
-      // קודם מנתקים את הקישור לגיליון שנמחק (בלי זה גוגל מסרבת: "הגדרת יעד התגובה נכשלה"). התשובות נשמרות בטופס.
-      form.removeDestination();
-      form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
-      SpreadsheetApp.flush();
-      CacheService.getScriptCache().removeAll(['onb_dest1', COACH_CNT_CACHE_]);
-      log.push(['גיליון חדש', ss.getName() + ' · ' + ss.getUrl()]);
-      log.push(['יעד הטופס עכשיו', form.getDestinationId() + (form.getDestinationId() === ss.getId() ? ' ✓' : ' ✗')]);
-    }
-    const resp = form.getResponses();
-    const sh = onbResponsesSheet_(onbSs_());
-    log.push(['תשובות בטופס', String(resp.length)]);
-    log.push(['שורות בגיליון התשובות', String(Math.max(0, sh.getLastRow() - 1)) + ' (לשונית "' + sh.getName() + '")']);
-    const txt = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getDisplayValues().map(function (r) { return r.join(' | '); }).join('\n') : '';
-    ['שחר לוי', 'רז ויטלשטיין', 'כנרת שור'].forEach(function (n) { log.push([n, txt.indexOf(n) >= 0 ? 'נמצא בגיליון ✓' : 'לא נמצא ✗']); });
-    const c = coachCount_();
-    log.push(['מונה המאמנים', c.error ? 'שגיאה: ' + c.error : c.total + ' (110 + ' + c.added + ': ' + c.names.join(', ') + ')']);
-    try { const g = computeCoachGap_(true); log.push(['"3 שבועות בלי פגישה"', g.rows.length + ' מאמנים ברשימה (חושב עכשיו, עם גיליון התשובות החדש)']); }
-    catch (e) { log.push(['"3 שבועות בלי פגישה"', 'שגיאה: ' + (e.message || e)]); }
-    // בדיקת קליטה מקצה לקצה – מצב בדיקה ("בדיקת אפליקציה"): בלי Wix, בלי קבצים, בלי תפעול, בלי טלגרם/ווטסאפ/מייל
-    const r = actionOnboard_({ test: true }, {});
-    log.push(['קליטת בדיקה', 'נשלחה (' + r.rid + ') – הסטטוס יגיע לפעמון תוך דקה-שתיים']);
-  } catch (e) { log.push(['שגיאה', String(e.message || e)]); }
-  const sys = systemSs_();
-  const t = sys.getSheetByName('קישור טופס הקליטה') || sys.insertSheet('קישור טופס הקליטה');
-  t.clear();
-  t.getRange(1, 1, log.length, 2).setNumberFormat('@').setValues(log.map(function (x) { return [String(x[0]), String(x[1])]; }));
+  const seenRaw = props.getProperty('ONB_POP_SEEN');
+  let sh;
+  try { sh = onbSs_().getSheetByName(ONB_TAB_); } catch (e) { console.warn('onbPopupScan: ' + e.message); return; }
+  const n = sh ? sh.getLastRow() - 1 : 0;
+  const rows = n > 0 ? sh.getRange(2, 1, n, 16).getDisplayValues() : [];
+  if (seenRaw === null) { props.setProperty('ONB_POP_SEEN', JSON.stringify(rows.map(function (r) { return r[1]; }).filter(String).slice(-200))); return; }
+  const seen = JSON.parse(seenRaw || '[]');
+  const fresh = rows.filter(function (r) { return r[1] && seen.indexOf(r[1]) < 0; });
+  if (!fresh.length) return;
+  const pops = readJsonProp_('ONB_POPUPS', []);
+  fresh.forEach(function (r) {
+    seen.push(r[1]);
+    if (r[ONB_COLS_.test] === 'כן') return;
+    const failed = ONB_STEPS_.filter(function (s) { return /נכשל/.test(r[ONB_COLS_[s[0]]]); }).map(function (s) { return s[1]; });
+    const name = r[ONB_COLS_.name];
+    const summary = r[ONB_COLS_.summary] || ['קליטת מאמן: ' + name + ' (' + r[ONB_COLS_.track] + ')', 'מייל: ' + r[ONB_COLS_.email] + ' | טלפון: ' + r[ONB_COLS_.phone],
+      'קובץ שיטס: ' + (r[ONB_COLS_.fileUrl] || 'נכשל'), r[ONB_COLS_.errors] ? 'שגיאות: ' + r[ONB_COLS_.errors] : ''].filter(String).join('\n');
+    pops.push({ rid: r[1], name: name, track: r[ONB_COLS_.track], wa: r[ONB_COLS_.wa], fileUrl: r[ONB_COLS_.fileUrl], summary: summary, failed: failed, at: Date.now() });
+    // Push (גם כשהאפליקציה סגורה); לחיצה פותחת את האפליקציה על הפופ-אפ. אותו קישור כמו התראת הקליטה – שורה אחת בפעמון.
+    notify_('onboard', { title: (failed.length ? '⚠️ ' : '✅ ') + name + ' נקלט/ה' + (failed.length ? ' – נכשל: ' + failed.join(', ') : ''),
+      text: 'לחיצה – הסיכום ושליחת הלינקים בווטסאפ', link: onbLink_(r[1]) }, { noQuiet: true, replaceLink: true });
+  });
+  writeJsonProp_('ONB_POPUPS', pops.slice(-10));
+  props.setProperty('ONB_POP_SEEN', JSON.stringify(seen.slice(-200)));
 }
+/** הפופ-אפים הפתוחים (לאפליקציה, עם ההתראות) */
+function onbPopups_() { return readJsonProp_('ONB_POPUPS', []); }
+/** סגירה (✕ או "שליחת הלינקים בווטסאפ") – לא יקפוץ שוב על אותו מאמן, בשום מכשיר */
+function actionOnbPopupClose_(req, ctx) {
+  const rid = String(req.rid || '');
+  withLock_(function () { writeJsonProp_('ONB_POPUPS', onbPopups_().filter(function (p) { return p.rid !== rid; })); });
+  return { ok: true };
+}
+

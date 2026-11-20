@@ -3905,6 +3905,38 @@
   function applyNotifs(d) {
     state.unread = d.badge != null ? d.badge : (d.unread || 0);   // המונה על הפעמון: מה שהגיע מאז שנפתח מסך ההתראות
     updateBadges();
+    showOnbPopup(d.onbPopups);
+  }
+  // ---------- פופ-אפ קליטה (20/11/2026): מאמן נקלט → סיכום + "שליחת הלינקים בווטסאפ". נשאר עד שסוגרים. ----------
+  // נסגר במכשיר הזה – נשמר גם אחרי רענון (הרשימה השמורה במכשיר יכולה להיות ישנה עד שהשרת עונה)
+  const onbPopClosed = new Set((() => { try { return JSON.parse(LS.get('lf_onbpop_closed') || '[]'); } catch (e) { return []; } })());
+  let onbPopOpen = '';
+  function showOnbPopup(list) {
+    if (!isAdmin() || state.viewAs || onbPopOpen) return;
+    const p = (list || []).find((x) => x && x.rid && !onbPopClosed.has(x.rid));
+    if (!p) return;
+    onbPopOpen = p.rid;
+    const failed = p.failed && p.failed.length;
+    const wrap = document.createElement('div');
+    wrap.className = 'sheet-backdrop onb-pop';
+    wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="קליטת מאמן">
+      <div class="row"><b class="grow">${failed ? '⚠️' : '✅'} ${esc(p.name)} נקלט/ה${p.track ? ' · ' + esc(p.track) : ''}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="pre onb-pop-text">${esc(p.summary || '')}</div>
+      ${p.wa ? `<a class="btn green" data-wa href="${esc(p.wa)}" target="_blank" rel="noopener">📲 שליחת הלינקים בווטסאפ</a>` : '<div class="muted small">אין קישור ווטסאפ (הקליטה לא הושלמה)</div>'}
+    </div>`;
+    document.body.appendChild(wrap);
+    const close = () => {
+      onbPopClosed.add(p.rid); onbPopOpen = ''; wrap.remove();
+      try { LS.set('lf_onbpop_closed', JSON.stringify([...onbPopClosed].slice(-50))); } catch (e) { /* */ }
+      const cached = store.get('notifs');
+      if (cached && cached.onbPopups) { cached.onbPopups = cached.onbPopups.filter((x) => x.rid !== p.rid); store.set('notifs', cached); }
+      api('onbPopupClose', { rid: p.rid }).catch(() => {});
+      setTimeout(() => showOnbPopup(list), 300);   // עוד מאמן שנקלט – הפופ-אפ הבא
+    };
+    // לחיצה מחוץ לחלון לא סוגרת – רק ✕ או הכפתור
+    wrap.querySelector('[data-x]').onclick = close;
+    const wa = wrap.querySelector('[data-wa]');
+    if (wa) wa.addEventListener('click', () => setTimeout(close, 0));
   }
   /** נפתח מסך ההתראות → המונה על הפעמון מתאפס (לכל משתמש בנפרד). "לא נקראה" ברשימה נשאר. */
   function markNotifsSeen() {
@@ -4190,6 +4222,7 @@
       }
       if (page === 'more') return viewMore();
       if (page === 'onboard') return viewOnboard();
+      if (page === 'onb') { refreshNotifs(); return viewNotifs(); }   // לחיצה על Push של קליטה → האפליקציה נפתחת והפופ-אפ קופץ
     }
     location.replace(isAdmin() ? '#/home' : '#/leads');
   }
