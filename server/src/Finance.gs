@@ -287,7 +287,7 @@ function actionFinance_(req, ctx) {
     summary: { text: text, at: sum.getRange('B1').getDisplayValue(),
       debts: parts['🔴'] ? { title: parts['🔴'].title, items: debts } : null,
       anomalies: parts['⚠️'] ? { title: parts['⚠️'].title, items: anomalyItems_(parts['⚠️'].body) } : null,
-      invoices: parts['🧾'] || null },
+      invoices: parts['🧾'] ? Object.assign({ items: invoiceItems_(ss, parts['🧾'].body) }, parts['🧾']) : null },
     reminders: (function () { try { return remList_(); } catch (e) { console.warn('reminders: ' + e); return []; } })(),
     ym: finYearMonths_(year, txVals, now.getFullYear(), now.getMonth() + 1),
     years: finYears_(ss, now),
@@ -647,6 +647,39 @@ function actionAnomClear_(req, ctx) {
   } else if (!d.rows.some(function (r) { return anomalyStable_(r[0]) === st; })) {
     d.sh.appendRow([key, Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]);
   }
+  return { ok: true };
+}
+
+// ---------- 🧾 התאמת חשבוניות: "נקה" לכל שורה (ליאל, 20/11/2026) ----------
+// נשמר בגיליון הפיננסים, בלשונית "חשבוניות שנוקו (מערכת)" – FinEngine קורא אותה ולא מחזיר את השורה (גם לא בטלגרם).
+// מפתח: "<כותרת הסעיף>|<השורה>" (רווחים מנורמלים) – זהה בשני הצדדים (invKey_ כאן, fsInvKey_ בסקריפט הפיננסים).
+const INV_TAB_ = 'חשבוניות שנוקו (מערכת)';
+function invKey_(sec, line) { return String(sec || '').replace(/:\s*$/, '').trim() + '|' + String(line || '').replace(/\s+/g, ' ').trim(); }
+function invSheet_(ss, create) {
+  let sh = ss.getSheetByName(INV_TAB_);
+  if (!sh && create) { sh = ss.insertSheet(INV_TAB_); sh.getRange(1, 1, 1, 2).setValues([['פריט (סעיף|שורה)', 'נוקה בתאריך']]).setFontWeight('bold'); sh.setFrozenRows(1); sh.hideSheet(); }
+  return sh;
+}
+function invoiceItems_(ss, body) {
+  const sh = invSheet_(ss, false), cleared = {};
+  if (sh && sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 1).getDisplayValues().forEach(function (r) { if (r[0]) cleared[r[0]] = 1; });
+  let sec = '';
+  return String(body || '').split('\n').map(function (t) { return t.trim(); }).filter(Boolean).map(function (t) {
+    if (/:$/.test(t)) { sec = t; return { head: t }; }
+    if (!sec) return { text: t };   // "הכל תואם ✅" / "לא נבדק…"
+    const k = invKey_(sec, t);
+    return { text: t, key: k, cleared: !!cleared[k] };
+  });
+}
+function actionInvClear_(req, ctx) {
+  const key = String(req.key || '').trim();
+  if (!/\|/.test(key)) throw apiError_('BAD_REQUEST', 'פריט לא תקין');
+  finLock_(function () {
+    const sh = invSheet_(finSs_(), true);
+    const rows = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getDisplayValues() : [];
+    if (req.undo) { for (let i = rows.length - 1; i >= 0; i--) if (rows[i][0] === key) sh.deleteRow(i + 2); }
+    else if (!rows.some(function (r) { return r[0] === key; })) sh.appendRow([key, Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm')]);
+  });
   return { ok: true };
 }
 

@@ -159,7 +159,7 @@
   const PERF_LOCAL = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
   // פעולות שכותבות לשרת: בזמן שהן בדרך מופיע "שומר…", האפליקציה לא נטענת מחדש לגרסה חדשה, ו-🔄 מחכה להן.
   // (שמירות של לידים, ↶/↷ ומאמנים – מסומנות כבר במקום אחר)
-  const WRITE_ACTIONS = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  const WRITE_ACTIONS = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
     finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1,
     addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1 };
   // ---------- חיבור: קריאות (לא שמירות) – הגבלת זמן, ניסיון חוזר לבד, ושורה אפורה רק אחרי 3 כישלונות ----------
@@ -215,7 +215,7 @@
     p.then(syncEnd, syncEnd);
     return p;
   }
-  const WRITE_LABELS = { lateClear: 'נקה – ביטול מאוחר', gapClear: 'נקה – 3 שבועות בלי פגישה', debtClear: 'נקה – חייבים', anomClear: 'נקה – חריג',
+  const WRITE_LABELS = { lateClear: 'נקה – ביטול מאוחר', gapClear: 'נקה – 3 שבועות בלי פגישה', debtClear: 'נקה – חייבים', anomClear: 'נקה – חריג', invClear: 'נקה – התאמת חשבוניות',
     lateCharge: 'לחייב / לבטל חיוב', coachRenew: 'חידוש חבילה', finDecide: 'עסקי / פרטי', finAddIncome: 'הכנסה ידנית', finAddExpense: 'הוצאה ידנית',
     finRemoveManual: 'מחיקת תנועה ידנית', online: 'מתאמני אונליין', assignZoom: 'שיוך זום', dismissZoom: 'התעלמות מזום' };
   /** פעולה שכותבת לשרת (לא שמירת ליד): נכנסת לתור – נשלחת גם אם האפליקציה נסגרת, ומבוצעת בשרת פעם אחת (opId) */
@@ -241,7 +241,7 @@
    */
   // רק פעולות שהשרת מבצע "פעם אחת" לפי opId (OP_ONCE_ ב-server/src/Main.gs) מקבלות ניסיון חוזר אוטומטי.
   // פעולה חדשה שלא ברשימה – בלי ניסיון חוזר (שגיאת רשת מוצגת מיד), עד שתתווסף גם לכאן וגם ל-OP_ONCE_ בשרת.
-  const NET_RETRY_OK = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  const NET_RETRY_OK = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
     finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1,
     remCatSave: 1, remCatDelete: 1 };
   async function writeNetRetry(action, p) {
@@ -1290,7 +1290,7 @@
         updateBadges();
         // שורות "נוקה: … ↶ ביטול" יורדות מהמסך (הן רק בזיכרון המכשיר). הניקוי עצמו כבר שמור בשרת,
         // והרשימות שנטענו עכשיו מהשרת כבר בלי הפריטים שנוקו.
-        [lateUndo, gapUndo, debtUndo, anomUndo].forEach((m) => Object.keys(m).forEach((k) => delete m[k]));
+        [lateUndo, gapUndo, debtUndo, anomUndo, invUndo].forEach((m) => Object.keys(m).forEach((k) => delete m[k]));
         if (!isEditing()) route();   // המסך הנוכחי מצויר מחדש מהנתונים הטריים
         toast('✓ עודכן');
       })
@@ -2866,6 +2866,8 @@
     const added = finAdded().filter((a) => a.pending || undoLive('add', a.id));
     const anom = d.summary && d.summary.anomalies && d.summary.anomalies.items ? d.summary.anomalies : null;
     const anomItems = anom ? anom.items.filter((it) => !it.cleared && !anomUndo[it.key]) : [];
+    const inv = d.summary && d.summary.invoices;
+    const invItems = inv && inv.items ? inv.items.filter((it) => !it.key || (!it.cleared && !invUndo[it.key])) : [];
     shell('פיננסים', `
       <div class="fin-strip" data-strip="months">
         ${mo.slice().reverse().map((m) => `<button type="button" class="card tile fin-month ${m.m === cur.m ? 'sel' : ''}" data-fmm="${m.m}">
@@ -2910,7 +2912,13 @@
         ${Object.keys(anomUndo).filter((k) => undoLive('anom', k)).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(anomUndo[k].text)}</span><button class="btn small ghost" data-unanom="${esc(k)}">↶ ביטול</button></div>`).join('')}
         ${anomItems.length ? anomItems.map((it) => `<div class="debt-row" data-anom="${esc(it.key)}"><span class="grow small">${esc(it.text)}</span><button class="btn small ghost" data-clear>נקה</button></div>`).join('') : (Object.keys(anomUndo).some((k) => undoLive('anom', k)) ? '' : '<div class="muted small">אין חריגים</div>')}
       </div>` : ''}
-      ${d.summary && d.summary.invoices ? `<div class="section-title">🧾 ${esc(d.summary.invoices.title)}</div><div class="card">${pre(d.summary.invoices.body)}</div>` : ''}`}
+      ${inv ? `<div class="section-title">🧾 ${esc(inv.title)}</div>${inv.items ? `<div class="card debts">
+        ${Object.keys(invUndo).filter((k) => undoLive('inv', k)).map((k) => `<div class="debt-row decided"><span class="grow small">נוקה: ${esc(invUndo[k].text)}</span><button class="btn small ghost" data-uninv="${esc(k)}">↶ ביטול</button></div>`).join('')}
+        ${invItems.length ? invItems.map((it, i) => it.head ? (invItems.slice(i + 1).some((x) => x.key) && !(invItems[i + 1] || {}).head ? `<div class="debt-head">${esc(it.head)}</div>` : '')
+          : it.key ? `<div class="debt-row" data-inv="${esc(it.key)}"><span class="grow small">${esc(it.text)}</span><button class="btn small ghost" data-clear>נקה</button></div>`
+          : `<div class="small">${esc(it.text)}</div>`).join('') : ''}
+        ${!invItems.some((x) => x.key) && !invItems.some((x) => !x.head && !x.key) ? (Object.keys(invUndo).some((k) => undoLive('inv', k)) ? '' : '<div class="muted small">הכל תואם ✅</div>') : ''}
+      </div>` : `<div class="card">${pre(inv.body)}</div>`}` : ''}`}
       <div class="section-title">${isPrev ? esc(cur.label) : 'החודש'}</div>
       ${monthDetails(isPrev ? 'הכנסות ' + cur.label : 'הכנסות החודש', ml.income, sumOf(ml.income), cur ? cur.income : null, true, !isPrev && ml.income.some((x) => x.app))}
       ${monthDetails(isPrev ? 'הוצאות ' + cur.label : 'הוצאות החודש', ml.expenses, sumOf(ml.expenses), cur ? cur.expenses : null, false, !isPrev && ml.expenses.some((x) => x.app))}
@@ -2946,6 +2954,8 @@
     $app.querySelectorAll('[data-undebt]').forEach((b) => { b.onclick = () => unclearDebt(b.dataset.undebt); });
     $app.querySelectorAll('[data-anom] [data-clear]').forEach((b) => { b.onclick = () => clearAnom(anomItems.find((x) => x.key === b.closest('[data-anom]').dataset.anom), true); });
     $app.querySelectorAll('[data-unanom]').forEach((b) => { b.onclick = () => clearAnom(anomUndo[b.dataset.unanom], false); });
+    $app.querySelectorAll('[data-inv] [data-clear]').forEach((b) => { b.onclick = () => clearInv(invItems.find((x) => x.key === b.closest('[data-inv]').dataset.inv), true); });
+    $app.querySelectorAll('[data-uninv]').forEach((b) => { b.onclick = () => clearInv(invUndo[b.dataset.uninv], false); });
     $app.querySelectorAll('[data-unadd]').forEach((b) => { b.onclick = () => undoManualTx(b.dataset.unadd); });
     const fsb = $app.querySelector('[data-act="fin-sync"]'); if (fsb) fsb.onclick = (ev) => { ev.preventDefault(); startFinSync(); };
     finSyncResume();
@@ -2981,6 +2991,15 @@
       .catch((e) => { decided[r.id] = dc; redrawStage2(); toast('הביטול לא בוצע: ' + e.message, true); });
   }
 
+  const invUndo = {};   // key → שורת התאמת חשבוניות שנוקתה (להצגת ↶)
+  function clearInv(it, clear) {
+    if (!it) return;
+    const set = (v) => patchStore('finance', (dd) => { const x = dd.summary && dd.summary.invoices && (dd.summary.invoices.items || []).find((y) => y.key === it.key); if (x) x.cleared = v; });
+    if (clear) { invUndo[it.key] = it; undoMark('inv', it.key); } else delete invUndo[it.key];
+    set(clear); redrawStage2();
+    sendWrite('invClear', { key: it.key, undo: !clear }).then(() => toast(clear ? 'נוקה ✓ – לא יוצג שוב' : '↶ חזר לרשימה'))
+      .catch((e) => { if (clear) delete invUndo[it.key]; else invUndo[it.key] = it; set(!clear); redrawStage2(); toast('לא נשמר: ' + e.message, true); });
+  }
   const anomUndo = {};   // key → חריג שנוקה (להצגת ↶)
   function clearAnom(it, clear) {
     if (!it) return;
