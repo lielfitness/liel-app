@@ -156,6 +156,40 @@
 
   // הגרסה שרצה עכשיו (מתוך app.js?v=N) – נשלחת לשרת, כדי לזהות גרסה ישנה מהזיכרון של הדפדפן
   const APP_VERSION = (() => { try { return (document.currentScript.src.match(/[?&]v=(\d+)/) || [])[1] || ''; } catch (e) { return ''; } })();
+  // ---------- שגיאת JS: לא משאירים מסך שחור/לבן, ושומרים לאבחון (23/11/2026) ----------
+  // נשמר רק: מסך (בלי מזהים), הודעה, מקום בקוד, מכשיר/דפדפן, גרסה. השרת מסתיר מספרים ארוכים ומיילים.
+  let clientErrN = 0;
+  function reportClientError(msg, where) {
+    try {
+      if (++clientErrN > 5 || !state.session) return;
+      const ua = navigator.userAgent;
+      const dev = (/iPhone|iPad/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : 'אחר') +
+        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches ? ' · מסך הבית' : ' · דפדפן') +
+        ' · ' + ((ua.match(/(CriOS|Chrome|FxiOS|Firefox|Version)\/[\d.]+/) || [''])[0]);
+      fetch(CFG.apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'clientLog', session: state.session, v: APP_VERSION,
+          screen: location.hash.replace(/\/[^/]{6,}/g, '/:id'), msg: String(msg || '').slice(0, 300), where: String(where || '').slice(0, 120), ua: dev }) }).catch(() => {});
+    } catch (e) { /* */ }
+  }
+  function showErrorBar() {
+    if (document.getElementById('err-bar')) return;
+    const bar = document.createElement('button');
+    bar.id = 'err-bar'; bar.type = 'button';
+    bar.textContent = 'משהו השתבש – לחצי כאן לרענון';
+    bar.onclick = () => location.reload();
+    document.body.appendChild(bar);
+  }
+  window.addEventListener('error', (e) => {
+    if (!e || !e.message) return;   // שגיאת טעינה של תמונה/סקריפט חיצוני – לא קריסה של האפליקציה
+    reportClientError(e.message, (String(e.filename || '').split('/').pop() || '') + ':' + (e.lineno || '') + ':' + (e.colno || ''));
+    showErrorBar();
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e && e.reason;
+    if (!(r instanceof TypeError || r instanceof ReferenceError || r instanceof RangeError)) return;   // שגיאות רשת/שרת מטופלות במקום
+    reportClientError(r.message, String(r.stack || '').split('\n')[1] || '');
+    showErrorBar();
+  });
   const PERF_LOCAL = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
   // פעולות שכותבות לשרת: בזמן שהן בדרך מופיע "שומר…", האפליקציה לא נטענת מחדש לגרסה חדשה, ו-🔄 מחכה להן.
   // (שמירות של לידים, ↶/↷ ומאמנים – מסומנות כבר במקום אחר)
@@ -1723,6 +1757,7 @@
         ${!String(lead.email || '').trim() || String(lead.email).trim() === '-' ? '<div class="notice small no-email">📧 לליד אין מייל – שאלי אותו ומלאי אותו בדף</div>' : ''}
         <div class="booking-copy">${items.map(([k, v], i) => `<button class="chip" data-copy="${i}" title="העתקה">${k}: <span class="ltr-text">${esc(v)}</span> ⧉</button>`).join('')}</div>
       </div>
+      <div class="notice small booking-slow" hidden>הדף של גוגל לא נטען? <a href="${esc(state.bookingUrl)}" target="_blank" rel="noopener" data-ext>פתחי אותו בדפדפן</a> או סגרי ונסי שוב.</div>
       ${embed ? `<iframe class="booking-frame" src="${esc(embed)}" title="פגישת אפיון"></iframe>` : '<div class="empty">חסרה כתובת להטמעה</div>'}
       <div class="booking-foot small"><a href="${esc(state.bookingUrl)}" target="_blank" rel="noopener" data-ext>הדף לא נטען? פתחי בדפדפן</a></div>`;
     document.body.appendChild(wrap);
@@ -1735,7 +1770,12 @@
       watchBooking(lead);
     };
     wrap.querySelector('[data-close]').onclick = close;
-    wrap.querySelector('[data-ext]').addEventListener('click', () => { pendingBooking = { lead, at: Date.now() }; });
+    wrap.querySelectorAll('[data-ext]').forEach((a) => a.addEventListener('click', () => { pendingBooking = { lead, at: Date.now() }; }));
+    // דף ההזמנה של גוגל לא נטען תוך 8 שניות (קורה באייפון בתוך אפליקציה) – הודעה ברורה במקום מסך ריק (23/11/2026)
+    const frame = wrap.querySelector('.booking-frame');
+    let loaded = false;
+    if (frame) frame.addEventListener('load', () => { loaded = true; });
+    setTimeout(() => { if (!loaded && wrap.isConnected) { const n = wrap.querySelector('.booking-slow'); if (n) n.hidden = false; } }, 8000);
   }
 
   // ---------- אחרי קביעת זום: בדיקה אוטומטית אם הליד עודכן ----------

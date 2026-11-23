@@ -38,6 +38,7 @@ const SYS_TABS_ = {
   anomClear: { name: 'חריגים שנוקו', head: ['פריט', 'נוקה בתאריך'] },
   gapClear:  { name: 'מאמנים שנוקו (3 שבועות)', head: ['מאמן|פגישה אחרונה', 'נוקה בתאריך', 'מאמן'] },
   sent:      { name: 'התראות שנשלחו', head: ['מזהה', 'נשלח בתאריך'] },
+  errLog:    { name: 'שגיאות אפליקציה', head: ['זמן', 'משתמש', 'מסך', 'שגיאה', 'מקום בקוד', 'מכשיר / דפדפן', 'גרסה'] },
   pushLog:   { name: 'יומן Push', head: ['זמן', 'זמן (טקסט)', 'משתמש', 'סוג', 'כותרת', 'מכשיר', 'תוצאה', 'קוד', 'פרטים'] },
   usage:     { name: 'שימוש טריגרים', head: ['שעה', 'אפליקציה היום (דק׳)', 'פיננסים היום (דק׳)', 'בדיקת לידים (כל דקה)', 'יציאה מוקדמת', 'סריקת זומים', 'עריכה בגיליון', 'פילוח הבדיקה של כל דקה', 'פיננסים – פילוח', 'יום קודם'] },
 };
@@ -747,3 +748,22 @@ function pushAlertAdmin_(email, kind, what, text) {
     });
   } catch (e) { console.warn('pushAlertAdmin: ' + e); }
 }
+
+// ---------- שגיאות אפליקציה (ליאל, 23/11/2026): רק מה שצריך לאבחון – בלי פרטי לידים ----------
+// מסך (בלי מזהים), הודעת השגיאה (מספרים ארוכים ומיילים מוסתרים), מקום בקוד, מכשיר/דפדפן, גרסה, ומי (ליאל / שי). עד 500 שורות.
+function actionClientLog_(req, ctx) {
+  const clean = function (t, n) {
+    return String(t || '').replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[מייל]').replace(/\+?\d[\d\s\-]{6,}\d/g, '[מספר]').slice(0, n);
+  };
+  const who = ctx.realRole === 'admin' ? 'ליאל' : (ctx.realRole === 'leads' ? 'שי' : ctx.realRole);
+  const screen = String(req.screen || '').replace(/\/[0-9a-zA-Z_\-]{6,}/g, '/:id').slice(0, 60);
+  const row = [Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm:ss'), who + (ctx.role !== ctx.realRole ? ' (כמו שי)' : ''), screen,
+    clean(req.msg, 300), clean(req.where, 120), String(req.ua || '').slice(0, 80), String(req.v || '').slice(0, 10)];
+  try {
+    const sh = sysTab_('errLog');
+    sh.appendRow(row);
+    if (sh.getLastRow() > 501) sh.deleteRows(2, sh.getLastRow() - 501);
+  } catch (e) { console.warn('clientLog: ' + e); }
+  return { ok: true };
+}
+

@@ -31,6 +31,7 @@ const ACTIONS = {
   undoCount:    { roles: ['admin', 'leads'], fn: actionUndoCount_ },
   batch:        { roles: ['admin', 'leads'], fn: actionBatch_ },
   perfLog:      { roles: ['admin'], fn: actionPerfLog_ },
+  clientLog:    { roles: ['admin', 'leads'], fn: actionClientLog_ },   // שגיאות JS מהמכשיר (23/11/2026)
   notifications:  { roles: ['admin', 'leads'], fn: actionNotifications_ },
   notifRead:      { roles: ['admin', 'leads'], fn: actionNotifRead_ },
   notifSeen:      { roles: ['admin', 'leads'], fn: actionNotifSeen_ },
