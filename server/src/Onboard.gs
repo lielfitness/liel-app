@@ -295,3 +295,31 @@ function actionOnbPopupClose_(req, ctx) {
   return { ok: true };
 }
 
+// ---------- חד-פעמי (24/11/2026, לבקשת ליאל – רק הפעם): מיכל זרזצקי נמחקה מהמאמנים → בסיס המונה 110 → 109 ----------
+// המונה עצמו לא משתנה: בסיס + קבצי "ליווי מקצועי" שנוצרו אחרי 24/10. מחיקת מאמן אחר לא תוריד אותו.
+function coachBaseAdjustOnce_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('COACH_BASE_ADJ_2411')) return;
+  props.setProperty('COACH_BASE_ADJ_2411', new Date().toISOString());
+  const log = [['זמן', Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm:ss')]];
+  try {
+    const base = readJsonProp_('COACH_COUNT_BASE', null);
+    CacheService.getScriptCache().remove(COACH_CNT_CACHE_);
+    const before = coachCount_();
+    log.push(['לפני', before.error ? 'שגיאה: ' + before.error : before.total + ' (בסיס ' + before.base + ' + ' + before.added + ': ' + before.names.join(', ') + ')']);
+    if (base && Number(base.count) === 110) {
+      base.count = 109;
+      base.note = String(base.note || '') + ' · 24/11/2026: 109 – מיכל זרזצקי נמחקה מרשימת המאמנים (לבקשת ליאל, חד-פעמי)';
+      writeJsonProp_('COACH_COUNT_BASE', base);
+      log.push(['הבסיס', '110 → 109']);
+    } else log.push(['הבסיס', 'לא שונה – הערך הנוכחי ' + (base ? base.count : '(אין)') + ', לא 110']);
+    CacheService.getScriptCache().remove(COACH_CNT_CACHE_);
+    const after = coachCount_();
+    log.push(['אחרי', after.error ? 'שגיאה: ' + after.error : after.total + ' (בסיס ' + after.base + ' + ' + after.added + ')']);
+  } catch (e) { log.push(['שגיאה', String(e.message || e)]); }
+  const sys = systemSs_();
+  const t = sys.getSheetByName('בדיקת מונה') || sys.insertSheet('בדיקת מונה');
+  t.clear();
+  t.getRange(1, 1, log.length, 2).setNumberFormat('@').setValues(log.map(function (x) { return [String(x[0]), String(x[1])]; }));
+}
+
