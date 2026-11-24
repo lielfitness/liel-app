@@ -44,6 +44,7 @@ const ACTIONS = {
   // שלב 2 – ליאל בלבד
   coaches:        { roles: ['admin'], fn: actionCoaches_ },
   coach:          { roles: ['admin'], fn: actionCoach_ },
+  coachDelete:    { roles: ['admin'], fn: actionCoachDelete_ },
   lateCharge:     { roles: ['admin'], fn: actionLateCharge_ },
   coachRenew:     { roles: ['admin'], fn: actionCoachRenew_ },
   runMeetings:    { roles: ['admin'], fn: actionRunMeetings_ },
@@ -173,7 +174,7 @@ function roleOf_(email, cfg) {
 // ---------- מדידת זמני שמירה (לבדיקת מהירות) ----------
 const PERF_ON_ = false;   // כבוי (2026-11-11): המדידה הסתיימה – לא נרשמות שורות זמנים ו-propsSize; netFail ממשיך להירשם
 const PERF_ACTIONS_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1,
-  lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, coachDelete: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
   finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1,
   addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1, reminderSave: 1, reminderSet: 1,
   remCatSave: 1, remCatDelete: 1 };
@@ -386,7 +387,7 @@ function opDupOut_(dup, ctx) {
 
 /** כמה שינויים ברצף, לפי הסדר (כשיוצאים מהאפליקציה / בפתיחה הבאה). שינוי שכבר הוחל – מדולג. */
 const BATCH_OK_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1, coachMinus: 1,
-  lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, coachDelete: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
   finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1,
   remCatSave: 1, remCatDelete: 1 };
 /**
@@ -394,7 +395,7 @@ const BATCH_OK_ = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1, coachAdd: 1
  * גם אם הגיעה פעמיים (שליחה ביציאה מהאפליקציה בזמן שהבקשה המקורית עוד רצה, או שליחה חוזרת בפתיחה).
  * לפעולות שהיו בתור קודם (updateLead וכו') יש בדיקה משלהן, בתוך הנעילה.
  */
-const OP_ONCE_ = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+const OP_ONCE_ = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, coachDelete: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
   finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1,
   remCatSave: 1, remCatDelete: 1 };
 function runAction_(action, req, ctx) {

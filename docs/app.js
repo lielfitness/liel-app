@@ -193,7 +193,7 @@
   const PERF_LOCAL = { updateLead: 1, markAttempt: 1, undo: 1, redo: 1 };
   // פעולות שכותבות לשרת: בזמן שהן בדרך מופיע "שומר…", האפליקציה לא נטענת מחדש לגרסה חדשה, ו-🔄 מחכה להן.
   // (שמירות של לידים, ↶/↷ ומאמנים – מסומנות כבר במקום אחר)
-  const WRITE_ACTIONS = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  const WRITE_ACTIONS = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, coachDelete: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
     finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1,
     addLead: 1, deleteLead: 1, cancelZoom: 1, pendingBooking: 1, runMeetings: 1, onboard: 1, onboardRerun: 1 };
   // ---------- חיבור: קריאות (לא שמירות) – הגבלת זמן, ניסיון חוזר לבד, ושורה אפורה רק אחרי 3 כישלונות ----------
@@ -249,7 +249,7 @@
     p.then(syncEnd, syncEnd);
     return p;
   }
-  const WRITE_LABELS = { lateClear: 'נקה – ביטול מאוחר', gapClear: 'נקה – 3 שבועות בלי פגישה', debtClear: 'נקה – חייבים', anomClear: 'נקה – חריג', invClear: 'נקה – התאמת חשבוניות',
+  const WRITE_LABELS = { lateClear: 'נקה – ביטול מאוחר', gapClear: 'נקה – 3 שבועות בלי פגישה', debtClear: 'נקה – חייבים', anomClear: 'נקה – חריג', invClear: 'נקה – התאמת חשבוניות', coachDelete: 'מחיקת מאמן',
     lateCharge: 'לחייב / לבטל חיוב', coachRenew: 'חידוש חבילה', finDecide: 'עסקי / פרטי', finAddIncome: 'הכנסה ידנית', finAddExpense: 'הוצאה ידנית',
     finRemoveManual: 'מחיקת תנועה ידנית', online: 'מתאמני אונליין', assignZoom: 'שיוך זום', dismissZoom: 'התעלמות מזום' };
   /** פעולה שכותבת לשרת (לא שמירת ליד): נכנסת לתור – נשלחת גם אם האפליקציה נסגרת, ומבוצעת בשרת פעם אחת (opId) */
@@ -275,7 +275,7 @@
    */
   // רק פעולות שהשרת מבצע "פעם אחת" לפי opId (OP_ONCE_ ב-server/src/Main.gs) מקבלות ניסיון חוזר אוטומטי.
   // פעולה חדשה שלא ברשימה – בלי ניסיון חוזר (שגיאת רשת מוצגת מיד), עד שתתווסף גם לכאן וגם ל-OP_ONCE_ בשרת.
-  const NET_RETRY_OK = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
+  const NET_RETRY_OK = { lateClear: 1, gapClear: 1, debtClear: 1, anomClear: 1, invClear: 1, coachDelete: 1, lateCharge: 1, coachRenew: 1, finDecide: 1,
     finAddIncome: 1, finAddExpense: 1, finRemoveManual: 1, online: 1, assignZoom: 1, dismissZoom: 1, reminderSave: 1, reminderSet: 1,
     remCatSave: 1, remCatDelete: 1 };
   async function writeNetRetry(action, p) {
@@ -2547,6 +2547,7 @@
         <a class="card mrow coach-row ${leftCls(c)}" href="#/coach/${encodeURIComponent(c.name)}">
           <div class="grow"><b>${esc(c.name)}</b></div>
           <span class="left-pill">${c.left == null ? '—' : c.left <= 0 ? 'הסתיימה' : c.left} <span class="muted">/ ${c.pkg == null ? '—' : c.pkg}</span></span>
+          <button class="icon-btn" data-cdel="${esc(c.name)}" aria-label="מחיקה" title="מחיקה מרשימת המאמנים">✕</button>
         </a>`).join('') : '<div class="card muted">אין מאמנים בסינון הזה</div>'}</div>
       <div class="section-title">מתאמני אונליין (${online.length})</div>
       <div class="card">
@@ -2584,6 +2585,7 @@
     });
     $app.querySelectorAll('[data-unclear]').forEach((b) => { b.onclick = () => unclearLate(b.dataset.unclear); });
     $app.querySelectorAll('[data-orm]').forEach((b) => { b.onclick = () => onlineRemove(online[Number(b.dataset.orm)]); });
+    $app.querySelectorAll('[data-cdel]').forEach((b) => { b.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); coachDelete((d.coaches || []).find((x) => x.name === b.dataset.cdel)); }; });
     $app.querySelector('[data-act="online-add"]').onclick = onlineAdd;
   }
 
@@ -2662,6 +2664,16 @@
     redrawStage2();
     sendWrite('online', { op: 'remove', name: o.name, amount: o.amount }).then((r) => { patchStore('coaches', (dd) => { dd.online = r.online; }); toast('הוסר ✓'); })
       .catch((e) => { store.set('coaches', JSON.parse(snap)); redrawStage2(); toast('לא הוסר: ' + e.message, true); });
+  }
+
+  // מחיקת מאמן (ליאל, 24/11/2026): לא סופית – השורה עוברת בגיליון ל"מאמנים שנמחקו (מערכת)"
+  function coachDelete(c) {
+    if (!c || !confirm(`למחוק את ${c.name} מרשימת המאמנים?`)) return;
+    const snap = JSON.stringify(store.get('coaches'));
+    patchStore('coaches', (dd) => { dd.coaches = (dd.coaches || []).filter((x) => x.name !== c.name); });
+    redrawStage2();
+    sendWrite('coachDelete', { name: c.name, email: String(c.email || '').split(/[,;\s]+/)[0] || '' }).then(() => { toast('נמחק ✓ (נשמר בארכיון בגיליון)'); markDerivedStale(); })
+      .catch((e) => { store.set('coaches', JSON.parse(snap)); redrawStage2(); toast('לא נמחק: ' + e.message, true); });
   }
 
   // כרטיס מאמן: מהזיכרון, בלי לחכות לשרת

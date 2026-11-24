@@ -170,11 +170,54 @@ function actionOnline_(req, ctx) {
         if (String(vals[i][0]).trim() === String(req.name || '').trim() && Number(vals[i][1]) === Number(req.amount)) { row = i + 2; break; }
       }
       if (!row) throw apiError_('NOT_FOUND', 'לא נמצא ברשימה – אולי כבר הוסר');
+      // לא מחיקה סופית (ליאל, 24/11/2026): השורה עוברת לארכיון, ונמחקת מכאן רק אחרי שהעותק נשמר
+      const width = Math.max(3, sh.getLastColumn());
+      archiveRow_(finSs_(), ONLINE_ARCH_TAB_, sh.getRange(1, 1, 1, width).getValues()[0], sh.getRange(row, 1, 1, width).getValues()[0], ctx);
       sh.deleteRow(row);
     }
     out = { online: onlineList_() || [] };
   });
   return out;
+}
+
+// ---------- מחיקה לארכיון (ליאל, 24/11/2026) – שום שורה לא נמחקת לצמיתות ----------
+const ONLINE_ARCH_TAB_ = 'מתאמני אונליין שנמחקו (מערכת)';
+const COACH_ARCH_TAB_ = 'מאמנים שנמחקו (מערכת)';
+/** מעתיק שורה ללשונית ארכיון מוסתרת (כל העמודות כמו שהן + "נמחק בתאריך" + "נמחק ע"י") ומוודא שהעותק נשמר. נכשל → זורק, והמקור לא נמחק. */
+function archiveRow_(ss, tab, head, vals, ctx) {
+  let sh = ss.getSheetByName(tab);
+  if (!sh) {
+    sh = ss.insertSheet(tab, ss.getSheets().length);
+    sh.getRange(1, 1, 1, head.length + 2).setValues([head.map(String).concat(['נמחק בתאריך', 'נמחק ע"י'])]).setFontWeight('bold');
+    sh.setFrozenRows(1); sh.hideSheet();
+  }
+  const who = ctx.realRole === 'admin' ? 'ליאל' : (ctx.realRole === 'leads' ? 'שי' : String(ctx.email || ''));
+  const row = vals.concat([Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm'), who]);
+  const at = sh.getLastRow() + 1;
+  sh.getRange(at, 1, 1, row.length).setValues([row]);
+  SpreadsheetApp.flush();
+  const back = sh.getRange(at, 1, 1, row.length).getValues()[0];
+  const same = vals.every(function (v, i) { return String(v instanceof Date ? v.getTime() : v) === String(back[i] instanceof Date ? back[i].getTime() : back[i]); });
+  if (!same) throw apiError_('SERVER', 'העותק לארכיון לא נשמר כמו שצריך – לא מחקתי');
+}
+/** מחיקת מאמן מ"תפעול" לארכיון. רק תאים A–D של המאמן (E–F בתפעול הם רשימה נפרדת – לא נוגעים) */
+function actionCoachDelete_(req, ctx) {
+  const name = String(req.name || '').trim();
+  if (!name) throw apiError_('BAD_REQUEST', 'חסר שם');
+  finLock_(function () {
+    const ss = finSs_();
+    const sh = ss.getSheetByName('תפעול');
+    const n = sh.getLastRow() - 1;
+    const vals = n > 0 ? sh.getRange(2, 1, n, 4).getValues() : [];
+    let row = 0;
+    for (let i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() === name) { row = i + 2; break; }
+    if (!row) throw apiError_('NOT_FOUND', 'המאמן לא נמצא בתפעול – אולי כבר נמחק');
+    if (req.email && String(vals[row - 2][1]).toLowerCase().indexOf(String(req.email).toLowerCase()) < 0) throw apiError_('STALE', 'השורה בתפעול השתנתה – לא מחקתי');
+    archiveRow_(ss, COACH_ARCH_TAB_, sh.getRange(1, 1, 1, 4).getValues()[0], vals[row - 2], ctx);
+    sh.getRange(row, 1, 1, 4).deleteCells(SpreadsheetApp.Dimension.ROWS);
+  });
+  CacheService.getScriptCache().removeAll(['coach_v1']);
+  return { ok: true };
 }
 
 function actionCoach_(req, ctx) {

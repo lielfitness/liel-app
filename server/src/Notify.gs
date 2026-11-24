@@ -410,6 +410,7 @@ function watchNewLeads() {
     }
     if (due.five || due.onb) step_('onboard', pollOnboard_);
     step_('onbPopup', onbPopupScan_);   // פופ-אפ קליטה – כל דקה (20/11/2026)
+    if (due.five) step_('archTest', archTestOnce_);   // חד-פעמי (24/11/2026): בדיקת מחיקה לארכיון על רשומות בדיקה בלבד
     if (due.ten) step_('perf', flushPerf_);
     step_('reminders', remWatch_);
     return step_('leads', function () { return watchNewLeadsCore_(t0); });
@@ -765,5 +766,24 @@ function actionClientLog_(req, ctx) {
     if (sh.getLastRow() > 501) sh.deleteRows(2, sh.getLastRow() - 501);
   } catch (e) { console.warn('clientLog: ' + e); }
   return { ok: true };
+}
+
+// ---------- חד-פעמי (24/11/2026, באישור ליאל): בדיקת מחיקה לארכיון – רק על "בדיקת מחיקה – מאמן" ו"בדיקת מחיקה – אונליין" ----------
+function archTestOnce_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('ARCH_TEST_DONE')) return;
+  props.setProperty('ARCH_TEST_DONE', new Date().toISOString());
+  const ctx = { role: 'admin', realRole: 'admin', email: 'test' };
+  const log = [['זמן', Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm:ss')]];
+  try { actionCoachDelete_({ name: 'בדיקת מחיקה – מאמן', email: 'delete-test@example.com' }, ctx); log.push(['מאמן בדיקה', 'נמחק לארכיון ✓']); }
+  catch (e) { log.push(['מאמן בדיקה', 'שגיאה: ' + (e.message || e)]); }
+  try { actionOnline_({ op: 'remove', name: 'בדיקת מחיקה – אונליין', amount: 1 }, ctx); log.push(['מתאמן אונליין בדיקה', 'הוסר לארכיון ✓']); }
+  catch (e) { log.push(['מתאמן אונליין בדיקה', 'שגיאה: ' + (e.message || e)]); }
+  try { const c = coachesData_(true).coaches; log.push(['ברשימת המאמנים אחרי המחיקה', c.some(function (x) { return /בדיקת מחיקה/.test(x.name); }) ? 'עדיין מופיע ✗' : 'לא מופיע ✓']); } catch (e) { log.push(['רשימה', String(e)]); }
+  try { const o = onlineList_() || []; log.push(['ברשימת האונליין אחרי ההסרה', o.some(function (x) { return /בדיקת מחיקה/.test(x.name); }) ? 'עדיין מופיע ✗' : 'לא מופיע ✓']); } catch (e) { log.push(['אונליין', String(e)]); }
+  const sys = systemSs_();
+  const t = sys.getSheetByName('בדיקת מחיקה') || sys.insertSheet('בדיקת מחיקה');
+  t.clear();
+  t.getRange(1, 1, log.length, 2).setNumberFormat('@').setValues(log.map(function (x) { return [String(x[0]), String(x[1])]; }));
 }
 
