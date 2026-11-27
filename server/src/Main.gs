@@ -109,7 +109,7 @@ function handle_(req) {
 
   // התראה מסקריפט אחר (בלי התחברות, עם מפתח משלו)
   if (req.action === 'notify') return { ok: true, data: externalNotify_(req) };
-  // קליטה הסתיימה – מסקריפט הטופס (מפתח משותף ONB_NOTIFY_KEY), 27/11/2026
+  // קליטה הסתיימה – מסקריפט הטופס (רק מזהה תשובה; השרת מאמת מול הטופס), 27/11/2026
   if (req.action === 'onbPing') return { ok: true, data: onbPing_(req) };
 
   const email = checkSession_(req.session);

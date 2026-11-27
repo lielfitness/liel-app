@@ -413,6 +413,7 @@ function watchNewLeads() {
     if (due.five || due.onb) step_('onboard', pollOnboard_);
     // פופ-אפ קליטה: מגיע מיד מהטופס (onbPing). כאן רק גיבוי – כל 5 דק׳ (27/11/2026)
     if (due.five) step_('onbPopup', onbPopupScan_);
+    if (due.five) step_('onbTest', onbTestOnce_);   // חד-פעמי (27/11/2026): קליטת בדיקה (מצב בדיקה בלבד) למדידת הזמנים
     if (due.ten) step_('perf', flushPerf_);
     step_('reminders', remWatch_);
     // לידים חדשים: כל 2 דק׳ ביום (בלילה ממילא כל 10) – 27/11/2026
@@ -812,15 +813,32 @@ function slowRunLog_(t0) {
   } catch (e) { console.warn('slowRunLog: ' + e); }
 }
 
-// ---------- פופ-אפ קליטה מיידי (27/11/2026): סקריפט הטופס קורא לשרת ברגע שהקליטה הסתיימה ----------
-// מפתח משותף: ONB_NOTIFY_KEY (כאן) = APP_NOTIFY_KEY (בסקריפט הטופס). בלי התחברות. רק מפעיל את סריקת הקליטות.
+// ---------- פופ-אפ קליטה מיידי (27/11/2026): סקריפט הטופס קורא לשרת ברגע שהקליטה הסתיימה – בלי מפתח ----------
+// מגיע רק מזהה התשובה. השרת מאמת בעצמו: (1) התשובה קיימת בטופס הקליטה (שם נשמרים מזהי התשובות – בגיליון התשובות אין מזהה),
+// (2) נשלחה ב-10 הדקות האחרונות, (3) עוד לא טופלה (לא סומנה כ"נראתה" בסריקת "קליטות (מערכת)").
+// רק אז – סריקה, פופ-אפ ו-Push. אחרת – מתעלם ורושם. התשובה: רק ok / ignored, בלי שום פרט על הקליטה.
 function onbPing_(req) {
-  const key = PropertiesService.getScriptProperties().getProperty('ONB_NOTIFY_KEY');
-  if (!key || String(req.key || '') !== key) throw apiError_('FORBIDDEN', 'מפתח לא תקין');
   const t = Date.now();
-  onbTiming_(String(req.rid || ''), { sent: Number(req.sentAt) || 0, ping: t });
+  const rid = String(req.rid || '').slice(0, 200);
+  let why = '';
+  try {
+    if (!/^[\w\-]{10,}$/.test(rid)) why = 'מזהה לא תקין';
+    else {
+      let resp = null;
+      try { resp = FormApp.openById(getConfig_().onboardFormId).getResponse(rid); } catch (e) { resp = null; }
+      if (!resp) why = 'אין תשובה כזו בטופס';
+      else if (t - resp.getTimestamp().getTime() > 10 * 60000) why = 'התשובה ישנה מ-10 דקות';
+      else if (JSON.parse(PropertiesService.getScriptProperties().getProperty('ONB_POP_SEEN') || '[]').indexOf(rid) >= 0) why = 'כבר טופלה';
+      else onbTiming_(rid, { sent: resp.getTimestamp().getTime(), ping: t });
+    }
+  } catch (e) { why = 'שגיאה בבדיקה'; console.warn('onbPing: ' + e); }
+  if (why) {
+    console.warn('onbPing התעלמות: ' + why);
+    onbTiming_(rid && /^[\w\-]{10,}$/.test(rid) ? rid : 'לא תקין', { ping: t, via: 'התעלמות: ' + why });
+    return { result: 'ignored' };
+  }
   onbPopupScan_();
-  return { ok: true, ms: Date.now() - t };
+  return { result: 'ok' };
 }
 /** מדידת זמנים לקליטה (שליחת הטופס → הקריאה לשרת → Push → הפופ-אפ על המסך) – ללשונית "מדידת קליטה" */
 function onbTiming_(rid, patch) {
@@ -837,5 +855,13 @@ function onbTiming_(rid, patch) {
     const row = [rid, t.name || '', t.sent ? Utilities.formatDate(new Date(t.sent), TZ_, 'dd/MM HH:mm:ss') : '', sec(t.sent, t.ping), sec(t.sent, t.push), sec(t.sent, t.shown), t.via || ''];
     if (at >= 0) sh.getRange(at + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
   } catch (e) { console.warn('onbTiming: ' + e); }
+}
+
+/** חד-פעמי (27/11/2026, באישור ליאל): קליטה במצב בדיקה ("בדיקת אפליקציה") – בלי Wix, בלי קבצים, בלי הודעות – למדידת הזמנים */
+function onbTestOnce_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('ONB_TEST_2711')) return;
+  props.setProperty('ONB_TEST_2711', new Date().toISOString());
+  try { actionOnboard_({ test: true }, {}); } catch (e) { console.warn('onbTest: ' + e); }
 }
 
