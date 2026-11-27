@@ -63,6 +63,8 @@ const ACTIONS = {
   anomClear:      { roles: ['admin'], fn: actionAnomClear_ },
   invClear:       { roles: ['admin'], fn: actionInvClear_ },
   onbPopupClose:  { roles: ['admin'], fn: actionOnbPopupClose_ },
+  onbPopups:      { roles: ['admin'], fn: function (req, ctx) { return { popups: ctx.role === ctx.realRole ? onbPopups_() : [] }; } },
+  onbPopupShown:  { roles: ['admin'], fn: function (req, ctx) { onbTiming_(String(req.rid || ''), { shown: Date.now() }); return { ok: true }; } },
   online:         { roles: ['admin'], fn: actionOnline_ },
   onboard:        { roles: ['admin'], fn: actionOnboard_ },
   onboardList:    { roles: ['admin'], fn: actionOnboardList_ },
@@ -107,6 +109,8 @@ function handle_(req) {
 
   // התראה מסקריפט אחר (בלי התחברות, עם מפתח משלו)
   if (req.action === 'notify') return { ok: true, data: externalNotify_(req) };
+  // קליטה הסתיימה – מסקריפט הטופס (מפתח משותף ONB_NOTIFY_KEY), 27/11/2026
+  if (req.action === 'onbPing') return { ok: true, data: onbPing_(req) };
 
   const email = checkSession_(req.session);
   const realRole = roleOf_(email, cfg);

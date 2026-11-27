@@ -62,7 +62,7 @@ function healthCheck_() {
   else if (last.watch && ago(last.watch) > watchLimit) issues.push('הבדיקה של לידים חדשים לא רצה ' + ago(last.watch) + ' דק׳');
 
   if (triggers.indexOf('scanZoomBookings') < 0) issues.push('סריקת הזומים כבויה');
-  else if (last.zoom && ago(last.zoom) > 45) issues.push('סריקת הזומים לא רצה ' + ago(last.zoom) + ' דק׳');
+  else if (last.zoom && ago(last.zoom) > 75) issues.push('סריקת הזומים לא רצה ' + ago(last.zoom) + ' דק׳');   // מ-27/11 הסריקה המתוזמנת – פעם בשעה
 
   if (!props.getProperty('FCM_SERVICE_ACCOUNT')) issues.push('Push לטלפון לא מוגדר');
   if (usedMin > QUOTA_WARN_MIN_) issues.push('שימוש יומי בטריגרים: ' + Math.round(usedMin) + ' מתוך ' + QUOTA_MIN_ + ' דק׳');
@@ -112,6 +112,17 @@ function usageDump_() {
     .map(function (k) { return k + ' ' + Math.round(s.ph[k] / 100) / 10 + 'ש׳'; }).join(' · ') + ' (מאז ' + (s.phSince || '?') + ')';
   const finBy = fin && fin.day === s.day ? fin.by || {} : {};
   const finMs = fin && fin.day === s.day ? fin.ms || 0 : 0;
+  // התראה מוקדמת (27/11/2026): השימוש היומי (אפליקציה + פיננסים) עבר 70 דק׳ – Push לליאל, פעם אחת ביום לכל היותר
+  try {
+    const totalMin = ((s.ms || 0) + finMs) / 60000;
+    if (totalMin > 70 && props.getProperty('USAGE_ALERT_DAY') !== s.day) {
+      props.setProperty('USAGE_ALERT_DAY', s.day);
+      const cfgU = getConfig_();
+      Object.keys(cfgU.users).filter(function (e) { return cfgU.users[e] === 'admin'; }).forEach(function (a) {
+        notify_('system', { title: '⚠️ שימוש בטריגרים היום: ' + Math.round(totalMin) + ' דק׳ מתוך 90', text: 'מעל 90 גוגל עוצרת את כל הטריגרים עד מחר. אפליקציה ' + Math.round((s.ms || 0) / 60000) + ' · פיננסים ' + Math.round(finMs / 60000) + ' דק׳.', link: '#/status' }, { only: a, noQuiet: true });
+      });
+    }
+  } catch (e) { console.warn('usage alert: ' + e); }
   sysTab_('usage').appendRow([Utilities.formatDate(new Date(), TZ_, 'dd/MM HH:mm'), Math.round((s.ms || 0) / 6000) / 10, Math.round(finMs / 6000) / 10,
     fmt(by.watch), (s.quick || 0) + ' יצאו מוקדם', fmt(by.zoom), fmt(by.edit), ph,
     Object.keys(finBy).map(function (k) { return k + ': ' + fmt(finBy[k]); }).join(' | '), (s.prev ? s.prev.day + ': אפליקציה ' + Math.round(s.prev.ms / 6000) / 10 + ' דק׳' : '') +

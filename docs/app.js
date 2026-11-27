@@ -3963,6 +3963,12 @@
   // נסגר במכשיר הזה – נשמר גם אחרי רענון (הרשימה השמורה במכשיר יכולה להיות ישנה עד שהשרת עונה)
   const onbPopClosed = new Set((() => { try { return JSON.parse(LS.get('lf_onbpop_closed') || '[]'); } catch (e) { return []; } })());
   let onbPopOpen = '';
+  // כשהאפליקציה פתוחה ומוצגת: בדיקה מהירה לקליטות חדשות כל 8 שניות (ליאל בלבד). זו קריאה רגילה לשרת –
+  // לא טריגר, ולכן לא נספרת במכסת הטריגרים היומית (27/11/2026)
+  setInterval(() => {
+    if (document.visibilityState !== 'visible' || !state.session || !isAdmin() || state.viewAs || onbPopOpen) return;
+    api('onbPopups').then((r) => showOnbPopup(r.popups)).catch(() => {});
+  }, 8000);
   function showOnbPopup(list) {
     if (!isAdmin() || state.viewAs || onbPopOpen) return;
     const p = (list || []).find((x) => x && x.rid && !onbPopClosed.has(x.rid));
@@ -3977,6 +3983,7 @@
       ${p.wa ? `<a class="btn green" data-wa href="${esc(p.wa)}" target="_blank" rel="noopener">📲 שליחת הלינקים בווטסאפ</a>` : '<div class="muted small">אין קישור ווטסאפ (הקליטה לא הושלמה)</div>'}
     </div>`;
     document.body.appendChild(wrap);
+    api('onbPopupShown', { rid: p.rid }).catch(() => {});   // מדידת הזמן עד שהפופ-אפ על המסך
     const close = () => {
       onbPopClosed.add(p.rid); onbPopOpen = ''; wrap.remove();
       try { LS.set('lf_onbpop_closed', JSON.stringify([...onbPopClosed].slice(-50))); } catch (e) { /* */ }

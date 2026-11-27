@@ -273,15 +273,16 @@ function onbPopupScan_() {
   const pops = readJsonProp_('ONB_POPUPS', []);
   fresh.forEach(function (r) {
     seen.push(r[1]);
-    if (r[ONB_COLS_.test] === 'כן') return;
+    const test = r[ONB_COLS_.test] === 'כן';   // קליטת בדיקה (🧪) – גם היא מקפיצה פופ-אפ, מסומן "בדיקה" (27/11/2026, למדידת הזמנים)
     const failed = ONB_STEPS_.filter(function (s) { return /נכשל/.test(r[ONB_COLS_[s[0]]]); }).map(function (s) { return s[1]; });
-    const name = r[ONB_COLS_.name];
+    const name = r[ONB_COLS_.name] + (test ? ' (בדיקה)' : '');
     const summary = r[ONB_COLS_.summary] || ['קליטת מאמן: ' + name + ' (' + r[ONB_COLS_.track] + ')', 'מייל: ' + r[ONB_COLS_.email] + ' | טלפון: ' + r[ONB_COLS_.phone],
       'קובץ שיטס: ' + (r[ONB_COLS_.fileUrl] || 'נכשל'), r[ONB_COLS_.errors] ? 'שגיאות: ' + r[ONB_COLS_.errors] : ''].filter(String).join('\n');
     pops.push({ rid: r[1], name: name, track: r[ONB_COLS_.track], wa: r[ONB_COLS_.wa], fileUrl: r[ONB_COLS_.fileUrl], summary: summary, failed: failed, at: Date.now() });
     // Push (גם כשהאפליקציה סגורה); לחיצה פותחת את האפליקציה על הפופ-אפ. אותו קישור כמו התראת הקליטה – שורה אחת בפעמון.
     notify_('onboard', { title: (failed.length ? '⚠️ ' : '✅ ') + name + ' נקלט/ה' + (failed.length ? ' – נכשל: ' + failed.join(', ') : ''),
       text: 'לחיצה – הסיכום ושליחת הלינקים בווטסאפ', link: onbLink_(r[1]) }, { noQuiet: true, replaceLink: true });
+    onbTiming_(r[1], { push: Date.now(), name: name, via: (readJsonProp_('ONB_TIMING', {})[r[1]] || {}).ping ? 'קריאה מהטופס' : 'בדיקת גיבוי' });
   });
   writeJsonProp_('ONB_POPUPS', pops.slice(-10));
   props.setProperty('ONB_POP_SEEN', JSON.stringify(seen.slice(-200)));
@@ -294,32 +295,3 @@ function actionOnbPopupClose_(req, ctx) {
   withLock_(function () { writeJsonProp_('ONB_POPUPS', onbPopups_().filter(function (p) { return p.rid !== rid; })); });
   return { ok: true };
 }
-
-// ---------- חד-פעמי (24/11/2026, לבקשת ליאל – רק הפעם): מיכל זרזצקי נמחקה מהמאמנים → בסיס המונה 110 → 109 ----------
-// המונה עצמו לא משתנה: בסיס + קבצי "ליווי מקצועי" שנוצרו אחרי 24/10. מחיקת מאמן אחר לא תוריד אותו.
-function coachBaseAdjustOnce_() {
-  const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('COACH_BASE_ADJ_2411')) return;
-  props.setProperty('COACH_BASE_ADJ_2411', new Date().toISOString());
-  const log = [['זמן', Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm:ss')]];
-  try {
-    const base = readJsonProp_('COACH_COUNT_BASE', null);
-    CacheService.getScriptCache().remove(COACH_CNT_CACHE_);
-    const before = coachCount_();
-    log.push(['לפני', before.error ? 'שגיאה: ' + before.error : before.total + ' (בסיס ' + before.base + ' + ' + before.added + ': ' + before.names.join(', ') + ')']);
-    if (base && Number(base.count) === 110) {
-      base.count = 109;
-      base.note = String(base.note || '') + ' · 24/11/2026: 109 – מיכל זרזצקי נמחקה מרשימת המאמנים (לבקשת ליאל, חד-פעמי)';
-      writeJsonProp_('COACH_COUNT_BASE', base);
-      log.push(['הבסיס', '110 → 109']);
-    } else log.push(['הבסיס', 'לא שונה – הערך הנוכחי ' + (base ? base.count : '(אין)') + ', לא 110']);
-    CacheService.getScriptCache().remove(COACH_CNT_CACHE_);
-    const after = coachCount_();
-    log.push(['אחרי', after.error ? 'שגיאה: ' + after.error : after.total + ' (בסיס ' + after.base + ' + ' + after.added + ')']);
-  } catch (e) { log.push(['שגיאה', String(e.message || e)]); }
-  const sys = systemSs_();
-  const t = sys.getSheetByName('בדיקת מונה') || sys.insertSheet('בדיקת מונה');
-  t.clear();
-  t.getRange(1, 1, log.length, 2).setNumberFormat('@').setValues(log.map(function (x) { return [String(x[0]), String(x[1])]; }));
-}
-

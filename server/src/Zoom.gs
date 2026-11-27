@@ -216,6 +216,12 @@ function installZoomTrigger() {
 /** הטריגר (כל 10 דקות, וגם מטריגר היומן). */
 function scanZoomBookings(via) {
   const t0 = Date.now();
+  // 27/11/2026: הסריקה המתוזמנת (הטריגר כל 30 דק׳) – רק פעם בשעה. שינוי ביומן ('calendar') וסריקה ידנית – תמיד.
+  if (via && typeof via === 'object') {
+    const p = PropertiesService.getScriptProperties();
+    if (Number(p.getProperty('ZOOM_SCHED_LAST') || 0) > Date.now() - 55 * 60000) return;
+    p.setProperty('ZOOM_SCHED_LAST', String(Date.now()));
+  }
   try { return scanZoomBookingsCore_(via); } finally { trackRun_('zoom', t0); }
 }
 

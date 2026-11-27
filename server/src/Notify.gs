@@ -39,6 +39,8 @@ const SYS_TABS_ = {
   gapClear:  { name: 'מאמנים שנוקו (3 שבועות)', head: ['מאמן|פגישה אחרונה', 'נוקה בתאריך', 'מאמן'] },
   sent:      { name: 'התראות שנשלחו', head: ['מזהה', 'נשלח בתאריך'] },
   errLog:    { name: 'שגיאות אפליקציה', head: ['זמן', 'משתמש', 'מסך', 'שגיאה', 'מקום בקוד', 'מכשיר / דפדפן', 'גרסה'] },
+  slowRuns:  { name: 'ריצות איטיות', head: ['זמן', 'משך', 'שלבים', 'בדיקת עדכון (Drive)', 'קריאת סוף הגיליון', 'קריאה מלאה', 'המתנה לנעילה', 'כתיבה', 'שליחת התראה'] },
+  onbTiming: { name: 'מדידת קליטה', head: ['מזהה תגובה', 'שם', 'נשלח', 'עד הקריאה לשרת', 'עד ה-Push', 'עד הפופ-אפ על המסך', 'דרך'] },
   pushLog:   { name: 'יומן Push', head: ['זמן', 'זמן (טקסט)', 'משתמש', 'סוג', 'כותרת', 'מכשיר', 'תוצאה', 'קוד', 'פרטים'] },
   usage:     { name: 'שימוש טריגרים', head: ['שעה', 'אפליקציה היום (דק׳)', 'פיננסים היום (דק׳)', 'בדיקת לידים (כל דקה)', 'יציאה מוקדמת', 'סריקת זומים', 'עריכה בגיליון', 'פילוח הבדיקה של כל דקה', 'פיננסים – פילוח', 'יום קודם'] },
 };
@@ -409,21 +411,24 @@ function watchNewLeads() {
       step_('props', propsSizeCheck_);   // פעם ב-6 שעות (לפי cache) – גודל ה-Properties + תקרות הרישום
     }
     if (due.five || due.onb) step_('onboard', pollOnboard_);
-    step_('onbPopup', onbPopupScan_);   // פופ-אפ קליטה – כל דקה (20/11/2026)
-    if (due.five) step_('coachBaseAdj', coachBaseAdjustOnce_);   // חד-פעמי (24/11/2026): בסיס המונה 110 → 109 (מיכל זרזצקי נמחקה)
+    // פופ-אפ קליטה: מגיע מיד מהטופס (onbPing). כאן רק גיבוי – כל 5 דק׳ (27/11/2026)
+    if (due.five) step_('onbPopup', onbPopupScan_);
     if (due.ten) step_('perf', flushPerf_);
     step_('reminders', remWatch_);
+    // לידים חדשים: כל 2 דק׳ ביום (בלילה ממילא כל 10) – 27/11/2026
+    if (!due.two) return;
     return step_('leads', function () { return watchNewLeadsCore_(t0); });
-  } finally { trackRun_('watch', t0); }
+  } finally { slowRunLog_(t0); trackRun_('watch', t0); }
 }
 
 /** מה הגיע הזמן להריץ בבדיקה הזו (לפי זמנים ב-cache – לא תלוי בדקה המדויקת שבה הטריגר רץ) */
 function watchDue_() {
   const c = CacheService.getScriptCache();
-  const v = c.getAll(['wd_5', 'wd_10', 'onb_hot']);
+  const v = c.getAll(['wd_2', 'wd_5', 'wd_10', 'onb_hot']);
   const now = Date.now();
-  const out = { five: !(Number(v.wd_5 || 0) > now - 4.5 * 60000), ten: !(Number(v.wd_10 || 0) > now - 9.5 * 60000), onb: !!v.onb_hot };
+  const out = { two: !(Number(v.wd_2 || 0) > now - 1.5 * 60000), five: !(Number(v.wd_5 || 0) > now - 4.5 * 60000), ten: !(Number(v.wd_10 || 0) > now - 9.5 * 60000), onb: !!v.onb_hot };
   const put = {};
+  if (out.two) put.wd_2 = String(now);
   if (out.five) put.wd_5 = String(now);
   if (out.ten) put.wd_10 = String(now);
   if (Object.keys(put).length) c.putAll(put, 1800);
@@ -485,22 +490,33 @@ function watchNewLeadsCore_(t0) {
   let sig = null;
   const st = readJsonProp_(WATCH_PROP_, null);
   const lastRow = st && st.lastRow ? st.lastRow : 0;
+  // 27/11/2026: הגיליון לא עודכן מאז הבדיקה הקודמת (לפי Drive) – לא קוראים אותו בכלל (חוץ מהקריאה המלאה של כל שעה)
+  const fullDue0 = !st || !st.fullAt || Date.now() - st.fullAt > 60 * 60000;
+  let upd = 0;
+  const tDrive = Date.now();
+  try { upd = DriveApp.getFileById(cfg.leadsSheetId).getLastUpdated().getTime(); } catch (e) { upd = 0; }
+  WATCH_SUB_.drive = Date.now() - tDrive;
+  if (st && upd && st.upd === upd && !fullDue0) { WATCH_PH_.noChange = 1; return; }
+  const tSig = Date.now();
   try {
     const from = lastRow ? Math.max(2, lastRow - 1) : 2;
     const v = Sheets.Spreadsheets.Values.get(cfg.leadsSheetId, "'" + LEADS_TAB_ + "'!B" + from + ":C" + (lastRow ? lastRow + 30 : '')).values || [];
     sig = 't' + from + ':' + v.length + '|' + JSON.stringify(v[v.length - 1] || []);
   } catch (e) { /* בלי Sheets API – קוראים הכל */ }
   // רשת ביטחון: פעם בשעה קריאה מלאה בכל מקרה (ליד שנוסף באמצע הגיליון, למשל)
-  const fullDue = !st || !st.fullAt || Date.now() - st.fullAt > 60 * 60000;
-  if (st && sig && st.sig === sig && !fullDue) { WATCH_PH_.noChange = 1; return; }
+  WATCH_SUB_.sigRead = Date.now() - tSig;
+  const fullDue = fullDue0;
+  if (st && sig && st.sig === sig && !fullDue) { if (upd) { st.upd = upd; writeJsonProp_(WATCH_PROP_, st); } WATCH_PH_.noChange = 1; return; }
 
+  const tRead = Date.now();
   const leads = readLeads_(cfg).leads.filter(function (l) { return l.name || l.phone; });
+  WATCH_SUB_.fullRead = Date.now() - tRead;
   const tail = leads.slice(-WATCH_TAIL_);
   const keys = tail.map(watchKey_);
   const newLast = leads.length ? leads[leads.length - 1].row : 1;
   if (newLast !== lastRow) sig = watchSig_(cfg, newLast);   // החתימה – לפי המיקום החדש של סוף הגיליון
   if (!st) {   // הפעלה ראשונה: רק רושמים את מה שקיים – בלי מבול התראות
-    writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys, lastRow: newLast, fullAt: Date.now() });
+    writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keys, lastRow: newLast, fullAt: Date.now(), upd: upd });
     watchStats_(t0, true);
     return;
   }
@@ -512,13 +528,22 @@ function watchNewLeadsCore_(t0) {
   });
   // זוכרים גם לידים שכבר יצאו מהזנב (נמחקו / זזו במיון) – כדי שליד שחזר (↶ מחיקה, מיון) לא ייחשב חדש
   const keep = keys.concat((st.keys || []).filter(function (k) { return keys.indexOf(k) < 0; })).slice(0, WATCH_KEEP_);
-  writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keep, lastRow: newLast, fullAt: Date.now() });
-  const todo = fresh.filter(function (l) { return claimLeadNotice_(watchKey_(l)); });
+  // נעילה תפוסה (פעולה אחרת רצה עכשיו) – לא מחכים: יוצאים, והלידים ייבדקו שוב בריצה הבאה (27/11/2026)
+  const tLock = Date.now();
+  const claims = fresh.map(function (l) { return claimLeadNotice_(watchKey_(l), 0); });
+  WATCH_SUB_.lockWait = Date.now() - tLock;
+  if (claims.some(function (c) { return c === null; })) { WATCH_SUB_.lockBusy = 1; return; }
+  const tWrite = Date.now();
+  writeJsonProp_(WATCH_PROP_, { sig: sig, keys: keep, lastRow: newLast, fullAt: Date.now(), upd: upd });
+  WATCH_SUB_.write = Date.now() - tWrite;
+  const todo = fresh.filter(function (l, i) { return claims[i] === true; });
+  const tNotify = Date.now();
   if (todo.length > 5) {
     notify_('lead_new', { title: '🎯 ' + todo.length + ' לידים חדשים', link: '#/leads' });
   } else {
     todo.forEach(function (l) { notify_('lead_new', { name: l.name || l.phone, link: '#/lead/' + l.id }); });
   }
+  WATCH_SUB_.notify = Date.now() - tNotify;
   if (fresh.length) invalidateLeads_();
   watchStats_(t0, true);
   pruneNotifs_();
@@ -570,9 +595,11 @@ function notifyStatus_() {
 }
 
 /** מבטיח שעל אותו ליד תצא התראה אחת בלבד (Make והבדיקה כל דקה יכולים לזהות את אותו ליד). */
-function claimLeadNotice_(key) {
+/** waitMs = 0 (הבדיקה של כל דקה): נעילה תפוסה → null (לא ממתינים) */
+function claimLeadNotice_(key, waitMs) {
   const lock = LockService.getScriptLock();
-  const got = lock.tryLock(10000);
+  const got = lock.tryLock(waitMs == null ? 10000 : waitMs);
+  if (!got && waitMs === 0) return null;
   try {
     const cache = CacheService.getScriptCache();
     if (cache.get('lnk:' + key)) return false;
@@ -767,3 +794,48 @@ function actionClientLog_(req, ctx) {
   } catch (e) { console.warn('clientLog: ' + e); }
   return { ok: true };
 }
+
+// ---------- ריצות איטיות (27/11/2026): ריצה של הבדיקה של כל דקה מעל 10 שניות – פירוט לכל שלב, ללשונית "ריצות איטיות". בלי התראה. ----------
+let WATCH_SUB_ = {};
+function slowRunLog_(t0) {
+  const ms = Date.now() - t0;
+  const sub = WATCH_SUB_; WATCH_SUB_ = {};
+  if (ms <= 10000) return;
+  try {
+    const steps = Object.keys(WATCH_PH_).filter(function (k) { return k !== 'noChange'; })
+      .map(function (k) { return k + ' ' + (Math.round(WATCH_PH_[k] / 100) / 10) + 'ש׳'; }).join(' · ');
+    const f = function (k) { return sub[k] != null ? (Math.round(sub[k] / 100) / 10) + 'ש׳' : '—'; };
+    const sh = sysTab_('slowRuns');
+    sh.appendRow([Utilities.formatDate(new Date(), TZ_, 'dd/MM/yyyy HH:mm:ss'), (Math.round(ms / 100) / 10) + 'ש׳', steps,
+      f('drive'), f('sigRead'), f('fullRead'), f('lockWait') + (sub.lockBusy ? ' (תפוסה – דילוג)' : ''), f('write'), f('notify')]);
+    if (sh.getLastRow() > 501) sh.deleteRows(2, sh.getLastRow() - 501);
+  } catch (e) { console.warn('slowRunLog: ' + e); }
+}
+
+// ---------- פופ-אפ קליטה מיידי (27/11/2026): סקריפט הטופס קורא לשרת ברגע שהקליטה הסתיימה ----------
+// מפתח משותף: ONB_NOTIFY_KEY (כאן) = APP_NOTIFY_KEY (בסקריפט הטופס). בלי התחברות. רק מפעיל את סריקת הקליטות.
+function onbPing_(req) {
+  const key = PropertiesService.getScriptProperties().getProperty('ONB_NOTIFY_KEY');
+  if (!key || String(req.key || '') !== key) throw apiError_('FORBIDDEN', 'מפתח לא תקין');
+  const t = Date.now();
+  onbTiming_(String(req.rid || ''), { sent: Number(req.sentAt) || 0, ping: t });
+  onbPopupScan_();
+  return { ok: true, ms: Date.now() - t };
+}
+/** מדידת זמנים לקליטה (שליחת הטופס → הקריאה לשרת → Push → הפופ-אפ על המסך) – ללשונית "מדידת קליטה" */
+function onbTiming_(rid, patch) {
+  if (!rid) return;
+  try {
+    const all = readJsonProp_('ONB_TIMING', {});
+    const t = all[rid] = Object.assign(all[rid] || {}, patch);
+    Object.keys(all).sort(function (a, b) { return (all[b].ping || 0) - (all[a].ping || 0); }).slice(10).forEach(function (k) { delete all[k]; });
+    writeJsonProp_('ONB_TIMING', all);
+    const sec = function (a, b) { return a && b ? (Math.round((b - a) / 100) / 10) + 'ש׳' : '—'; };
+    const sh = sysTab_('onbTiming');
+    const rows = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getDisplayValues() : [];
+    let at = rows.findIndex(function (r) { return r[0] === rid; });
+    const row = [rid, t.name || '', t.sent ? Utilities.formatDate(new Date(t.sent), TZ_, 'dd/MM HH:mm:ss') : '', sec(t.sent, t.ping), sec(t.sent, t.push), sec(t.sent, t.shown), t.via || ''];
+    if (at >= 0) sh.getRange(at + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+  } catch (e) { console.warn('onbTiming: ' + e); }
+}
+
