@@ -287,13 +287,40 @@ function onbItem_(r) {
   const test = r[ONB_COLS_.test] === 'כן';   // קליטת בדיקה (🧪) – גם היא מקפיצה פופ-אפ, מסומן "בדיקה"
   const failed = ONB_STEPS_.filter(function (s) { return /נכשל/.test(r[ONB_COLS_[s[0]]]); }).map(function (s) { return s[1]; });
   const name = r[ONB_COLS_.name] + (test ? ' (בדיקה)' : '');
-  const summary = r[ONB_COLS_.summary] || ['קליטת מאמן: ' + name + ' (' + r[ONB_COLS_.track] + ')', 'מייל: ' + r[ONB_COLS_.email] + ' | טלפון: ' + r[ONB_COLS_.phone],
-    'קובץ שיטס: ' + (r[ONB_COLS_.fileUrl] || 'נכשל'), r[ONB_COLS_.errors] ? 'שגיאות: ' + r[ONB_COLS_.errors] : ''].filter(String).join('\n');
-  return { pop: { rid: r[1], name: name, track: r[ONB_COLS_.track], wa: r[ONB_COLS_.wa], fileUrl: r[ONB_COLS_.fileUrl], summary: summary, failed: failed, at: Date.now() },
-    title: (failed.length ? '⚠️ ' : '✅ ') + name + ' נקלט/ה' + (failed.length ? ' – נכשל: ' + failed.join(', ') : '') };
+  // שלב שעוד לא נכתב → "בתהליך..." (ומתעדכן כשהשלבים מסתיימים); "נכשל" רק כשזה מה שכתוב בעמודת השלב
+  const pending = ONB_STEPS_.some(function (s) { return !String(r[ONB_COLS_[s[0]]] || '').trim(); });
+  const st = function (k) { return String(r[ONB_COLS_[k]] || '').trim() || 'בתהליך...'; };
+  // סיכום מסקריפט הטופס (קליטה אמיתית שהסתיימה) – כמו שהוא. אחרת (מצב בדיקה / עוד בתהליך) – בונים מעמודות השלבים
+  const summary = (!pending && r[ONB_COLS_.summary]) || ['קליטת מאמן: ' + name + ' (' + r[ONB_COLS_.track] + ')', 'מייל: ' + r[ONB_COLS_.email] + ' | טלפון: ' + r[ONB_COLS_.phone],
+    'אתר (Wix): ' + st('wix'), 'תכניות: ' + st('prog'), 'קובץ שיטס: ' + (r[ONB_COLS_.fileUrl] || st('file')), 'שיתוף: ' + st('share'), 'גיליון תפעול: ' + st('ops'),
+    r[ONB_COLS_.errors] ? 'שגיאות: ' + r[ONB_COLS_.errors] : ''].filter(String).join('\n');
+  return { pop: { rid: r[1], name: name, track: r[ONB_COLS_.track], wa: r[ONB_COLS_.wa], fileUrl: r[ONB_COLS_.fileUrl], summary: summary, failed: failed, pending: pending, at: Date.now() },
+    title: (pending ? '⏳ ' + name + ' – קליטה בתהליך...' : (failed.length ? '⚠️ ' : '✅ ') + name + ' נקלט/ה' + (failed.length ? ' – נכשל: ' + failed.join(', ') : '')) };
 }
 /** הפופ-אפים הפתוחים (לאפליקציה, עם ההתראות) */
-function onbPopups_() { return readJsonProp_('ONB_POPUPS', []); }
+function onbPopups_() {
+  const pops = readJsonProp_('ONB_POPUPS', []);
+  // פופ-אפ "בתהליך..." (עד 15 דקות) – קוראים שוב את שורת הסטטוס ומעדכנים כשהשלבים מסתיימים
+  const wait = pops.filter(function (p) { return p.pending && Date.now() - (p.at || 0) < 15 * 60000; });
+  if (!wait.length) return pops;
+  try {
+    const sh = onbSs_().getSheetByName(ONB_TAB_);
+    const last = sh.getLastRow(), from = Math.max(2, last - 19);
+    const rows = last > 1 ? sh.getRange(from, 1, last - from + 1, 16).getDisplayValues() : [];
+    let changed = false;
+    wait.forEach(function (p) {
+      const r = rows.filter(function (x) { return x[1] === p.rid; }).pop();
+      if (!r) return;
+      const it = onbItem_(r);
+      if (it.pop.pending && it.pop.summary === p.summary) return;
+      it.pop.at = p.at;
+      pops[pops.indexOf(p)] = it.pop; changed = true;
+      if (!it.pop.pending) notify_('onboard', { title: it.title, text: 'לחיצה – הסיכום ושליחת הלינקים בווטסאפ', link: onbLink_(p.rid) }, { noPush: true, noQuiet: true, replaceLink: true });
+    });
+    if (changed) writeJsonProp_('ONB_POPUPS', pops);
+  } catch (e) { console.warn('onbPopups refresh: ' + e); }
+  return pops;
+}
 /** סגירה (✕ או "שליחת הלינקים בווטסאפ") – לא יקפוץ שוב על אותו מאמן, בשום מכשיר */
 function actionOnbPopupClose_(req, ctx) {
   const rid = String(req.rid || '');

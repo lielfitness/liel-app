@@ -3962,30 +3962,26 @@
   // ---------- פופ-אפ קליטה (20/11/2026): מאמן נקלט → סיכום + "שליחת הלינקים בווטסאפ". נשאר עד שסוגרים. ----------
   // נסגר במכשיר הזה – נשמר גם אחרי רענון (הרשימה השמורה במכשיר יכולה להיות ישנה עד שהשרת עונה)
   const onbPopClosed = new Set((() => { try { return JSON.parse(LS.get('lf_onbpop_closed') || '[]'); } catch (e) { return []; } })());
-  let onbPopOpen = '';
+  let onbPopOpen = '', onbPopPending = false, onbPopEl = null;
   // כשהאפליקציה פתוחה ומוצגת: בדיקה מהירה לקליטות חדשות כל 3 שניות (ליאל בלבד). זו קריאה רגילה לשרת –
   // לא טריגר, ולכן לא נספרת במכסת הטריגרים היומית (27/11/2026)
   setInterval(() => {
-    if (document.visibilityState !== 'visible' || !state.session || !isAdmin() || state.viewAs || onbPopOpen) return;
-    api('onbPopups').then((r) => showOnbPopup(r.popups)).catch(() => {});
+    if (document.visibilityState !== 'visible' || !state.session || !isAdmin() || state.viewAs) return;
+    if (onbPopOpen && !onbPopPending) return;   // פופ-אפ פתוח וסופי – אין מה לבדוק
+    api('onbPopups').then((r) => (onbPopOpen ? updateOnbPopup(r.popups) : showOnbPopup(r.popups))).catch(() => {});
   }, 3000);
   function showOnbPopup(list) {
     if (!isAdmin() || state.viewAs || onbPopOpen) return;
     const p = (list || []).find((x) => x && x.rid && !onbPopClosed.has(x.rid));
     if (!p) return;
     onbPopOpen = p.rid;
-    const failed = p.failed && p.failed.length;
     const wrap = document.createElement('div');
     wrap.className = 'sheet-backdrop onb-pop';
-    wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="קליטת מאמן">
-      <div class="row"><b class="grow">${failed ? '⚠️' : '✅'} ${esc(p.name)} נקלט/ה${p.track ? ' · ' + esc(p.track) : ''}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
-      <div class="pre onb-pop-text">${esc(p.summary || '')}</div>
-      ${p.wa ? `<a class="btn green" data-wa href="${esc(p.wa)}" target="_blank" rel="noopener">📲 שליחת הלינקים בווטסאפ</a>` : '<div class="muted small">אין קישור ווטסאפ (הקליטה לא הושלמה)</div>'}
-    </div>`;
+    onbPopEl = wrap; fillOnbPopup(p);
     document.body.appendChild(wrap);
     api('onbPopupShown', { rid: p.rid }).catch(() => {});   // מדידת הזמן עד שהפופ-אפ על המסך
     const close = () => {
-      onbPopClosed.add(p.rid); onbPopOpen = ''; wrap.remove();
+      onbPopClosed.add(p.rid); onbPopOpen = ''; onbPopPending = false; onbPopEl = null; wrap.remove();
       try { LS.set('lf_onbpop_closed', JSON.stringify([...onbPopClosed].slice(-50))); } catch (e) { /* */ }
       const cached = store.get('notifs');
       if (cached && cached.onbPopups) { cached.onbPopups = cached.onbPopups.filter((x) => x.rid !== p.rid); store.set('notifs', cached); }
@@ -3993,9 +3989,30 @@
       setTimeout(() => showOnbPopup(list), 300);   // עוד מאמן שנקלט – הפופ-אפ הבא
     };
     // לחיצה מחוץ לחלון לא סוגרת – רק ✕ או הכפתור
-    wrap.querySelector('[data-x]').onclick = close;
-    const wa = wrap.querySelector('[data-wa]');
-    if (wa) wa.addEventListener('click', () => setTimeout(close, 0));
+    wrap._close = close;
+    bindOnbPopup();
+  }
+  /** תוכן הפופ-אפ; "בתהליך..." כל עוד השלבים לא נכתבו, ומתעדכן במקום כשהם מסתיימים */
+  function fillOnbPopup(p) {
+    const failed = p.failed && p.failed.length;
+    onbPopPending = !!p.pending;
+    onbPopEl.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="קליטת מאמן">
+      <div class="row"><b class="grow">${p.pending ? '⏳' : failed ? '⚠️' : '✅'} ${esc(p.name)} ${p.pending ? '– קליטה בתהליך...' : 'נקלט/ה'}${p.track ? ' · ' + esc(p.track) : ''}</b><button class="icon-btn" data-x aria-label="סגירה">✕</button></div>
+      <div class="pre onb-pop-text">${esc(p.summary || '')}</div>
+      ${p.wa ? `<a class="btn green" data-wa href="${esc(p.wa)}" target="_blank" rel="noopener">📲 שליחת הלינקים בווטסאפ</a>` : `<div class="muted small">${p.pending ? 'קישור הווטסאפ יופיע כשהקליטה תסתיים' : 'אין קישור ווטסאפ (הקליטה לא הושלמה)'}</div>`}
+    </div>`;
+  }
+  function bindOnbPopup() {
+    const w = onbPopEl; if (!w || !w._close) return;
+    w.querySelector('[data-x]').onclick = w._close;
+    const wa = w.querySelector('[data-wa]');
+    if (wa) wa.addEventListener('click', () => setTimeout(w._close, 0));
+  }
+  function updateOnbPopup(list) {
+    const p = (list || []).find((x) => x && x.rid === onbPopOpen);
+    if (!p || !onbPopEl) return;
+    if (p.pending && onbPopEl.querySelector('.onb-pop-text').textContent === (p.summary || '')) return;
+    fillOnbPopup(p); bindOnbPopup();
   }
   /** נפתח מסך ההתראות → המונה על הפעמון מתאפס (לכל משתמש בנפרד). "לא נקראה" ברשימה נשאר. */
   function markNotifsSeen() {
