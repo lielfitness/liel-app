@@ -413,7 +413,6 @@ function watchNewLeads() {
     if (due.five || due.onb) step_('onboard', pollOnboard_);
     // פופ-אפ קליטה: מגיע מיד מהטופס (onbPing). כאן רק גיבוי – כל 5 דק׳ (27/11/2026)
     if (due.five) step_('onbPopup', onbPopupScan_);
-    if (due.five) step_('onbTest', onbTestOnce_);   // חד-פעמי (27/11/2026, בדיקה שלישית ואחרונה) – יוסר מיד אחרי שירוץ
     if (due.ten) step_('perf', flushPerf_);
     step_('reminders', remWatch_);
     // לידים חדשים: כל 2 דק׳ ביום (בלילה ממילא כל 10) – 27/11/2026
@@ -895,12 +894,4 @@ function onbTiming_(rid, patch) {
     const row = [rid, t.name || '', t.sent ? Utilities.formatDate(new Date(t.sent), TZ_, 'dd/MM HH:mm:ss') : '', sec(t.sent, t.ping), sec(t.sent, t.push), sec(t.sent, t.shown), t.via || '', t.detail || ''];
     if (at >= 0) sh.getRange(at + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
   } catch (e) { console.warn('onbTiming: ' + e); }
-}
-
-/** חד-פעמי (27/11/2026, באישור ליאל): קליטה במצב בדיקה – בלי Wix, בלי קבצים, בלי הודעות. יוסר מיד אחרי שירוץ */
-function onbTestOnce_() {
-  const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('ONB_TEST_2711C')) return;
-  props.setProperty('ONB_TEST_2711C', new Date().toISOString());
-  try { actionOnboard_({ test: true }, {}); } catch (e) { console.warn('onbTest: ' + e); }
 }
