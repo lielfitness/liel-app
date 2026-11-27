@@ -3963,12 +3963,12 @@
   // נסגר במכשיר הזה – נשמר גם אחרי רענון (הרשימה השמורה במכשיר יכולה להיות ישנה עד שהשרת עונה)
   const onbPopClosed = new Set((() => { try { return JSON.parse(LS.get('lf_onbpop_closed') || '[]'); } catch (e) { return []; } })());
   let onbPopOpen = '';
-  // כשהאפליקציה פתוחה ומוצגת: בדיקה מהירה לקליטות חדשות כל 8 שניות (ליאל בלבד). זו קריאה רגילה לשרת –
+  // כשהאפליקציה פתוחה ומוצגת: בדיקה מהירה לקליטות חדשות כל 3 שניות (ליאל בלבד). זו קריאה רגילה לשרת –
   // לא טריגר, ולכן לא נספרת במכסת הטריגרים היומית (27/11/2026)
   setInterval(() => {
     if (document.visibilityState !== 'visible' || !state.session || !isAdmin() || state.viewAs || onbPopOpen) return;
     api('onbPopups').then((r) => showOnbPopup(r.popups)).catch(() => {});
-  }, 8000);
+  }, 3000);
   function showOnbPopup(list) {
     if (!isAdmin() || state.viewAs || onbPopOpen) return;
     const p = (list || []).find((x) => x && x.rid && !onbPopClosed.has(x.rid));

@@ -273,19 +273,24 @@ function onbPopupScan_() {
   const pops = readJsonProp_('ONB_POPUPS', []);
   fresh.forEach(function (r) {
     seen.push(r[1]);
-    const test = r[ONB_COLS_.test] === 'כן';   // קליטת בדיקה (🧪) – גם היא מקפיצה פופ-אפ, מסומן "בדיקה" (27/11/2026, למדידת הזמנים)
-    const failed = ONB_STEPS_.filter(function (s) { return /נכשל/.test(r[ONB_COLS_[s[0]]]); }).map(function (s) { return s[1]; });
-    const name = r[ONB_COLS_.name] + (test ? ' (בדיקה)' : '');
-    const summary = r[ONB_COLS_.summary] || ['קליטת מאמן: ' + name + ' (' + r[ONB_COLS_.track] + ')', 'מייל: ' + r[ONB_COLS_.email] + ' | טלפון: ' + r[ONB_COLS_.phone],
-      'קובץ שיטס: ' + (r[ONB_COLS_.fileUrl] || 'נכשל'), r[ONB_COLS_.errors] ? 'שגיאות: ' + r[ONB_COLS_.errors] : ''].filter(String).join('\n');
-    pops.push({ rid: r[1], name: name, track: r[ONB_COLS_.track], wa: r[ONB_COLS_.wa], fileUrl: r[ONB_COLS_.fileUrl], summary: summary, failed: failed, at: Date.now() });
+    const it = onbItem_(r);
+    pops.push(it.pop);
     // Push (גם כשהאפליקציה סגורה); לחיצה פותחת את האפליקציה על הפופ-אפ. אותו קישור כמו התראת הקליטה – שורה אחת בפעמון.
-    notify_('onboard', { title: (failed.length ? '⚠️ ' : '✅ ') + name + ' נקלט/ה' + (failed.length ? ' – נכשל: ' + failed.join(', ') : ''),
-      text: 'לחיצה – הסיכום ושליחת הלינקים בווטסאפ', link: onbLink_(r[1]) }, { noQuiet: true, replaceLink: true });
-    onbTiming_(r[1], { push: Date.now(), name: name, via: (readJsonProp_('ONB_TIMING', {})[r[1]] || {}).ping ? 'קריאה מהטופס' : 'בדיקת גיבוי' });
+    notify_('onboard', { title: it.title, text: 'לחיצה – הסיכום ושליחת הלינקים בווטסאפ', link: onbLink_(r[1]) }, { noQuiet: true, replaceLink: true });
+    onbTiming_(r[1], { push: Date.now(), name: it.pop.name, via: 'בדיקת גיבוי' });
   });
   writeJsonProp_('ONB_POPUPS', pops.slice(-10));
   props.setProperty('ONB_POP_SEEN', JSON.stringify(seen.slice(-200)));
+}
+/** שורת סטטוס → פריט פופ-אפ + כותרת ההתראה */
+function onbItem_(r) {
+  const test = r[ONB_COLS_.test] === 'כן';   // קליטת בדיקה (🧪) – גם היא מקפיצה פופ-אפ, מסומן "בדיקה"
+  const failed = ONB_STEPS_.filter(function (s) { return /נכשל/.test(r[ONB_COLS_[s[0]]]); }).map(function (s) { return s[1]; });
+  const name = r[ONB_COLS_.name] + (test ? ' (בדיקה)' : '');
+  const summary = r[ONB_COLS_.summary] || ['קליטת מאמן: ' + name + ' (' + r[ONB_COLS_.track] + ')', 'מייל: ' + r[ONB_COLS_.email] + ' | טלפון: ' + r[ONB_COLS_.phone],
+    'קובץ שיטס: ' + (r[ONB_COLS_.fileUrl] || 'נכשל'), r[ONB_COLS_.errors] ? 'שגיאות: ' + r[ONB_COLS_.errors] : ''].filter(String).join('\n');
+  return { pop: { rid: r[1], name: name, track: r[ONB_COLS_.track], wa: r[ONB_COLS_.wa], fileUrl: r[ONB_COLS_.fileUrl], summary: summary, failed: failed, at: Date.now() },
+    title: (failed.length ? '⚠️ ' : '✅ ') + name + ' נקלט/ה' + (failed.length ? ' – נכשל: ' + failed.join(', ') : '') };
 }
 /** הפופ-אפים הפתוחים (לאפליקציה, עם ההתראות) */
 function onbPopups_() { return readJsonProp_('ONB_POPUPS', []); }

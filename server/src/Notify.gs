@@ -40,7 +40,7 @@ const SYS_TABS_ = {
   sent:      { name: 'התראות שנשלחו', head: ['מזהה', 'נשלח בתאריך'] },
   errLog:    { name: 'שגיאות אפליקציה', head: ['זמן', 'משתמש', 'מסך', 'שגיאה', 'מקום בקוד', 'מכשיר / דפדפן', 'גרסה'] },
   slowRuns:  { name: 'ריצות איטיות', head: ['זמן', 'משך', 'שלבים', 'בדיקת עדכון (Drive)', 'קריאת סוף הגיליון', 'קריאה מלאה', 'המתנה לנעילה', 'כתיבה', 'שליחת התראה'] },
-  onbTiming: { name: 'מדידת קליטה', head: ['מזהה תגובה', 'שם', 'נשלח', 'עד הקריאה לשרת', 'עד ה-Push', 'עד הפופ-אפ על המסך', 'דרך'] },
+  onbTiming: { name: 'מדידת קליטה', head: ['מזהה תגובה', 'שם', 'נשלח', 'עד הקריאה לשרת', 'עד ה-Push', 'עד הפופ-אפ על המסך', 'דרך', 'פירוט בשרת'] },
   pushLog:   { name: 'יומן Push', head: ['זמן', 'זמן (טקסט)', 'משתמש', 'סוג', 'כותרת', 'מכשיר', 'תוצאה', 'קוד', 'פרטים'] },
   usage:     { name: 'שימוש טריגרים', head: ['שעה', 'אפליקציה היום (דק׳)', 'פיננסים היום (דק׳)', 'בדיקת לידים (כל דקה)', 'יציאה מוקדמת', 'סריקת זומים', 'עריכה בגיליון', 'פילוח הבדיקה של כל דקה', 'פיננסים – פילוח', 'יום קודם'] },
 };
@@ -413,7 +413,7 @@ function watchNewLeads() {
     if (due.five || due.onb) step_('onboard', pollOnboard_);
     // פופ-אפ קליטה: מגיע מיד מהטופס (onbPing). כאן רק גיבוי – כל 5 דק׳ (27/11/2026)
     if (due.five) step_('onbPopup', onbPopupScan_);
-    if (due.five) step_('onbTest', onbTestOnce_);   // חד-פעמי (27/11/2026): קליטת בדיקה (מצב בדיקה בלבד) למדידת הזמנים
+    if (due.five) step_('onbTest', onbTestOnce_);   // חד-פעמי (27/11/2026, בדיקה שנייה): קליטת בדיקה (מצב בדיקה בלבד) למדידת הזמנים – יוסר בהעלאה הבאה
     if (due.ten) step_('perf', flushPerf_);
     step_('reminders', remWatch_);
     // לידים חדשים: כל 2 דק׳ ביום (בלילה ממילא כל 10) – 27/11/2026
@@ -820,7 +820,9 @@ function slowRunLog_(t0) {
 function onbPing_(req) {
   const t = Date.now();
   const rid = String(req.rid || '').slice(0, 200);
-  let why = '';
+  const ph = {};
+  let why = '', sent = 0;
+  // 1. אימות מול הטופס
   try {
     if (!/^[\w\-]{10,}$/.test(rid)) why = 'מזהה לא תקין';
     else {
@@ -829,15 +831,53 @@ function onbPing_(req) {
       if (!resp) why = 'אין תשובה כזו בטופס';
       else if (t - resp.getTimestamp().getTime() > 10 * 60000) why = 'התשובה ישנה מ-10 דקות';
       else if (JSON.parse(PropertiesService.getScriptProperties().getProperty('ONB_POP_SEEN') || '[]').indexOf(rid) >= 0) why = 'כבר טופלה';
-      else onbTiming_(rid, { sent: resp.getTimestamp().getTime(), ping: t });
+      else sent = resp.getTimestamp().getTime();
     }
   } catch (e) { why = 'שגיאה בבדיקה'; console.warn('onbPing: ' + e); }
+  ph.verify = Date.now() - t;
   if (why) {
     console.warn('onbPing התעלמות: ' + why);
-    onbTiming_(rid && /^[\w\-]{10,}$/.test(rid) ? rid : 'לא תקין', { ping: t, via: 'התעלמות: ' + why });
+    onbTiming_(/^[\w\-]{10,}$/.test(rid) ? rid : 'לא תקין', { ping: t, via: 'התעלמות: ' + why });
     return { result: 'ignored' };
   }
-  onbPopupScan_();
+  // 2. שורת הסטטוס של הקליטה הזו (נכתבת בסקריפט הטופס לפני הקריאה)
+  let tt = Date.now();
+  let r = null;
+  try {
+    const sh = onbSs_().getSheetByName(ONB_TAB_);
+    const last = sh ? sh.getLastRow() : 1;
+    if (last > 1) {
+      const from = Math.max(2, last - 19);
+      r = sh.getRange(from, 1, last - from + 1, 16).getDisplayValues().filter(function (x) { return x[1] === rid; })[0] || null;
+    }
+  } catch (e) { console.warn('onbPing status: ' + e); }
+  ph.status = Date.now() - tt;
+  if (!r) { onbTiming_(rid, { sent: sent, ping: t, via: 'אין עדיין שורת סטטוס – הגיבוי יטפל' }); return { result: 'ok' }; }
+  // 3. מסמנים "טופלה" + הפופ-אפ (מאפיינים בלבד, בלי גיליונות) – לפני ה-Push, כדי שהאפליקציה תמצא אותו מיד
+  tt = Date.now();
+  const props = PropertiesService.getScriptProperties();
+  const seen = JSON.parse(props.getProperty('ONB_POP_SEEN') || '[]');
+  seen.push(rid);
+  props.setProperty('ONB_POP_SEEN', JSON.stringify(seen.slice(-200)));
+  const it = onbItem_(r);
+  writeJsonProp_('ONB_POPUPS', readJsonProp_('ONB_POPUPS', []).concat([it.pop]).slice(-10));
+  ph.state = Date.now() - tt;
+  // 4. Push
+  tt = Date.now();
+  const cfg = getConfig_();
+  const admins = Object.keys(cfg.users).filter(function (e) { return cfg.users[e] === 'admin'; });
+  admins.forEach(function (a) {
+    try { pushToUser_(a, { id: 'onb-' + rid.slice(-12), type: 'onboard', title: it.title, body: 'לחיצה – הסיכום ושליחת הלינקים בווטסאפ', link: onbLink_(rid) }); } catch (e) { console.warn('push: ' + e); }
+  });
+  ph.push = Date.now() - tt;
+  const pushAt = Date.now();
+  // 5. הכתיבות לגיליונות – אחרי ה-Push: שורה בפעמון (בלי Push נוסף) ומדידת הזמנים
+  tt = Date.now();
+  notify_('onboard', { title: it.title, text: 'לחיצה – הסיכום ושליחת הלינקים בווטסאפ', link: onbLink_(rid) }, { noPush: true, noQuiet: true, replaceLink: true });
+  ph.writes = Date.now() - tt;
+  const sec = function (k) { return k + ' ' + Math.round((ph[k] || 0) / 100) / 10 + 'ש׳'; };
+  onbTiming_(rid, { sent: sent, ping: t, push: pushAt, name: it.pop.name, via: 'קריאה מהטופס',
+    detail: ['אימות', 'status', 'state', 'push', 'writes'].map(function (k, i) { return ['אימות מול הטופס', 'קריאת שורת הסטטוס', 'סימון ופופ-אפ', 'Push', 'כתיבות לגיליונות'][i] + ' ' + Math.round((ph[k === 'אימות' ? 'verify' : k] || 0) / 100) / 10 + 'ש׳'; }).join(' · ') });
   return { result: 'ok' };
 }
 /** מדידת זמנים לקליטה (שליחת הטופס → הקריאה לשרת → Push → הפופ-אפ על המסך) – ללשונית "מדידת קליטה" */
@@ -852,7 +892,7 @@ function onbTiming_(rid, patch) {
     const sh = sysTab_('onbTiming');
     const rows = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 1).getDisplayValues() : [];
     let at = rows.findIndex(function (r) { return r[0] === rid; });
-    const row = [rid, t.name || '', t.sent ? Utilities.formatDate(new Date(t.sent), TZ_, 'dd/MM HH:mm:ss') : '', sec(t.sent, t.ping), sec(t.sent, t.push), sec(t.sent, t.shown), t.via || ''];
+    const row = [rid, t.name || '', t.sent ? Utilities.formatDate(new Date(t.sent), TZ_, 'dd/MM HH:mm:ss') : '', sec(t.sent, t.ping), sec(t.sent, t.push), sec(t.sent, t.shown), t.via || '', t.detail || ''];
     if (at >= 0) sh.getRange(at + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
   } catch (e) { console.warn('onbTiming: ' + e); }
 }
@@ -860,8 +900,8 @@ function onbTiming_(rid, patch) {
 /** חד-פעמי (27/11/2026, באישור ליאל): קליטה במצב בדיקה ("בדיקת אפליקציה") – בלי Wix, בלי קבצים, בלי הודעות – למדידת הזמנים */
 function onbTestOnce_() {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('ONB_TEST_2711')) return;
-  props.setProperty('ONB_TEST_2711', new Date().toISOString());
+  if (props.getProperty('ONB_TEST_2711B')) return;
+  props.setProperty('ONB_TEST_2711B', new Date().toISOString());
   try { actionOnboard_({ test: true }, {}); } catch (e) { console.warn('onbTest: ' + e); }
 }
 
